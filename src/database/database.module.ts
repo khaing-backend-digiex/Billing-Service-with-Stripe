@@ -10,6 +10,13 @@ import { Payment } from "./entities/payment.entity";
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
         type: "postgres",
+
+        url: configService.get<string>("DATABASE_URL"),
+
+        ssl: {
+          rejectUnauthorized: false,
+        },
+
         url: configService.get<string>("DATABASE_URL"),
         ssl: true,
         extra: {
@@ -18,8 +25,10 @@ import { Payment } from "./entities/payment.entity";
           },
         },
         entities: [User, Payment],
+
         synchronize:
           configService.get<string>("DB_SYNCHRONIZE", "false") === "true",
+
         logging: false,
       }),
     }),
