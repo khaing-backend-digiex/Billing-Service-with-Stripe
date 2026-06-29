@@ -13,6 +13,7 @@ services:
       - .env
     environment:
       - DB_HOST=postgres
+      - DATABASE_URL=postgresql://${DB_USER:-express_demo}:${DB_PASSWORD:-khai123}@postgres:5432/${DB_NAME:-postgres}?schema=public
     networks:
       - nestjs_network
 

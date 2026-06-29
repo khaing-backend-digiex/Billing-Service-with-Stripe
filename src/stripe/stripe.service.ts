@@ -49,7 +49,7 @@ export class StripeService {
       );
       return customer;
     } catch (error) {
-      this.logger.error(`❌ Failed to create Stripe customer: ${error}`);
+      this.logger.error(` Failed to create Stripe customer: ${error}`);
       throw new InternalServerErrorException(
         "Failed to create Stripe customer",
       );
@@ -97,11 +97,11 @@ export class StripeService {
       const session = await this.stripe.checkout.sessions.create(sessionData);
 
       this.logger.log(
-        `✅ Created checkout session ${session.id} for user ${userId}`,
+        ` Created checkout session ${session.id} for user ${userId}`,
       );
       return session;
     } catch (error) {
-      this.logger.error(`❌ Failed to create checkout session: ${error}`);
+      this.logger.error(`Failed to create checkout session: ${error}`);
       throw new InternalServerErrorException(
         "Failed to create checkout session",
       );
@@ -145,7 +145,7 @@ export class StripeService {
       );
       return paymentIntent;
     } catch (error) {
-      this.logger.error(`❌ Failed to create payment intent: ${error}`);
+      this.logger.error(`  Failed to create payment intent: ${error}`);
       throw new InternalServerErrorException("Failed to create payment intent");
     }
   }
@@ -170,7 +170,7 @@ export class StripeService {
       );
       return session;
     } catch (error) {
-      this.logger.error(`❌ Failed to create billing portal session: ${error}`);
+      this.logger.error(` Failed to create billing portal session: ${error}`);
       throw new InternalServerErrorException(
         "Failed to create billing portal session",
       );

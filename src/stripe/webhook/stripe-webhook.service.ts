@@ -58,14 +58,14 @@ export class StripeWebhookService {
         break;
 
       default:
-        this.logger.log(`⚡ Unhandled event type: ${event.type}`);
+        this.logger.log(` Unhandled event type: ${event.type}`);
     }
   }
 
   private async handleCheckoutSessionCompleted(
     session: Stripe.Checkout.Session,
   ): Promise<void> {
-    this.logger.log(`💰 Checkout session completed: ${session.id}`);
+    this.logger.log(` Checkout session completed: ${session.id}`);
 
     const userId = session.metadata?.userId
       ? parseInt(session.metadata.userId, 10)
@@ -85,7 +85,7 @@ export class StripeWebhookService {
   private async handlePaymentIntentSucceeded(
     paymentIntent: Stripe.PaymentIntent,
   ): Promise<void> {
-    this.logger.log(`✅ Payment succeeded: ${paymentIntent.id}`);
+    this.logger.log(`Payment succeeded: ${paymentIntent.id}`);
 
     await this.stripeService.updatePaymentStatus(
       paymentIntent.id,
@@ -96,7 +96,7 @@ export class StripeWebhookService {
   private async handlePaymentIntentFailed(
     paymentIntent: Stripe.PaymentIntent,
   ): Promise<void> {
-    this.logger.log(`❌ Payment failed: ${paymentIntent.id}`);
+    this.logger.log(` Payment failed: ${paymentIntent.id}`);
 
     await this.stripeService.updatePaymentStatus(
       paymentIntent.id,
@@ -107,30 +107,30 @@ export class StripeWebhookService {
   private async handleSubscriptionCreated(
     subscription: Stripe.Subscription,
   ): Promise<void> {
-    this.logger.log(`🆕 Subscription created: ${subscription.id}`);
+    this.logger.log(`Subscription created: ${subscription.id}`);
   }
 
   private async handleSubscriptionUpdated(
     subscription: Stripe.Subscription,
   ): Promise<void> {
     this.logger.log(
-      `🔄 Subscription updated: ${subscription.id} → ${subscription.status}`,
+      ` Subscription updated: ${subscription.id} → ${subscription.status}`,
     );
   }
 
   private async handleSubscriptionDeleted(
     subscription: Stripe.Subscription,
   ): Promise<void> {
-    this.logger.log(`🗑️  Subscription canceled: ${subscription.id}`);
+    this.logger.log(`Subscription canceled: ${subscription.id}`);
   }
 
   private async handleInvoicePaid(invoice: Stripe.Invoice): Promise<void> {
-    this.logger.log(`📧 Invoice paid: ${invoice.id}`);
+    this.logger.log(`Invoice paid: ${invoice.id}`);
   }
 
   private async handleInvoicePaymentFailed(
     invoice: Stripe.Invoice,
   ): Promise<void> {
-    this.logger.log(`⚠️  Invoice payment failed: ${invoice.id}`);
+    this.logger.log(`Invoice payment failed: ${invoice.id}`);
   }
 }

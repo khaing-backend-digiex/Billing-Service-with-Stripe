@@ -13,6 +13,9 @@ RUN npm ci
 # Copy the rest of the application source code
 COPY . .
 
+# Generate Prisma client
+RUN npx prisma generate
+
 # Build the NestJS application
 RUN npm run build
 
@@ -31,8 +34,15 @@ RUN npm ci --omit=dev
 # Copy the built dist folder from the builder stage
 COPY --from=builder /app/dist ./dist
 
+# Copy Prisma schema and generated client
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder /app/node_modules/@prisma/client ./node_modules/@prisma/client
+
 # Expose the application port (typically 3000 for NestJS)
 EXPOSE 3000
 
-# Start the NestJS application
-CMD ["npm", "run", "start:prod"]
+# Sync database schema then start the app
+CMD ["sh", "-c", "npx prisma db push && npm run start:prod"]
+
