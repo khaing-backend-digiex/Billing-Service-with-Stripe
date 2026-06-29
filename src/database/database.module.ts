@@ -10,14 +10,18 @@ import { Payment } from "./entities/payment.entity";
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
         type: "postgres",
-        host: configService.get<string>("DB_HOST", "localhost"),
-        port: configService.get<number>("DB_PORT", 5432),
-        username: configService.get<string>("DB_USER"),
-        password: configService.get<string>("DB_PASSWORD"),
-        database: configService.get<string>("DB_NAME"),
+
+        url: configService.get<string>("DATABASE_URL"),
+
+        ssl: {
+          rejectUnauthorized: false,
+        },
+
         entities: [User, Payment],
+
         synchronize:
           configService.get<string>("DB_SYNCHRONIZE", "false") === "true",
+
         logging: false,
       }),
     }),
