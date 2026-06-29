@@ -16,14 +16,6 @@ import { Payment } from "./entities/payment.entity";
         ssl: {
           rejectUnauthorized: false,
         },
-
-        url: configService.get<string>("DATABASE_URL"),
-        ssl: true,
-        extra: {
-          ssl: {
-            rejectUnauthorized: false,
-          },
-        },
         entities: [User, Payment],
 
         synchronize:
@@ -34,4 +26,4 @@ import { Payment } from "./entities/payment.entity";
     }),
   ],
 })
-export class DatabaseModule {}
+export class DatabaseModule { }
