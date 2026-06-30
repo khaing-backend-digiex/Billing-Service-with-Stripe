@@ -1,14 +1,13 @@
-import { Module } from "@nestjs/common";
-import { TypeOrmModule } from "@nestjs/typeorm";
-import { StripeService } from "./stripe.service";
+import { Module, forwardRef } from "@nestjs/common";
 import { StripeController } from "./stripe.controller";
+import { StripeService } from "./stripe.service";
 import { StripeWebhookController } from "./webhook/stripe-webhook.controller";
 import { StripeWebhookService } from "./webhook/stripe-webhook.service";
-import { Payment } from "../database/entities/payment.entity";
 import { UsersModule } from "../users/users.module";
+import { PricingModule } from "../pricing/pricing.module";
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Payment]), UsersModule],
+  imports: [forwardRef(() => UsersModule), PricingModule],
   controllers: [StripeController, StripeWebhookController],
   providers: [StripeService, StripeWebhookService],
   exports: [StripeService],

@@ -21,6 +21,7 @@ import { ApiResponse } from "../common/dto/api-response.dto";
 import { GetUser } from "../common/decorators/get-user.decorator";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { UsersService } from "../users/users.service";
+import { PrismaService } from "../database/prisma.service";
 
 @ApiTags("Stripe")
 @ApiBearerAuth("JWT-auth")
@@ -30,71 +31,99 @@ export class StripeController {
   constructor(
     private readonly stripeService: StripeService,
     private readonly usersService: UsersService,
+    private readonly prisma: PrismaService,
   ) {}
 
   @Post("customers")
   @ApiOperation({ summary: "Create a Stripe customer for the current user" })
-  @SwaggerResponse({
-    status: 201,
-    description: "Customer created successfully",
-  })
   async createCustomer(
     @GetUser("id") userId: number,
     @Body() dto: CreateCustomerDto,
   ) {
     const user = await this.usersService.findById(userId);
 
-    if (user.stripeCustomerId) {
-      throw new BadRequestException(
-        "User already has a Stripe customer account",
-      );
+    if (user.providerCustomerId) {
+      throw new BadRequestException("User already has a Stripe customer account");
     }
 
     const customer = await this.stripeService.createCustomer(
       userId,
       dto.email || user.email,
-      dto.name || user.name,
+      dto.name || user.name || undefined,
     );
 
-    return new ApiResponse(
-      HttpStatus.CREATED,
-      "Stripe customer created successfully",
-      {
-        customerId: customer.id,
-        email: customer.email,
-      },
-    );
+    return new ApiResponse(HttpStatus.CREATED, "Stripe customer created", {
+      customerId: customer.id,
+      email: customer.email,
+    });
   }
 
-  @Post("checkout")
-  @ApiOperation({ summary: "Create a Stripe checkout session" })
-  @SwaggerResponse({ status: 201, description: "Checkout session created" })
-  async createCheckout(
+  @Post("checkout/subscription")
+  @ApiOperation({ summary: "Create a Stripe checkout session for a subscription" })
+  async createSubscriptionCheckout(
     @GetUser("id") userId: number,
     @Body() dto: CreateCheckoutDto,
   ) {
     const user = await this.usersService.findById(userId);
 
+    // Rule 4 & 5: Check if user is currently on a PAID plan.
+    const currentSubscription = await this.prisma.subscription.findUnique({
+      where: { userId },
+      include: { pricingOption: true },
+    });
+
+    if (currentSubscription && currentSubscription.pricingOption) {
+      const price = Number(currentSubscription.pricingOption.price);
+      if (price > 0) {
+        throw new BadRequestException("Bạn chỉ có thể đăng ký gói mới khi đang ở gói FREE. Vui lòng huỷ gói hiện tại trước.");
+      }
+    }
+
     const session = await this.stripeService.createCheckoutSession(
       userId,
       dto.priceId,
-      dto.mode,
-      user.stripeCustomerId || undefined,
+      "subscription",
+      user.providerCustomerId || undefined,
     );
 
-    return new ApiResponse(
-      HttpStatus.CREATED,
-      "Checkout session created successfully",
-      {
-        sessionId: session.id,
-        url: session.url,
-      },
+    return new ApiResponse(HttpStatus.CREATED, "Subscription checkout session created", {
+      sessionId: session.id,
+      url: session.url,
+    });
+  }
+
+  @Post("checkout/addon")
+  @ApiOperation({ summary: "Create a Stripe checkout session for an addon" })
+  async createAddonCheckout(
+    @GetUser("id") userId: number,
+    @Body() dto: CreateCheckoutDto,
+  ) {
+    const user = await this.usersService.findById(userId);
+
+    const addon = await this.prisma.addonPackage.findFirst({
+      where: { providerPriceId: dto.priceId },
+    });
+
+    if (!addon) {
+      throw new BadRequestException("Addon package not found for the given priceId");
+    }
+
+    const session = await this.stripeService.createCheckoutSession(
+      userId,
+      dto.priceId,
+      "payment",
+      user.providerCustomerId || undefined,
+      { addonPackageId: addon.id }
     );
+
+    return new ApiResponse(HttpStatus.CREATED, "Addon checkout session created", {
+      sessionId: session.id,
+      url: session.url,
+    });
   }
 
   @Post("payment-intent")
   @ApiOperation({ summary: "Create a payment intent" })
-  @SwaggerResponse({ status: 201, description: "Payment intent created" })
   async createPaymentIntent(
     @GetUser("id") userId: number,
     @Body() dto: CreatePaymentIntentDto,
@@ -106,57 +135,40 @@ export class StripeController {
       dto.amount,
       dto.currency,
       dto.description,
-      user.stripeCustomerId || undefined,
+      user.providerCustomerId || undefined,
     );
 
-    return new ApiResponse(
-      HttpStatus.CREATED,
-      "Payment intent created successfully",
-      {
-        paymentIntentId: paymentIntent.id,
-        clientSecret: paymentIntent.client_secret,
-        amount: paymentIntent.amount,
-        currency: paymentIntent.currency,
-      },
-    );
+    return new ApiResponse(HttpStatus.CREATED, "Payment intent created", {
+      paymentIntentId: paymentIntent.id,
+      clientSecret: paymentIntent.client_secret,
+    });
   }
 
   @Post("billing-portal")
   @ApiOperation({ summary: "Create a billing portal session" })
-  @SwaggerResponse({
-    status: 201,
-    description: "Billing portal session created",
-  })
   async createBillingPortal(@GetUser("id") userId: number) {
     const user = await this.usersService.findById(userId);
 
-    if (!user.stripeCustomerId) {
-      throw new BadRequestException(
-        "User does not have a Stripe customer account. Create one first.",
-      );
+    if (!user.providerCustomerId) {
+      throw new BadRequestException("User does not have a Stripe customer account.");
     }
 
     const session = await this.stripeService.createBillingPortalSession(
-      user.stripeCustomerId,
+      user.providerCustomerId,
     );
 
-    return new ApiResponse(
-      HttpStatus.CREATED,
-      "Billing portal session created successfully",
-      {
-        url: session.url,
-      },
-    );
+    return new ApiResponse(HttpStatus.CREATED, "Billing portal session created", {
+      url: session.url,
+    });
   }
 
   @Get("payments")
   @ApiOperation({ summary: "Get payment history for the current user" })
   async getPayments(@GetUser("id") userId: number) {
-    const payments = await this.stripeService.getPaymentsByUserId(userId);
-    return new ApiResponse(
-      HttpStatus.OK,
-      "Payments fetched successfully",
-      payments,
-    );
+    const payments = await this.prisma.payment.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+    });
+    return new ApiResponse(HttpStatus.OK, "Payments fetched successfully", payments);
   }
 }

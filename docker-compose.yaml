@@ -6,41 +6,12 @@ services:
     container_name: nestjs_api
     ports:
       - "3000:3000"
-    depends_on:
-      postgres:
-        condition: service_healthy
     env_file:
       - .env
     environment:
-      - DB_HOST=postgres
-      - DATABASE_URL=postgresql://${DB_USER:-express_demo}:${DB_PASSWORD:-khai123}@postgres:5432/${DB_NAME:-postgres}?schema=public
+      DATABASE_URL: ${DATABASE_URL}
     networks:
       - nestjs_network
-
-  postgres:
-    image: postgres:15-alpine
-    container_name: nestjs_postgres
-    ports:
-      - "5432:5432"
-    env_file:
-      - .env
-    environment:
-      POSTGRES_DB: ${DB_NAME:-your_database_name}
-      POSTGRES_USER: ${DB_USER:-your_database_user}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-your_database_password}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    networks:
-      - nestjs_network
-
-volumes:
-  postgres_data:
-    name: nestjs_postgres_data
 
 networks:
   nestjs_network:
