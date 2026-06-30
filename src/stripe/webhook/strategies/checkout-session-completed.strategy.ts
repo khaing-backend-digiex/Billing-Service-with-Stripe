@@ -1,5 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
+import { PaymentProvider, PaymentStatus } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 
@@ -37,13 +38,19 @@ export class CheckoutSessionCompletedStrategy implements WebhookStrategy {
       const addon = await this.prisma.addonPackage.findUnique({ where: { id: addonPackageId } });
       if (!addon) return;
 
-      await this.prisma.$transaction([
-        this.prisma.creditWallet.upsert({
+      const paymentIntentId =
+        typeof session.payment_intent === "string"
+          ? session.payment_intent
+          : (session.payment_intent as any)?.id ?? null;
+
+      await this.prisma.$transaction(async (tx) => {
+        await tx.creditWallet.upsert({
           where: { userId },
           update: { addonCredits: { increment: addon.credits } },
           create: { userId, addonCredits: addon.credits },
-        }),
-        this.prisma.creditTransaction.create({
+        });
+
+        await tx.creditTransaction.create({
           data: {
             userId,
             type: "ADDON_PURCHASE",
@@ -52,8 +59,25 @@ export class CheckoutSessionCompletedStrategy implements WebhookStrategy {
             referenceType: "ADDON_PURCHASE",
             referenceId: session.id,
           },
-        }),
-      ]);
+        });
+
+        if (paymentIntentId) {
+          await tx.payment.upsert({
+            where: { providerPaymentId: paymentIntentId },
+            create: {
+              userId,
+              addonPackageId,
+              provider: PaymentProvider.STRIPE,
+              providerPaymentId: paymentIntentId,
+              amount: addon.price,
+              currency: addon.currency,
+              status: PaymentStatus.SUCCEEDED,
+              paidAt: new Date(),
+            },
+            update: {},
+          });
+        }
+      });
 
       this.logger.log(`✅ Added ${addon.credits} addon credits to user ${userId}`);
     }
