@@ -24,7 +24,16 @@ export class StripeWebhookService {
       return; // Idempotent: Ignore duplicate webhook
     }
 
-    // 2. Mark event as processed (or start processing)
+    // 2. Run strategy trước — nếu fail thì Stripe sẽ retry và lần sau vẫn xử lý được
+    const strategy = this.strategyFactory.getStrategy(event.type);
+
+    if (strategy) {
+      await strategy.handle(event);
+    } else {
+      this.logger.log(`Unhandled event type: ${event.type}`);
+    }
+
+    // 3. Chỉ đánh dấu processed sau khi strategy chạy thành công
     await this.prisma.webhookEvent.create({
       data: {
         id: event.id,
@@ -35,13 +44,5 @@ export class StripeWebhookService {
         processedAt: new Date(),
       },
     });
-
-    const strategy = this.strategyFactory.getStrategy(event.type);
-    
-    if (strategy) {
-      await strategy.handle(event);
-    } else {
-      this.logger.log(`Unhandled event type: ${event.type}`);
-    }
   }
 }

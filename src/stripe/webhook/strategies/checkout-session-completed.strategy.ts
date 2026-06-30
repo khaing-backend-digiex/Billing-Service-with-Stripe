@@ -8,9 +8,9 @@ export class CheckoutSessionCompletedStrategy implements WebhookStrategy {
   private readonly logger = new Logger(CheckoutSessionCompletedStrategy.name);
 
   constructor(private readonly prisma: PrismaService) {}
-
+  private readonly checkoutSessionCompleted = "checkout.session.completed"
   canHandle(eventType: string): boolean {
-    return eventType === "checkout.session.completed";
+    return eventType === this.checkoutSessionCompleted;
   }
 
   async handle(event: Stripe.Event): Promise<void> {
@@ -22,16 +22,28 @@ export class CheckoutSessionCompletedStrategy implements WebhookStrategy {
 
     if (addonPackageId && userIdStr) {
       const userId = parseInt(userIdStr, 10);
-      const addon = await this.prisma.addonPackage.findUnique({ where: { id: addonPackageId } });
+      if (isNaN(userId)) return;
 
-      if (addon && !isNaN(userId)) {
-        await this.prisma.creditWallet.upsert({
+      // Idempotency: kiểm tra CreditTransaction đã tồn tại cho session này chưa
+      const existing = await this.prisma.creditTransaction.findFirst({
+        where: { referenceId: session.id, referenceType: "ADDON_PURCHASE" },
+      });
+
+      if (existing) {
+        this.logger.log(`Addon purchase ${session.id} already processed – skipping`);
+        return;
+      }
+
+      const addon = await this.prisma.addonPackage.findUnique({ where: { id: addonPackageId } });
+      if (!addon) return;
+
+      await this.prisma.$transaction([
+        this.prisma.creditWallet.upsert({
           where: { userId },
           update: { addonCredits: { increment: addon.credits } },
           create: { userId, addonCredits: addon.credits },
-        });
-
-        await this.prisma.creditTransaction.create({
+        }),
+        this.prisma.creditTransaction.create({
           data: {
             userId,
             type: "ADDON_PURCHASE",
@@ -39,11 +51,11 @@ export class CheckoutSessionCompletedStrategy implements WebhookStrategy {
             description: `Purchased Addon: ${addon.name}`,
             referenceType: "ADDON_PURCHASE",
             referenceId: session.id,
-          }
-        });
+          },
+        }),
+      ]);
 
-        this.logger.log(`✅ Added ${addon.credits} addon credits to user ${userId}`);
-      }
+      this.logger.log(`✅ Added ${addon.credits} addon credits to user ${userId}`);
     }
   }
 }
