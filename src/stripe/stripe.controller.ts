@@ -79,11 +79,31 @@ export class StripeController {
       }
     }
 
+    // Validate that the priceId belongs to a valid Subscription Pricing Option
+    const pricingOption = await this.prisma.pricingOption.findFirst({
+      where: { providerPriceId: dto.priceId },
+    });
+
+    if (!pricingOption) {
+      throw new BadRequestException("Pricing option not found for the given priceId");
+    }
+
+    let providerCustomerId = user.providerCustomerId;
+
+    if (!providerCustomerId) {
+      const customer = await this.stripeService.createCustomer(
+        userId,
+        user.email,
+        user.name || undefined,
+      );
+      providerCustomerId = customer.id;
+    }
+
     const session = await this.stripeService.createCheckoutSession(
       userId,
       dto.priceId,
       "subscription",
-      user.providerCustomerId || undefined,
+      providerCustomerId,
     );
 
     return new ApiResponse(HttpStatus.CREATED, "Subscription checkout session created", {

@@ -9,7 +9,8 @@ import { ConfigService } from "@nestjs/config";
 import Stripe from "stripe";
 import { PrismaService } from "../database/prisma.service";
 import { UsersService } from "../users/users.service";
-import { PaymentStatus, PaymentProvider } from "@prisma/client";
+import { PaymentStatus, PaymentProvider, SubscriptionStatus } from "@prisma/client";
+import { PLAN_CODES } from "../common/constants/plan.constants";
 
 @Injectable()
 export class StripeService {
@@ -52,23 +53,86 @@ export class StripeService {
     return this.stripe.customers.retrieve(customerId);
   }
 
-  async subscribeToFreePlan(customerId: string): Promise<Stripe.Subscription> {
-    const freePriceId = this.configService.get<string>("STRIPE_FREE_PRICE_ID");
-    if (!freePriceId) {
-      this.logger.warn("STRIPE_FREE_PRICE_ID is not configured. Skipping free subscription.");
+  async subscribeToFreePlan(userId: number, customerId: string): Promise<Stripe.Subscription> {
+    const freePlan = await this.prisma.plan.findUnique({
+      where: { code: PLAN_CODES.FREE },
+      include: { pricingOptions: { include: { billingCycle: true } } },
+    });
+
+    if (!freePlan || freePlan.pricingOptions.length === 0) {
+      this.logger.warn("Free plan not found in database. Skipping free subscription.");
       return null as any;
     }
 
+    const pricingOption = freePlan.pricingOptions[0];
+    
+    let stripeSubscription;
+    if (pricingOption.providerPriceId) {
+      try {
+        stripeSubscription = await this.stripe.subscriptions.create({
+          customer: customerId,
+          items: [{ price: pricingOption.providerPriceId }],
+        });
+        this.logger.log(`✅ Subscribed customer ${customerId} to free plan (price: ${pricingOption.providerPriceId})`);
+      } catch (error) {
+        this.logger.error(`Failed to subscribe customer to free plan on Stripe: ${error}`);
+      }
+    }
+
+    const currentPeriodStart = new Date();
+    const currentPeriodEnd = new Date();
+    currentPeriodEnd.setFullYear(currentPeriodEnd.getFullYear() + 100);
+
+    const nextCreditResetAt = new Date();
+    nextCreditResetAt.setDate(nextCreditResetAt.getDate() + freePlan.resetIntervalDay);
+
+    await this.prisma.subscription.create({
+      data: {
+        userId,
+        pricingOptionId: pricingOption.id,
+        status: SubscriptionStatus.INACTIVE,
+        currentPeriodStart,
+        currentPeriodEnd,
+        subscriptionCreditsRemaining: freePlan.renewalCredits,
+        nextCreditResetAt,
+        provider: PaymentProvider.STRIPE,
+        providerSubscriptionId: stripeSubscription?.id,
+      }
+    });
+
+    return stripeSubscription as Stripe.Subscription;
+  }
+
+  async hasDefaultPaymentMethod(customerId: string): Promise<boolean> {
+    try {
+      const customer = await this.stripe.customers.retrieve(customerId) as Stripe.Customer;
+      if (customer.deleted) return false;
+      if (customer.invoice_settings?.default_payment_method) return true;
+      if (customer.default_source) return true;
+      
+      const paymentMethods = await this.stripe.paymentMethods.list({
+        customer: customerId,
+        type: 'card',
+      });
+      return paymentMethods.data.length > 0;
+    } catch (error) {
+      this.logger.error(`Error checking payment methods for customer ${customerId}`, error);
+      return false;
+    }
+  }
+
+  async subscribeToPaidPlan(userId: number, customerId: string, priceId: string): Promise<Stripe.Subscription> {
     try {
       const subscription = await this.stripe.subscriptions.create({
         customer: customerId,
-        items: [{ price: freePriceId }],
+        items: [{ price: priceId }],
+        expand: ['latest_invoice.payment_intent'],
       });
-      this.logger.log(`✅ Subscribed customer ${customerId} to free plan`);
+      this.logger.log(`✅ Subscribed customer ${customerId} to paid plan (price: ${priceId})`);
       return subscription;
     } catch (error) {
-      this.logger.error(`Failed to subscribe customer to free plan: ${error}`);
-      throw new InternalServerErrorException("Failed to create free subscription");
+      this.logger.error(`Failed to subscribe customer to paid plan: ${error}`);
+      throw new InternalServerErrorException("Failed to create paid subscription on Stripe");
     }
   }
 

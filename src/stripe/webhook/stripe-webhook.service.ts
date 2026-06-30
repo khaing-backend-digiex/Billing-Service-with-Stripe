@@ -14,7 +14,7 @@ export class StripeWebhookService {
   ) {}
 
   async handleEvent(event: Stripe.Event): Promise<void> {
-    // 1. Idempotency Check
+    // 1. Check if event is already processed
     const existingEvent = await this.prisma.webhookEvent.findUnique({
       where: { eventId: event.id },
     });
@@ -24,24 +24,47 @@ export class StripeWebhookService {
       return; // Idempotent: Ignore duplicate webhook
     }
 
-    // 2. Mark event as processed (or start processing)
-    await this.prisma.webhookEvent.create({
-      data: {
-        id: event.id,
-        eventId: event.id,
-        provider: PaymentProvider.STRIPE,
-        eventType: event.type,
-        payload: event as any,
-        processedAt: new Date(),
-      },
-    });
+    // 2. Lock event by inserting it
+    try {
+      await this.prisma.webhookEvent.create({
+        data: {
+          id: event.id,
+          eventId: event.id,
+          provider: PaymentProvider.STRIPE,
+          eventType: event.type,
+          payload: event as any,
+        },
+      });
+    } catch (e) {
+      this.logger.log(`Concurrent webhook event ${event.id} detected. Skipping.`);
+      return;
+    }
 
     const strategy = this.strategyFactory.getStrategy(event.type);
     
     if (strategy) {
-      await strategy.handle(event);
+      try {
+        await strategy.handle(event);
+        // Mark as processed
+        await this.prisma.webhookEvent.update({
+          where: { eventId: event.id },
+          data: { processedAt: new Date() },
+        });
+      } catch (err) {
+        this.logger.error(`Error processing webhook ${event.id}:`, err);
+        // If it fails, delete the record so Stripe's retry will process it again
+        await this.prisma.webhookEvent.delete({
+          where: { eventId: event.id },
+        });
+        throw err;
+      }
     } else {
       this.logger.log(`Unhandled event type: ${event.type}`);
+      // Mark as processed since we don't care about it
+      await this.prisma.webhookEvent.update({
+        where: { eventId: event.id },
+        data: { processedAt: new Date() },
+      });
     }
   }
 }

@@ -7,6 +7,7 @@ import { UsersModule } from "../users/users.module";
 import { PricingModule } from "../pricing/pricing.module";
 import { CheckoutSessionCompletedStrategy } from "./webhook/strategies/checkout-session-completed.strategy";
 import { InvoicePaidStrategy } from "./webhook/strategies/invoice-paid.strategy";
+import { InvoicePaymentFailedStrategy } from "./webhook/strategies/invoice-payment-failed.strategy";
 import { SubscriptionDeletedStrategy } from "./webhook/strategies/subscription-deleted.strategy";
 import { WebhookStrategyFactory } from "./webhook/strategies/webhook-strategy.factory";
 
@@ -18,6 +19,7 @@ import { WebhookStrategyFactory } from "./webhook/strategies/webhook-strategy.fa
     StripeWebhookService,
     CheckoutSessionCompletedStrategy,
     InvoicePaidStrategy,
+    InvoicePaymentFailedStrategy,
     SubscriptionDeletedStrategy,
     WebhookStrategyFactory,
     {
@@ -25,11 +27,13 @@ import { WebhookStrategyFactory } from "./webhook/strategies/webhook-strategy.fa
       useFactory: (
         checkoutStrategy: CheckoutSessionCompletedStrategy,
         invoiceStrategy: InvoicePaidStrategy,
+        invoiceFailedStrategy: InvoicePaymentFailedStrategy,
         subscriptionStrategy: SubscriptionDeletedStrategy,
-      ) => [checkoutStrategy, invoiceStrategy, subscriptionStrategy],
+      ) => [checkoutStrategy, invoiceStrategy, invoiceFailedStrategy, subscriptionStrategy],
       inject: [
         CheckoutSessionCompletedStrategy,
         InvoicePaidStrategy,
+        InvoicePaymentFailedStrategy,
         SubscriptionDeletedStrategy,
       ],
     },

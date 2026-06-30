@@ -4,7 +4,8 @@ import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { StripeService } from "../../stripe.service";
 import { PricingService } from "../../../pricing/pricing.service";
-import { PaymentProvider, SubscriptionStatus } from "@prisma/client";
+import { PaymentProvider, SubscriptionStatus, InvoiceStatus, PaymentStatus } from "@prisma/client";
+import { PLAN_CODES } from "../../../common/constants/plan.constants";
 
 @Injectable()
 export class InvoicePaidStrategy implements WebhookStrategy {
@@ -26,7 +27,6 @@ export class InvoicePaidStrategy implements WebhookStrategy {
     
     if (invoice.subscription) {
       const subscriptionId = invoice.subscription as string;
-      const stripeSub = await this.stripeService.getCustomer(invoice.customer as string);
       
       const lineItem = invoice.lines.data[0];
       const priceId = lineItem.price?.id;
@@ -49,15 +49,19 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       }
 
       // Upsert Subscription in DB
-      const currentPeriodEnd = new Date(lineItem.period.end * 1000);
+      let currentPeriodEnd = new Date(lineItem.period.end * 1000);
       const currentPeriodStart = new Date(lineItem.period.start * 1000);
+
+      if (pricingOption.plan.code === PLAN_CODES.FREE) {
+        currentPeriodEnd.setFullYear(currentPeriodEnd.getFullYear() + 100);
+      }
 
       // Add resetIntervalDay from plan
       const resetIntervalDay = pricingOption.plan.resetIntervalDay;
       const nextCreditResetAt = new Date();
       nextCreditResetAt.setDate(nextCreditResetAt.getDate() + resetIntervalDay);
 
-      await this.prisma.subscription.upsert({
+      const dbSubscription = await this.prisma.subscription.upsert({
         where: { userId: user.id },
         update: {
           pricingOptionId: pricingOption.id,
@@ -80,6 +84,62 @@ export class InvoicePaidStrategy implements WebhookStrategy {
           providerSubscriptionId: subscriptionId,
         }
       });
+
+      // Handle Invoice
+      const amountPaid = invoice.amount_paid / 100;
+      const paidAt = invoice.status_transitions?.paid_at 
+        ? new Date(invoice.status_transitions.paid_at * 1000) 
+        : new Date();
+      const dueAt = new Date(invoice.created * 1000);
+
+      let dbInvoice = await this.prisma.invoice.findFirst({
+        where: { providerInvoiceId: invoice.id }
+      });
+
+      if (!dbInvoice) {
+        dbInvoice = await this.prisma.invoice.create({
+          data: {
+            subscriptionId: dbSubscription.id,
+            provider: PaymentProvider.STRIPE,
+            providerInvoiceId: invoice.id,
+            amount: amountPaid,
+            currency: invoice.currency,
+            status: InvoiceStatus.PAID,
+            dueAt,
+            paidAt,
+          }
+        });
+      } else {
+        dbInvoice = await this.prisma.invoice.update({
+          where: { id: dbInvoice.id },
+          data: {
+            status: InvoiceStatus.PAID,
+            paidAt,
+          }
+        });
+      }
+
+      // Handle Payment
+      const paymentIntentId = invoice.payment_intent as string | null;
+      if (paymentIntentId && amountPaid > 0) {
+        await this.prisma.payment.upsert({
+          where: { providerPaymentId: paymentIntentId },
+          update: {
+            status: PaymentStatus.SUCCEEDED,
+            paidAt,
+          },
+          create: {
+            userId: user.id,
+            invoiceId: dbInvoice.id,
+            provider: PaymentProvider.STRIPE,
+            providerPaymentId: paymentIntentId,
+            amount: amountPaid,
+            currency: invoice.currency,
+            status: PaymentStatus.SUCCEEDED,
+            paidAt,
+          }
+        });
+      }
     }
   }
 }

@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
+import { CreditTransactionType } from "@prisma/client";
 
 @Injectable()
 export class CheckoutSessionCompletedStrategy implements WebhookStrategy {
@@ -34,15 +35,15 @@ export class CheckoutSessionCompletedStrategy implements WebhookStrategy {
         await this.prisma.creditTransaction.create({
           data: {
             userId,
-            type: "ADDON_PURCHASE",
+            type: CreditTransactionType.ADDON_PURCHASE,
             amount: addon.credits,
             description: `Purchased Addon: ${addon.name}`,
-            referenceType: "ADDON_PURCHASE",
+            referenceType: CreditTransactionType.ADDON_PURCHASE,
             referenceId: session.id,
           }
         });
 
-        this.logger.log(`✅ Added ${addon.credits} addon credits to user ${userId}`);
+        this.logger.log(`Added ${addon.credits} addon credits to user ${userId}`);
       }
     }
   }
