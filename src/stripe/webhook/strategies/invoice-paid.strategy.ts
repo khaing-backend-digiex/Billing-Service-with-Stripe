@@ -1,8 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
 import {
-  InvoiceStatus,
-  SubscriptionStatus,
   CreditTransactionType,
   ReferenceType,
   SubscriptionEventType,
@@ -99,32 +97,6 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       await tx.subscription.update({
         where: { id: subscription.id },
         data: {
-      const user = await this.prisma.user.findFirst({
-        where: { providerCustomerId: invoice.customer as string }
-      });
-
-      if (!user) {
-        this.logger.error(`User not found for customer ${invoice.customer}`);
-        return;
-      }
-
-      // Upsert Subscription in DB
-      let currentPeriodEnd = new Date(lineItem.period.end * 1000);
-      const currentPeriodStart = new Date(lineItem.period.start * 1000);
-
-      if (pricingOption.plan.code === PLAN_CODES.FREE) {
-        currentPeriodEnd.setFullYear(currentPeriodEnd.getFullYear() + 100);
-      }
-
-      // Add resetIntervalDay from plan
-      const resetIntervalDay = pricingOption.plan.resetIntervalDay;
-      const nextCreditResetAt = new Date();
-      nextCreditResetAt.setDate(nextCreditResetAt.getDate() + resetIntervalDay);
-
-      const dbSubscription = await this.prisma.subscription.upsert({
-        where: { userId: user.id },
-        update: {
-          pricingOptionId: pricingOption.id,
           status: SubscriptionStatus.ACTIVE,
           pricingOptionId: pricingOption.id,
           currentPeriodStart: periodStart,
@@ -159,65 +131,9 @@ export class InvoicePaidStrategy implements WebhookStrategy {
         },
       });
 
-      // Handle Invoice
-      const amountPaid = invoice.amount_paid / 100;
-      const paidAt = invoice.status_transitions?.paid_at 
-        ? new Date(invoice.status_transitions.paid_at * 1000) 
-        : new Date();
-      const dueAt = new Date(invoice.created * 1000);
-
-      let dbInvoice = await this.prisma.invoice.findFirst({
-        where: { providerInvoiceId: invoice.id }
-      });
-
-      if (!dbInvoice) {
-        dbInvoice = await this.prisma.invoice.create({
-          data: {
-            subscriptionId: dbSubscription.id,
-            provider: PaymentProvider.STRIPE,
-            providerInvoiceId: invoice.id,
-            amount: amountPaid,
-            currency: invoice.currency,
-            status: InvoiceStatus.PAID,
-            dueAt,
-            paidAt,
-          }
-        });
-      } else {
-        dbInvoice = await this.prisma.invoice.update({
-          where: { id: dbInvoice.id },
-          data: {
-            status: InvoiceStatus.PAID,
-            paidAt,
-          }
-        });
-      }
-
-      // Handle Payment
-      const paymentIntentId = invoice.payment_intent as string | null;
-      if (paymentIntentId && amountPaid > 0) {
-        await this.prisma.payment.upsert({
-          where: { providerPaymentId: paymentIntentId },
-          update: {
-            status: PaymentStatus.SUCCEEDED,
-            paidAt,
-          },
-          create: {
-            userId: user.id,
-            invoiceId: dbInvoice.id,
-            provider: PaymentProvider.STRIPE,
-            providerPaymentId: paymentIntentId,
-            amount: amountPaid,
-            currency: invoice.currency,
-            status: PaymentStatus.SUCCEEDED,
-            paidAt,
-          }
-        });
-      }
-    });
-
     this.logger.log(
       `Credits granted: subscription=${subscription.id} +${plan.renewalCredits} (${plan.name}, ${stripeInvoice.billing_reason})`,
     );
+  })
   }
 }

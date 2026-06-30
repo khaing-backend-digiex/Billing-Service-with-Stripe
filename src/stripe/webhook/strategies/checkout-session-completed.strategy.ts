@@ -59,5 +59,5 @@ export class CheckoutSessionCompletedStrategy implements WebhookStrategy {
         this.logger.log(`Added ${addon.credits} addon credits to user ${userId}`);
       }
     }
-  }
 }
+
