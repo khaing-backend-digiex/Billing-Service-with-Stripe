@@ -24,47 +24,25 @@ export class StripeWebhookService {
       return; // Idempotent: Ignore duplicate webhook
     }
 
-    // 2. Lock event by inserting it
-    try {
-      await this.prisma.webhookEvent.create({
-        data: {
-          id: event.id,
-          eventId: event.id,
-          provider: PaymentProvider.STRIPE,
-          eventType: event.type,
-          payload: event as any,
-        },
-      });
-    } catch (e) {
-      this.logger.log(`Concurrent webhook event ${event.id} detected. Skipping.`);
-      return;
-    }
-
+    // 2. Run strategy trước — nếu fail thì Stripe sẽ retry và lần sau vẫn xử lý được
     const strategy = this.strategyFactory.getStrategy(event.type);
-    
+
     if (strategy) {
-      try {
-        await strategy.handle(event);
-        // Mark as processed
-        await this.prisma.webhookEvent.update({
-          where: { eventId: event.id },
-          data: { processedAt: new Date() },
-        });
-      } catch (err) {
-        this.logger.error(`Error processing webhook ${event.id}:`, err);
-        // If it fails, delete the record so Stripe's retry will process it again
-        await this.prisma.webhookEvent.delete({
-          where: { eventId: event.id },
-        });
-        throw err;
-      }
+      await strategy.handle(event);
     } else {
       this.logger.log(`Unhandled event type: ${event.type}`);
-      // Mark as processed since we don't care about it
-      await this.prisma.webhookEvent.update({
-        where: { eventId: event.id },
-        data: { processedAt: new Date() },
-      });
     }
+
+    // 3. Chỉ đánh dấu processed sau khi strategy chạy thành công
+    await this.prisma.webhookEvent.create({
+      data: {
+        id: event.id,
+        eventId: event.id,
+        provider: PaymentProvider.STRIPE,
+        eventType: event.type,
+        payload: event as any,
+        processedAt: new Date(),
+      },
+    });
   }
 }
