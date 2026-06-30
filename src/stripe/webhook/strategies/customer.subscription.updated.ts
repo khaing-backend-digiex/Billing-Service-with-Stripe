@@ -50,7 +50,12 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
 
       await tx.subscription.update({
         where: { id: subscription.id },
-        data: { status: newStatus },
+        data: {
+          status: newStatus,
+          ...(sub.trial_end !== null && sub.trial_end !== undefined
+            ? { trialEnd: new Date(sub.trial_end * 1000) }
+            : {}),
+        },
       });
 
       if (previousStatus === SubscriptionStatus.PAST_DUE && newStatus === SubscriptionStatus.ACTIVE) {

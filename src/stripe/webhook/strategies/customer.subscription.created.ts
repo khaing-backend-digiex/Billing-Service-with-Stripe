@@ -59,6 +59,9 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
     const currentPeriodStart = new Date(sub.current_period_start * 1000);
     const currentPeriodEnd = new Date(sub.current_period_end * 1000);
 
+    const trialStart = sub.trial_start ? new Date(sub.trial_start * 1000) : null;
+    const trialEnd = sub.trial_end ? new Date(sub.trial_end * 1000) : null;
+
     // credits = 0, sẽ được cấp đúng trong invoice.paid
     await this.prisma.subscription.upsert({
       where: { userId: user.id },
@@ -70,6 +73,8 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
         currentPeriodEnd,
         subscriptionCreditsRemaining: 0,
         nextCreditResetAt: currentPeriodEnd,
+        trialStart,
+        trialEnd,
         provider: PaymentProvider.STRIPE,
         providerSubscriptionId: sub.id,
       },
@@ -78,6 +83,8 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
         status,
         currentPeriodStart,
         currentPeriodEnd,
+        trialStart,
+        trialEnd,
         providerSubscriptionId: sub.id,
         cancelledAt: null,
       },

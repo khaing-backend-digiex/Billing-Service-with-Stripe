@@ -4,6 +4,8 @@ import {
   CreditTransactionType,
   ReferenceType,
   SubscriptionEventType,
+  PaymentProvider,
+  PaymentStatus,
 } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
@@ -88,11 +90,37 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       ? `Credits granted – ${plan.name} (initial)`
       : `Credits granted – ${plan.name} (renewal)`;
 
+    const paymentIntentId =
+      typeof stripeInvoice.payment_intent === "string"
+        ? stripeInvoice.payment_intent
+        : (stripeInvoice.payment_intent as any)?.id ?? null;
+
     await this.prisma.$transaction(async (tx) => {
       await tx.invoice.update({
         where: { id: invoice.id },
-        data: { status: InvoiceStatus.PAID, paidAt: new Date() },
+        data: {
+          status: InvoiceStatus.PAID,
+          billingReason: stripeInvoice.billing_reason ?? null,
+          paidAt: new Date(),
+        },
       });
+
+      if (paymentIntentId) {
+        await tx.payment.upsert({
+          where: { providerPaymentId: paymentIntentId },
+          create: {
+            userId: subscription.userId,
+            invoiceId: invoice.id,
+            provider: PaymentProvider.STRIPE,
+            providerPaymentId: paymentIntentId,
+            amount: stripeInvoice.amount_paid / 100,
+            currency: stripeInvoice.currency,
+            status: PaymentStatus.SUCCEEDED,
+            paidAt: new Date(),
+          },
+          update: {},
+        });
+      }
 
       await tx.subscription.update({
         where: { id: subscription.id },
