@@ -1,25 +1,17 @@
 import { Injectable, BadRequestException } from "@nestjs/common";
 import { PaymentProvider } from "@prisma/client";
-import { IPaymentStrategy } from "./interfaces/payment-strategy.interface";
-import { StripeStrategy } from "./strategies/stripe.strategy";
+import { StripeService } from "../stripe/stripe.service";
 
 @Injectable()
 export class PaymentsService {
-  constructor(
-    private readonly stripeStrategy: StripeStrategy,
-  ) {}
-
-  getStrategy(provider: PaymentProvider = PaymentProvider.STRIPE): IPaymentStrategy {
-    switch (provider) {
-      case PaymentProvider.STRIPE:
-        return this.stripeStrategy;
-      default:
-        throw new BadRequestException(`Payment provider ${provider} is not supported.`);
-    }
-  }
+  constructor(private readonly stripeService: StripeService) {}
 
   async createCustomer(userId: number, email: string, name?: string, provider?: PaymentProvider) {
-    return this.getStrategy(provider).createCustomer(userId, email, name);
+    if (provider && provider !== PaymentProvider.STRIPE) {
+      throw new BadRequestException(`Payment provider ${provider} is not supported.`);
+    }
+    const customer = await this.stripeService.createCustomer(userId, email, name);
+    return { customerId: customer.id };
   }
 
   async createCheckoutSession(
@@ -29,7 +21,11 @@ export class PaymentsService {
     customerId?: string,
     provider?: PaymentProvider
   ) {
-    return this.getStrategy(provider).createCheckoutSession(userId, priceId, mode, customerId);
+    if (provider && provider !== PaymentProvider.STRIPE) {
+      throw new BadRequestException(`Payment provider ${provider} is not supported.`);
+    }
+    const session = await this.stripeService.createCheckoutSession(userId, priceId, mode, customerId);
+    return { sessionId: session.id, url: session.url };
   }
 
   async createPaymentIntent(
@@ -40,14 +36,30 @@ export class PaymentsService {
     customerId?: string,
     provider?: PaymentProvider
   ) {
-    return this.getStrategy(provider).createPaymentIntent(userId, amount, currency, description, customerId);
+    if (provider && provider !== PaymentProvider.STRIPE) {
+      throw new BadRequestException(`Payment provider ${provider} is not supported.`);
+    }
+    const paymentIntent = await this.stripeService.createPaymentIntent(userId, amount, currency, description, customerId);
+    return {
+      paymentIntentId: paymentIntent.id,
+      clientSecret: paymentIntent.client_secret,
+      amount: paymentIntent.amount,
+      currency: paymentIntent.currency,
+    };
   }
 
   async createBillingPortalSession(customerId: string, returnUrl?: string, provider?: PaymentProvider) {
-    return this.getStrategy(provider).createBillingPortalSession(customerId, returnUrl);
+    if (provider && provider !== PaymentProvider.STRIPE) {
+      throw new BadRequestException(`Payment provider ${provider} is not supported.`);
+    }
+    const session = await this.stripeService.createBillingPortalSession(customerId, returnUrl);
+    return { url: session.url };
   }
 
   async cancelSubscriptionAtPeriodEnd(subscriptionId: string, provider?: PaymentProvider) {
-    return this.getStrategy(provider).cancelSubscriptionAtPeriodEnd(subscriptionId);
+    if (provider && provider !== PaymentProvider.STRIPE) {
+      throw new BadRequestException(`Payment provider ${provider} is not supported.`);
+    }
+    await this.stripeService.cancelSubscriptionAtPeriodEnd(subscriptionId);
   }
 }

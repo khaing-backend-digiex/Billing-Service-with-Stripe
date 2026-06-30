@@ -188,4 +188,10 @@ export class StripeService {
   async retrieveSubscription(subscriptionId: string): Promise<Stripe.Subscription> {
     return this.stripe.subscriptions.retrieve(subscriptionId);
   }
+
+  async cancelSubscriptionAtPeriodEnd(subscriptionId: string): Promise<void> {
+    await this.stripe.subscriptions.update(subscriptionId, {
+      cancel_at_period_end: true,
+    });
+  }
 }

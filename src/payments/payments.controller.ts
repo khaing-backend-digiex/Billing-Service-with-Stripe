@@ -37,11 +37,6 @@ export class PaymentsController {
   ) { }
 
   @Post("customers")
-  @ApiOperation({ summary: "Create a Payment customer for the current user" })
-  @SwaggerResponse({
-    status: 201,
-    description: "Customer created successfully",
-  })
   async createCustomer(
     @GetUser("id") userId: number,
     @Body() dto: CreateCustomerDto & { provider?: PaymentProvider },
@@ -64,8 +59,6 @@ export class PaymentsController {
   }
 
   @Post("checkout")
-  @ApiOperation({ summary: "Create a checkout session" })
-  @SwaggerResponse({ status: 201, description: "Checkout session created" })
   async createCheckout(
     @GetUser("id") userId: number,
     @Body() dto: CreateCheckoutDto & { provider?: PaymentProvider },
