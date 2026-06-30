@@ -3,6 +3,7 @@ import { TypeOrmModule } from "@nestjs/typeorm";
 import { ConfigService } from "@nestjs/config";
 import { User } from "./entities/user.entity";
 import { Payment } from "./entities/payment.entity";
+import { PrismaService } from "./prisma.service";
 
 @Module({
   imports: [
@@ -25,5 +26,7 @@ import { Payment } from "./entities/payment.entity";
       }),
     }),
   ],
+  providers: [PrismaService],
+  exports: [PrismaService],
 })
 export class DatabaseModule { }
