@@ -27,3 +27,6 @@ coverage/
 
 # Misc
 api-test.http
+test-renewal.ts
+
+test/
