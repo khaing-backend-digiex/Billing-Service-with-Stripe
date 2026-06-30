@@ -2,7 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import Stripe from 'stripe';
 import { StripeService } from '../stripe.service';
 import { PrismaService } from '../../database/prisma.service';
-import { UsersService } from '../../users/users.service';
 import {
   PaymentProvider,
   SubscriptionStatus,
@@ -20,7 +19,6 @@ export class StripeWebhookService {
   constructor(
     private readonly stripeService: StripeService,
     private readonly prisma: PrismaService,
-    private readonly usersService: UsersService,
   ) {}
 
   async handleEvent(event: Stripe.Event): Promise<void> {
@@ -113,25 +111,15 @@ export class StripeWebhookService {
       providerSubscriptionId,
     );
 
-    // Get userId
-    const user = await this.usersService.findByStripeCustomerId(providerCustomerId);
+    // Get userId from Prisma User
+    const user = await this.prisma.user.findFirst({
+      where: { providerCustomerId },
+    });
     if (!user) {
       this.logger.warn('User not found for Stripe customer ' + providerCustomerId);
       return;
     }
-    const userId = String(user.id);
-
-    // Ensure Prisma User exists
-    await this.prisma.user.upsert({
-      where: { id: userId },
-      update: {},
-      create: {
-        id: userId,
-        email: user.email,
-        provider: PaymentProvider.STRIPE,
-        providerCustomerId,
-      },
-    });
+    const userId = user.id;
 
     if (!isRenewal) {
       // Create Subscription flow
@@ -224,9 +212,11 @@ export class StripeWebhookService {
 
     if (!existingSub) return;
 
-    const user = await this.usersService.findByStripeCustomerId(invoice.customer as string);
+    const user = await this.prisma.user.findFirst({
+      where: { providerCustomerId: invoice.customer as string },
+    });
     if (!user) return;
-    const userId = String(user.id);
+    const userId = user.id;
 
     await this.prisma.$transaction(async (tx) => {
       await tx.subscription.update({

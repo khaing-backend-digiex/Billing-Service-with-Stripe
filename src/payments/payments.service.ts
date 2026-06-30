@@ -1,10 +1,7 @@
 import { Injectable, BadRequestException } from "@nestjs/common";
+import { PaymentProvider } from "@prisma/client";
 import { IPaymentStrategy } from "./interfaces/payment-strategy.interface";
 import { StripeStrategy } from "./strategies/stripe.strategy";
-
-export enum PaymentProvider {
-  STRIPE = "STRIPE",
-}
 
 @Injectable()
 export class PaymentsService {

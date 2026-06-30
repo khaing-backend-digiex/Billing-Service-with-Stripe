@@ -13,7 +13,8 @@ import {
   ApiBearerAuth,
   ApiResponse as SwaggerResponse,
 } from "@nestjs/swagger";
-import { PaymentsService, PaymentProvider } from "./payments.service";
+import { PaymentProvider } from "@prisma/client";
+import { PaymentsService } from "./payments.service";
 import { CreateCheckoutDto } from "./dto/create-checkout.dto";
 import { CreatePaymentIntentDto } from "./dto/create-payment-intent.dto";
 import { CreateCustomerDto } from "./dto/create-customer.dto";

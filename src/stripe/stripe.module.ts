@@ -3,10 +3,9 @@ import { StripeService } from "./stripe.service";
 import { StripeWebhookController } from "./webhook/stripe-webhook.controller";
 import { StripeWebhookService } from "./webhook/stripe-webhook.service";
 import { DatabaseModule } from "../database/database.module";
-import { UsersModule } from "../users/users.module";
 
 @Module({
-  imports: [DatabaseModule, UsersModule],
+  imports: [DatabaseModule],
   controllers: [StripeWebhookController],
   providers: [StripeService, StripeWebhookService],
   exports: [StripeService],
