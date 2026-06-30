@@ -27,3 +27,7 @@ coverage/
 
 # Misc
 api-test.http
+test-renewal.ts
+
+test/
+prisma_gen.log

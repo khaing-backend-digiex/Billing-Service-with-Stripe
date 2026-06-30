@@ -2,13 +2,14 @@ import {
   Injectable,
   Logger,
   InternalServerErrorException,
+  forwardRef,
+  Inject,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
 import Stripe from "stripe";
-import { Payment, PaymentStatus } from "../database/entities/payment.entity";
+import { PrismaService } from "../database/prisma.service";
 import { UsersService } from "../users/users.service";
+import { PaymentStatus, PaymentProvider } from "@prisma/client";
 
 @Injectable()
 export class StripeService {
@@ -17,16 +18,11 @@ export class StripeService {
 
   constructor(
     private readonly configService: ConfigService,
+    @Inject(forwardRef(() => UsersService))
     private readonly usersService: UsersService,
-    @InjectRepository(Payment)
-    private readonly paymentRepository: Repository<Payment>,
+    private readonly prisma: PrismaService,
   ) {
     const secretKey = this.configService.get<string>("STRIPE_SECRET_KEY");
-    if (!secretKey) {
-      this.logger.warn(
-        "⚠️  STRIPE_SECRET_KEY is not set. Stripe features will not work.",
-      );
-    }
     this.stripe = new Stripe(secretKey || "");
   }
 
@@ -44,22 +40,36 @@ export class StripeService {
 
       await this.usersService.updateStripeCustomerId(userId, customer.id);
 
-      this.logger.log(
-        `✅ Created Stripe customer ${customer.id} for user ${userId}`,
-      );
+      this.logger.log(`✅ Created Stripe customer ${customer.id} for user ${userId}`);
       return customer;
     } catch (error) {
-      this.logger.error(` Failed to create Stripe customer: ${error}`);
-      throw new InternalServerErrorException(
-        "Failed to create Stripe customer",
-      );
+      this.logger.error(`Failed to create Stripe customer: ${error}`);
+      throw new InternalServerErrorException("Failed to create Stripe customer");
     }
   }
 
-  async getCustomer(
-    customerId: string,
-  ): Promise<Stripe.Customer | Stripe.DeletedCustomer> {
+  async getCustomer(customerId: string): Promise<Stripe.Customer | Stripe.DeletedCustomer> {
     return this.stripe.customers.retrieve(customerId);
+  }
+
+  async subscribeToFreePlan(customerId: string): Promise<Stripe.Subscription> {
+    const freePriceId = this.configService.get<string>("STRIPE_FREE_PRICE_ID");
+    if (!freePriceId) {
+      this.logger.warn("STRIPE_FREE_PRICE_ID is not configured. Skipping free subscription.");
+      return null as any;
+    }
+
+    try {
+      const subscription = await this.stripe.subscriptions.create({
+        customer: customerId,
+        items: [{ price: freePriceId }],
+      });
+      this.logger.log(`✅ Subscribed customer ${customerId} to free plan`);
+      return subscription;
+    } catch (error) {
+      this.logger.error(`Failed to subscribe customer to free plan: ${error}`);
+      throw new InternalServerErrorException("Failed to create free subscription");
+    }
   }
 
   async createCheckoutSession(
@@ -67,28 +77,27 @@ export class StripeService {
     priceId: string,
     mode: "payment" | "subscription" = "payment",
     customerId?: string,
+    extraMetadata?: Record<string, string>,
   ): Promise<Stripe.Checkout.Session> {
     try {
+      const metadata = { userId: String(userId), ...extraMetadata };
+
       const sessionData: Stripe.Checkout.SessionCreateParams = {
         payment_method_types: ["card"],
-        line_items: [
-          {
-            price: priceId,
-            quantity: 1,
-          },
-        ],
+        line_items: [{ price: priceId, quantity: 1 }],
         mode,
         success_url:
-          this.configService.get<string>(
-            "STRIPE_SUCCESS_URL",
-            "http://localhost:3000/success",
-          ) + "?session_id={CHECKOUT_SESSION_ID}",
-        cancel_url: this.configService.get<string>(
-          "STRIPE_CANCEL_URL",
-          "http://localhost:3000/cancel",
-        ),
-        metadata: { userId: String(userId) },
+          this.configService.get<string>("STRIPE_SUCCESS_URL", "http://localhost:3000/success") +
+          "?session_id={CHECKOUT_SESSION_ID}",
+        cancel_url: this.configService.get<string>("STRIPE_CANCEL_URL", "http://localhost:3000/cancel"),
+        metadata,
       };
+
+      // One-time payment (addon): đẩy metadata xuống PaymentIntent để
+      // handler payment_intent.succeeded tự xử lý độc lập, không phụ thuộc thứ tự webhook.
+      if (mode === "payment") {
+        sessionData.payment_intent_data = { metadata };
+      }
 
       if (customerId) {
         sessionData.customer = customerId;
@@ -96,15 +105,11 @@ export class StripeService {
 
       const session = await this.stripe.checkout.sessions.create(sessionData);
 
-      this.logger.log(
-        ` Created checkout session ${session.id} for user ${userId}`,
-      );
+      this.logger.log(`Created checkout session ${session.id} for user ${userId}`);
       return session;
     } catch (error) {
       this.logger.error(`Failed to create checkout session: ${error}`);
-      throw new InternalServerErrorException(
-        "Failed to create checkout session",
-      );
+      throw new InternalServerErrorException("Failed to create checkout session");
     }
   }
 
@@ -130,22 +135,21 @@ export class StripeService {
 
       const paymentIntent = await this.stripe.paymentIntents.create(intentData);
 
-      const payment = this.paymentRepository.create({
-        stripePaymentIntentId: paymentIntent.id,
-        amount,
-        currency,
-        description,
-        status: PaymentStatus.PENDING,
-        userId,
+      await this.prisma.payment.create({
+        data: {
+          providerPaymentId: paymentIntent.id,
+          amount,
+          currency,
+          status: PaymentStatus.PENDING,
+          userId,
+          provider: PaymentProvider.STRIPE,
+        },
       });
-      await this.paymentRepository.save(payment);
 
-      this.logger.log(
-        `✅ Created payment intent ${paymentIntent.id} for user ${userId}`,
-      );
+      this.logger.log(`✅ Created payment intent ${paymentIntent.id} for user ${userId}`);
       return paymentIntent;
     } catch (error) {
-      this.logger.error(`  Failed to create payment intent: ${error}`);
+      this.logger.error(`Failed to create payment intent: ${error}`);
       throw new InternalServerErrorException("Failed to create payment intent");
     }
   }
@@ -159,69 +163,43 @@ export class StripeService {
         customer: customerId,
         return_url:
           returnUrl ||
-          this.configService.get<string>(
-            "STRIPE_SUCCESS_URL",
-            "http://localhost:3000",
-          ),
+          this.configService.get<string>("STRIPE_SUCCESS_URL", "http://localhost:3000"),
       });
 
-      this.logger.log(
-        `✅ Created billing portal session for customer ${customerId}`,
-      );
+      this.logger.log(`✅ Created billing portal session for customer ${customerId}`);
       return session;
     } catch (error) {
-      this.logger.error(` Failed to create billing portal session: ${error}`);
-      throw new InternalServerErrorException(
-        "Failed to create billing portal session",
-      );
+      this.logger.error(`Failed to create billing portal session: ${error}`);
+      throw new InternalServerErrorException("Failed to create billing portal session");
     }
   }
 
   constructWebhookEvent(rawBody: Buffer, signature: string): Stripe.Event {
-    const webhookSecret = this.configService.get<string>(
-      "STRIPE_WEBHOOK_SECRET",
-    );
+    const webhookSecret = this.configService.get<string>("STRIPE_WEBHOOK_SECRET");
     if (!webhookSecret) {
-      throw new InternalServerErrorException(
-        "STRIPE_WEBHOOK_SECRET is not configured",
-      );
+      throw new InternalServerErrorException("STRIPE_WEBHOOK_SECRET is not configured");
     }
 
-    return this.stripe.webhooks.constructEvent(
-      rawBody,
-      signature,
-      webhookSecret,
-    );
-  }
-
-  async getPaymentsByUserId(userId: number): Promise<Payment[]> {
-    return this.paymentRepository.find({
-      where: { userId },
-      order: { createdAt: "DESC" },
-    });
+    return this.stripe.webhooks.constructEvent(rawBody, signature, webhookSecret);
   }
 
   async updatePaymentStatus(
     stripePaymentIntentId: string,
     status: PaymentStatus,
   ): Promise<void> {
-    await this.paymentRepository.update({ stripePaymentIntentId }, { status });
+    await this.prisma.payment.update({
+      where: { providerPaymentId: stripePaymentIntentId },
+      data: { status },
+    });
   }
 
-  async saveCheckoutPayment(
-    sessionId: string,
-    userId: number,
-    amount: number,
-    currency: string,
-    status: PaymentStatus,
-  ): Promise<Payment> {
-    const payment = this.paymentRepository.create({
-      stripeCheckoutSessionId: sessionId,
-      amount,
-      currency,
-      status,
-      userId,
+  async retrieveSubscription(subscriptionId: string): Promise<Stripe.Subscription> {
+    return this.stripe.subscriptions.retrieve(subscriptionId);
+  }
+
+  async cancelSubscriptionAtPeriodEnd(subscriptionId: string): Promise<void> {
+    await this.stripe.subscriptions.update(subscriptionId, {
+      cancel_at_period_end: true,
     });
-    return this.paymentRepository.save(payment);
   }
 }
