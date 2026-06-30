@@ -5,11 +5,35 @@ import { StripeWebhookController } from "./webhook/stripe-webhook.controller";
 import { StripeWebhookService } from "./webhook/stripe-webhook.service";
 import { UsersModule } from "../users/users.module";
 import { PricingModule } from "../pricing/pricing.module";
+import { CheckoutSessionCompletedStrategy } from "./webhook/strategies/checkout-session-completed.strategy";
+import { InvoicePaidStrategy } from "./webhook/strategies/invoice-paid.strategy";
+import { SubscriptionDeletedStrategy } from "./webhook/strategies/subscription-deleted.strategy";
+import { WebhookStrategyFactory } from "./webhook/strategies/webhook-strategy.factory";
 
 @Module({
   imports: [forwardRef(() => UsersModule), PricingModule],
   controllers: [StripeController, StripeWebhookController],
-  providers: [StripeService, StripeWebhookService],
+  providers: [
+    StripeService, 
+    StripeWebhookService,
+    CheckoutSessionCompletedStrategy,
+    InvoicePaidStrategy,
+    SubscriptionDeletedStrategy,
+    WebhookStrategyFactory,
+    {
+      provide: "WEBHOOK_STRATEGIES",
+      useFactory: (
+        checkoutStrategy: CheckoutSessionCompletedStrategy,
+        invoiceStrategy: InvoicePaidStrategy,
+        subscriptionStrategy: SubscriptionDeletedStrategy,
+      ) => [checkoutStrategy, invoiceStrategy, subscriptionStrategy],
+      inject: [
+        CheckoutSessionCompletedStrategy,
+        InvoicePaidStrategy,
+        SubscriptionDeletedStrategy,
+      ],
+    },
+  ],
   exports: [StripeService],
 })
 export class StripeModule {}
