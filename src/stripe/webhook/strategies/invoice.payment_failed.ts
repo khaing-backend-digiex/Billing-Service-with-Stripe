@@ -3,6 +3,7 @@ import Stripe from "stripe";
 import { InvoiceStatus, SubscriptionStatus, SubscriptionEventType } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
+import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
 import { PaymentProvider, PaymentStatus } from "@prisma/client";
 
 @Injectable()
@@ -64,7 +65,7 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
               invoiceId: invoice.id,
               provider: PaymentProvider.STRIPE,
               providerPaymentId: paymentIntentId,
-              amount: stripeInvoice.amount_due / 100,
+              amount: formatStripeAmountToDatabase(stripeInvoice.amount_due, stripeInvoice.currency),
               currency: stripeInvoice.currency,
               status: PaymentStatus.FAILED,
               paidAt: null,

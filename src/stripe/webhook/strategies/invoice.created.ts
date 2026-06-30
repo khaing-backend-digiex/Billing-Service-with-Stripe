@@ -3,6 +3,7 @@ import Stripe from "stripe";
 import { InvoiceStatus, PaymentProvider } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
+import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
 
 const STRIPE_INVOICE_STATUS_MAP: Record<string, InvoiceStatus> = {
   draft: InvoiceStatus.DRAFT,
@@ -56,7 +57,7 @@ export class InvoiceCreatedStrategy implements WebhookStrategy {
     }
 
     const status = STRIPE_INVOICE_STATUS_MAP[stripeInvoice.status ?? "draft"] ?? InvoiceStatus.DRAFT;
-    const amount = stripeInvoice.amount_due / 100;
+    const amount = formatStripeAmountToDatabase(stripeInvoice.amount_due, stripeInvoice.currency);
     const dueAt = stripeInvoice.due_date
       ? new Date(stripeInvoice.due_date * 1000)
       : new Date(stripeInvoice.period_end * 1000);
