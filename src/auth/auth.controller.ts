@@ -18,9 +18,8 @@ export class AuthController {
   @Public()
   @Post("login")
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: "User login" })
+  @ApiOperation({ summary: "User login/register via email" })
   @SwaggerResponse({ status: 200, description: "Login successful" })
-  @SwaggerResponse({ status: 401, description: "Invalid credentials" })
   async login(@Body() loginDto: LoginDto) {
     const result = await this.authService.login(loginDto);
     return new ApiResponse(
@@ -33,9 +32,8 @@ export class AuthController {
   @Public()
   @Post("register")
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: "User registration" })
+  @ApiOperation({ summary: "User registration via email" })
   @SwaggerResponse({ status: 201, description: "Registration successful" })
-  @SwaggerResponse({ status: 409, description: "User already exists" })
   async register(@Body() registerDto: RegisterDto) {
     const result = await this.authService.register(registerDto);
     return new ApiResponse(

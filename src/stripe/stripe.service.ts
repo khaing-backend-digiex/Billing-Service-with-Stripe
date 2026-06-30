@@ -1,18 +1,169 @@
-import { Injectable, Logger, InternalServerErrorException } from "@nestjs/common";
+import {
+  Injectable,
+  Logger,
+  InternalServerErrorException,
+  forwardRef,
+  Inject,
+} from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import Stripe from "stripe";
+import { PrismaService } from "../database/prisma.service";
+import { UsersService } from "../users/users.service";
+import { PaymentStatus, PaymentProvider } from "@prisma/client";
 
 @Injectable()
 export class StripeService {
   private readonly stripe: Stripe;
   private readonly logger = new Logger(StripeService.name);
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    @Inject(forwardRef(() => UsersService))
+    private readonly usersService: UsersService,
+    private readonly prisma: PrismaService,
+  ) {
     const secretKey = this.configService.get<string>("STRIPE_SECRET_KEY");
-    if (!secretKey) {
-      this.logger.warn("⚠️ STRIPE_SECRET_KEY is not set. Stripe features will not work.");
-    }
     this.stripe = new Stripe(secretKey || "");
+  }
+
+  async createCustomer(
+    userId: number,
+    email: string,
+    name?: string,
+  ): Promise<Stripe.Customer> {
+    try {
+      const customer = await this.stripe.customers.create({
+        email,
+        name,
+        metadata: { userId: String(userId) },
+      });
+
+      await this.usersService.updateStripeCustomerId(userId, customer.id);
+
+      this.logger.log(`✅ Created Stripe customer ${customer.id} for user ${userId}`);
+      return customer;
+    } catch (error) {
+      this.logger.error(`Failed to create Stripe customer: ${error}`);
+      throw new InternalServerErrorException("Failed to create Stripe customer");
+    }
+  }
+
+  async getCustomer(customerId: string): Promise<Stripe.Customer | Stripe.DeletedCustomer> {
+    return this.stripe.customers.retrieve(customerId);
+  }
+
+  async subscribeToFreePlan(customerId: string): Promise<Stripe.Subscription> {
+    const freePriceId = this.configService.get<string>("STRIPE_FREE_PRICE_ID");
+    if (!freePriceId) {
+      this.logger.warn("STRIPE_FREE_PRICE_ID is not configured. Skipping free subscription.");
+      return null as any;
+    }
+
+    try {
+      const subscription = await this.stripe.subscriptions.create({
+        customer: customerId,
+        items: [{ price: freePriceId }],
+      });
+      this.logger.log(`✅ Subscribed customer ${customerId} to free plan`);
+      return subscription;
+    } catch (error) {
+      this.logger.error(`Failed to subscribe customer to free plan: ${error}`);
+      throw new InternalServerErrorException("Failed to create free subscription");
+    }
+  }
+
+  async createCheckoutSession(
+    userId: number,
+    priceId: string,
+    mode: "payment" | "subscription" = "payment",
+    customerId?: string,
+    extraMetadata?: Record<string, string>,
+  ): Promise<Stripe.Checkout.Session> {
+    try {
+      const sessionData: Stripe.Checkout.SessionCreateParams = {
+        payment_method_types: ["card"],
+        line_items: [{ price: priceId, quantity: 1 }],
+        mode,
+        success_url:
+          this.configService.get<string>("STRIPE_SUCCESS_URL", "http://localhost:3000/success") +
+          "?session_id={CHECKOUT_SESSION_ID}",
+        cancel_url: this.configService.get<string>("STRIPE_CANCEL_URL", "http://localhost:3000/cancel"),
+        metadata: { userId: String(userId), ...extraMetadata },
+      };
+
+      if (customerId) {
+        sessionData.customer = customerId;
+      }
+
+      const session = await this.stripe.checkout.sessions.create(sessionData);
+
+      this.logger.log(`Created checkout session ${session.id} for user ${userId}`);
+      return session;
+    } catch (error) {
+      this.logger.error(`Failed to create checkout session: ${error}`);
+      throw new InternalServerErrorException("Failed to create checkout session");
+    }
+  }
+
+  async createPaymentIntent(
+    userId: number,
+    amount: number,
+    currency: string = "usd",
+    description?: string,
+    customerId?: string,
+  ): Promise<Stripe.PaymentIntent> {
+    try {
+      const intentData: Stripe.PaymentIntentCreateParams = {
+        amount,
+        currency,
+        description,
+        metadata: { userId: String(userId) },
+        automatic_payment_methods: { enabled: true },
+      };
+
+      if (customerId) {
+        intentData.customer = customerId;
+      }
+
+      const paymentIntent = await this.stripe.paymentIntents.create(intentData);
+
+      await this.prisma.payment.create({
+        data: {
+          providerPaymentId: paymentIntent.id,
+          amount,
+          currency,
+          status: PaymentStatus.PENDING,
+          userId,
+          provider: PaymentProvider.STRIPE,
+        },
+      });
+
+      this.logger.log(`✅ Created payment intent ${paymentIntent.id} for user ${userId}`);
+      return paymentIntent;
+    } catch (error) {
+      this.logger.error(`Failed to create payment intent: ${error}`);
+      throw new InternalServerErrorException("Failed to create payment intent");
+    }
+  }
+
+  async createBillingPortalSession(
+    customerId: string,
+    returnUrl?: string,
+  ): Promise<Stripe.BillingPortal.Session> {
+    try {
+      const session = await this.stripe.billingPortal.sessions.create({
+        customer: customerId,
+        return_url:
+          returnUrl ||
+          this.configService.get<string>("STRIPE_SUCCESS_URL", "http://localhost:3000"),
+      });
+
+      this.logger.log(`✅ Created billing portal session for customer ${customerId}`);
+      return session;
+    } catch (error) {
+      this.logger.error(`Failed to create billing portal session: ${error}`);
+      throw new InternalServerErrorException("Failed to create billing portal session");
+    }
   }
 
   constructWebhookEvent(rawBody: Buffer, signature: string): Stripe.Event {
@@ -24,11 +175,13 @@ export class StripeService {
     return this.stripe.webhooks.constructEvent(rawBody, signature, webhookSecret);
   }
 
-  async retrieveSubscription(subscriptionId: string): Promise<Stripe.Subscription> {
-    return this.stripe.subscriptions.retrieve(subscriptionId);
-  }
-
-  async retrieveInvoice(invoiceId: string): Promise<Stripe.Invoice> {
-    return this.stripe.invoices.retrieve(invoiceId);
+  async updatePaymentStatus(
+    stripePaymentIntentId: string,
+    status: PaymentStatus,
+  ): Promise<void> {
+    await this.prisma.payment.update({
+      where: { providerPaymentId: stripePaymentIntentId },
+      data: { status },
+    });
   }
 }

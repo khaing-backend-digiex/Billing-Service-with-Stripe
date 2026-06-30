@@ -72,9 +72,13 @@ enum SubscriptionEventType {
 // ─── Models ──────────────────────────────────────
 
 model User {
-  id String @id
+  id Int @id @default(autoincrement())
 
   email String @unique
+
+  name String?
+  dateOfBirth DateTime?
+  roles String[] @default(["user"])
 
   provider           PaymentProvider?
   providerCustomerId String?
@@ -144,7 +148,7 @@ model PricingOption {
 model Subscription {
   id String @id @default(cuid())
 
-  userId          String @unique
+  userId          Int @unique
   pricingOptionId String
 
   status SubscriptionStatus
@@ -173,7 +177,7 @@ model Subscription {
 }
 
 model CreditWallet {
-  userId String @id
+  userId Int @id
 
   addonCredits Int @default(0)
 
@@ -233,7 +237,7 @@ model Invoice {
 model Payment {
   id String @id @default(cuid())
 
-  userId         String
+  userId         Int
   invoiceId      String?
   addonPackageId String?
 
@@ -257,7 +261,7 @@ model Payment {
 model PaymentMethod {
   id String @id @default(cuid())
 
-  userId String
+  userId Int
 
   provider                PaymentProvider
   providerPaymentMethodId String
@@ -274,7 +278,7 @@ model PaymentMethod {
 model CreditTransaction {
   id String @id @default(cuid())
 
-  userId String
+  userId Int
 
   type   CreditTransactionType
   amount Int

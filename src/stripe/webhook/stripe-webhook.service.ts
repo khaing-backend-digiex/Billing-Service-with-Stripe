@@ -1,23 +1,18 @@
-import { Injectable, Logger } from '@nestjs/common';
-import Stripe from 'stripe';
-import { StripeService } from '../stripe.service';
-import { PrismaService } from '../../database/prisma.service';
-import {
-  PaymentProvider,
-  SubscriptionStatus,
-  InvoiceStatus,
-  PaymentStatus,
-  CreditTransactionType,
-  ReferenceType,
-  SubscriptionEventType,
-} from '@prisma/client';
+import { Injectable, Logger } from "@nestjs/common";
+import Stripe from "stripe";
+import { PrismaService } from "../../database/prisma.service";
+import { PaymentProvider } from "@prisma/client";
+import { WebhookStrategyFactory } from "./strategies/webhook-strategy.factory";
 
 @Injectable()
 export class StripeWebhookService {
   private readonly logger = new Logger(StripeWebhookService.name);
 
   constructor(
-    private readonly stripeService: StripeService,
+    
+    private readonly prisma: PrismaService,
+    private readonly strategyFactory: WebhookStrategyFactory,
+  ,
     private readonly prisma: PrismaService,
   ) {}
 
