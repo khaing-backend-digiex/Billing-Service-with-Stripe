@@ -125,7 +125,7 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       await tx.subscription.update({
         where: { id: subscription.id },
         data: {
-          status: SubscriptionStatus.ACTIVE,
+          status: SubscriptionStatus.ACTIVE, 
           pricingOptionId: pricingOption.id,
           currentPeriodStart: periodStart,
           currentPeriodEnd: periodEnd,

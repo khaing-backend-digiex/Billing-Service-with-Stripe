@@ -80,6 +80,8 @@ export class StripeService {
     extraMetadata?: Record<string, string>,
   ): Promise<Stripe.Checkout.Session> {
     try {
+      const metadata = { userId: String(userId), ...extraMetadata };
+
       const sessionData: Stripe.Checkout.SessionCreateParams = {
         payment_method_types: ["card"],
         line_items: [{ price: priceId, quantity: 1 }],
@@ -88,8 +90,14 @@ export class StripeService {
           this.configService.get<string>("STRIPE_SUCCESS_URL", "http://localhost:3000/success") +
           "?session_id={CHECKOUT_SESSION_ID}",
         cancel_url: this.configService.get<string>("STRIPE_CANCEL_URL", "http://localhost:3000/cancel"),
-        metadata: { userId: String(userId), ...extraMetadata },
+        metadata,
       };
+
+      // One-time payment (addon): đẩy metadata xuống PaymentIntent để
+      // handler payment_intent.succeeded tự xử lý độc lập, không phụ thuộc thứ tự webhook.
+      if (mode === "payment") {
+        sessionData.payment_intent_data = { metadata };
+      }
 
       if (customerId) {
         sessionData.customer = customerId;

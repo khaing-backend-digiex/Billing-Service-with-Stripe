@@ -18,14 +18,17 @@ const STRIPE_STATUS_MAP: Record<string, SubscriptionStatus> = {
 
 @Injectable()
 export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
-  private readonly logger = new Logger(CustomerSubscriptionCreatedStrategy.name);
+  private readonly logger = new Logger(
+    CustomerSubscriptionCreatedStrategy.name,
+  );
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly pricingService: PricingService,
   ) {}
 
-  private readonly customerSubscriptionCreated = "customer.subscription.created";
+  private readonly customerSubscriptionCreated =
+    "customer.subscription.created";
   canHandle(eventType: string): boolean {
     return eventType === this.customerSubscriptionCreated;
   }
@@ -49,17 +52,24 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
       return;
     }
 
-    const pricingOption = await this.pricingService.findByProviderPriceId(priceId);
+    const pricingOption =
+      await this.pricingService.findByProviderPriceId(priceId);
     if (!pricingOption) {
       this.logger.error(`No pricing option found for priceId ${priceId}`);
       return;
     }
 
-    const status = STRIPE_STATUS_MAP[sub.status] ?? SubscriptionStatus.ACTIVE;
+    const status = STRIPE_STATUS_MAP[sub.status];
+    if (!status) {
+      this.logger.error(`Unknown Stripe subscription status: ${sub.status}`);
+      return;
+    }
     const currentPeriodStart = new Date(sub.current_period_start * 1000);
     const currentPeriodEnd = new Date(sub.current_period_end * 1000);
 
-    const trialStart = sub.trial_start ? new Date(sub.trial_start * 1000) : null;
+    const trialStart = sub.trial_start
+      ? new Date(sub.trial_start * 1000)
+      : null;
     const trialEnd = sub.trial_end ? new Date(sub.trial_end * 1000) : null;
 
     // credits = 0, sẽ được cấp đúng trong invoice.paid
