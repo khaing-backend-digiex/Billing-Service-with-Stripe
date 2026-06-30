@@ -38,6 +38,9 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
         data: {
           status: InvoiceStatus.OPEN,
           retryCount: stripeInvoice.attempt_count,
+          nextRetryAt: stripeInvoice.next_payment_attempt
+            ? new Date(stripeInvoice.next_payment_attempt * 1000)
+            : null,
         },
       });
 

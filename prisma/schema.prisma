@@ -162,6 +162,9 @@ model Subscription {
 
   autoRenew Boolean @default(true)
 
+  trialStart DateTime?
+  trialEnd   DateTime?
+
   provider               PaymentProvider?
   providerSubscriptionId String?
 
@@ -215,12 +218,13 @@ model Invoice {
   subscriptionId String
 
   provider          PaymentProvider
-  providerInvoiceId String?
+  providerInvoiceId String? @unique
 
   amount   Decimal
   currency String
 
-  status InvoiceStatus
+  status        InvoiceStatus
+  billingReason String?
 
   retryCount  Int       @default(0)
   nextRetryAt DateTime?
