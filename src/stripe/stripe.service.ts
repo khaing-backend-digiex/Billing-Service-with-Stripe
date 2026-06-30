@@ -184,4 +184,8 @@ export class StripeService {
       data: { status },
     });
   }
+
+  async retrieveSubscription(subscriptionId: string): Promise<Stripe.Subscription> {
+    return this.stripe.subscriptions.retrieve(subscriptionId);
+  }
 }

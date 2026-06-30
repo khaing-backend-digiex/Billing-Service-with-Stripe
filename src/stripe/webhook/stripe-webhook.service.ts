@@ -1,19 +1,18 @@
 import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
 import { PrismaService } from "../../database/prisma.service";
-import { PaymentProvider } from "@prisma/client";
+import { PaymentProvider, SubscriptionStatus, InvoiceStatus, PaymentStatus, CreditTransactionType, SubscriptionEventType, ReferenceType } from "@prisma/client";
 import { WebhookStrategyFactory } from "./strategies/webhook-strategy.factory";
+import { StripeService } from "../stripe.service";
 
 @Injectable()
 export class StripeWebhookService {
   private readonly logger = new Logger(StripeWebhookService.name);
 
   constructor(
-    
     private readonly prisma: PrismaService,
     private readonly strategyFactory: WebhookStrategyFactory,
-  ,
-    private readonly prisma: PrismaService,
+    private readonly stripeService: StripeService,
   ) {}
 
   async handleEvent(event: Stripe.Event): Promise<void> {
@@ -320,7 +319,7 @@ export class StripeWebhookService {
     }
   }
 
-  private async insertPayment(tx: any, invoice: Stripe.Invoice, userId: string, status: PaymentStatus) {
+  private async insertPayment(tx: any, invoice: Stripe.Invoice, userId: number, status: PaymentStatus) {
     const providerPaymentId = (invoice.payment_intent as string) || ('fake_' + invoice.id);
     const amount = (invoice.amount_paid || invoice.amount_due || 0) / 100;
     const currency = invoice.currency || 'usd';
@@ -349,7 +348,7 @@ export class StripeWebhookService {
     }
   }
 
-  private async insertCreditTransaction(tx: any, userId: string, type: CreditTransactionType, amount: number, subId: string) {
+  private async insertCreditTransaction(tx: any, userId: number, type: CreditTransactionType, amount: number, subId: string) {
     await tx.creditTransaction.create({
       data: {
         userId,

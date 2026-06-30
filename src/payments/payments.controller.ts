@@ -34,7 +34,7 @@ export class PaymentsController {
     private readonly paymentsService: PaymentsService,
     private readonly usersService: UsersService,
     private readonly prisma: PrismaService,
-  ) {}
+  ) { }
 
   @Post("customers")
   @ApiOperation({ summary: "Create a Payment customer for the current user" })
@@ -49,14 +49,14 @@ export class PaymentsController {
     const user = await this.usersService.findById(userId);
     const provider = dto.provider || PaymentProvider.STRIPE;
 
-    if (provider === PaymentProvider.STRIPE && user.stripeCustomerId) {
+    if (provider === PaymentProvider.STRIPE && user.providerCustomerId) {
       throw new BadRequestException("User already has a Stripe customer account");
     }
 
     const customer = await this.paymentsService.createCustomer(
       userId,
       dto.email || user.email,
-      dto.name || user.name,
+      dto.name || user.name || undefined,
       provider,
     );
 
@@ -77,7 +77,7 @@ export class PaymentsController {
       userId,
       dto.priceId,
       dto.mode,
-      provider === PaymentProvider.STRIPE ? user.stripeCustomerId || undefined : undefined,
+      provider === PaymentProvider.STRIPE ? user.providerCustomerId || undefined : undefined,
       provider,
     );
 
@@ -99,7 +99,7 @@ export class PaymentsController {
       dto.amount,
       dto.currency,
       dto.description,
-      provider === PaymentProvider.STRIPE ? user.stripeCustomerId || undefined : undefined,
+      provider === PaymentProvider.STRIPE ? user.providerCustomerId || undefined : undefined,
       provider,
     );
 
@@ -119,12 +119,13 @@ export class PaymentsController {
     const user = await this.usersService.findById(userId);
     const provider = dto?.provider || PaymentProvider.STRIPE;
 
-    if (provider === PaymentProvider.STRIPE && !user.stripeCustomerId) {
+    if (provider === PaymentProvider.STRIPE && !user.providerCustomerId) {
       throw new BadRequestException("User does not have a Stripe customer account. Create one first.");
     }
 
+    const customerId = user.providerCustomerId || "";
     const session = await this.paymentsService.createBillingPortalSession(
-      provider === PaymentProvider.STRIPE ? user.stripeCustomerId : "",
+      customerId,
       undefined,
       provider,
     );
@@ -145,12 +146,12 @@ export class PaymentsController {
     const user = await this.usersService.findById(userId);
     const provider = dto.provider || PaymentProvider.STRIPE;
 
-    if (provider === PaymentProvider.STRIPE && !user.stripeCustomerId) {
+    if (provider === PaymentProvider.STRIPE && !user.providerCustomerId) {
       throw new BadRequestException("User does not have a Stripe customer account.");
     }
 
     const subscription = await this.prisma.subscription.findUnique({
-      where: { userId: String(userId) },
+      where: { userId },
     });
 
     if (!subscription || !subscription.providerSubscriptionId) {
@@ -158,7 +159,7 @@ export class PaymentsController {
     }
 
     await this.paymentsService.cancelSubscriptionAtPeriodEnd(
-      subscription.providerSubscriptionId,
+      subscription.providerSubscriptionId!,
       provider,
     );
 

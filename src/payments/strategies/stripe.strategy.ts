@@ -1,11 +1,10 @@
 import { Injectable, Logger, InternalServerErrorException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { PaymentStatus, PaymentProvider } from "@prisma/client";
 import Stripe from "stripe";
 import { IPaymentStrategy } from "../interfaces/payment-strategy.interface";
-import { Payment, PaymentStatus } from "../../database/entities/payment.entity";
 import { UsersService } from "../../users/users.service";
+import { PrismaService } from "../../database/prisma.service";
 
 @Injectable()
 export class StripeStrategy implements IPaymentStrategy {
@@ -15,8 +14,7 @@ export class StripeStrategy implements IPaymentStrategy {
   constructor(
     private readonly configService: ConfigService,
     private readonly usersService: UsersService,
-    @InjectRepository(Payment)
-    private readonly paymentRepository: Repository<Payment>,
+    private readonly prisma: PrismaService,
   ) {
     const secretKey = this.configService.get<string>("STRIPE_SECRET_KEY");
     if (!secretKey) {
@@ -95,15 +93,16 @@ export class StripeStrategy implements IPaymentStrategy {
 
       const paymentIntent = await this.stripe.paymentIntents.create(intentData);
 
-      const payment = this.paymentRepository.create({
-        stripePaymentIntentId: paymentIntent.id,
-        amount,
-        currency,
-        description,
-        status: PaymentStatus.PENDING,
-        userId,
+      await this.prisma.payment.create({
+        data: {
+          providerPaymentId: paymentIntent.id,
+          amount,
+          currency,
+          provider: PaymentProvider.STRIPE,
+          status: PaymentStatus.PENDING,
+          userId
+        },
       });
-      await this.paymentRepository.save(payment);
 
       this.logger.log(` Created payment intent ${paymentIntent.id} for user ${userId}`);
       

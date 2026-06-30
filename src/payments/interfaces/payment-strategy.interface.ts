@@ -1,4 +1,3 @@
-import { PaymentStatus } from "../../database/entities/payment.entity";
 
 export interface IPaymentStrategy {
   createCustomer(userId: number, email: string, name?: string): Promise<{ customerId: string }>;
