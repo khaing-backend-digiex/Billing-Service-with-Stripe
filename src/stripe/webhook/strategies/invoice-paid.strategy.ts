@@ -4,8 +4,6 @@ import {
   CreditTransactionType,
   ReferenceType,
   SubscriptionEventType,
-  PaymentProvider,
-  PaymentStatus,
 } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
@@ -118,7 +116,7 @@ export class InvoicePaidStrategy implements WebhookStrategy {
             status: PaymentStatus.SUCCEEDED,
             paidAt: new Date(),
           },
-          update: {},
+          update: {status: PaymentStatus.SUCCEEDED, paidAt: new Date()},
         });
       }
 

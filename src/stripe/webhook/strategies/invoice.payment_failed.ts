@@ -3,6 +3,7 @@ import Stripe from "stripe";
 import { InvoiceStatus, SubscriptionStatus, SubscriptionEventType } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
+import { PaymentProvider, PaymentStatus } from "@prisma/client";
 
 @Injectable()
 export class InvoicePaymentFailedStrategy implements WebhookStrategy {
@@ -22,6 +23,11 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
       typeof stripeInvoice.subscription === "string"
         ? stripeInvoice.subscription
         : stripeInvoice.subscription?.id ?? null;
+
+    const paymentIntentId =
+      typeof stripeInvoice.payment_intent === "string"
+        ? stripeInvoice.payment_intent
+        : (stripeInvoice.payment_intent as any)?.id ?? null;
 
     await this.prisma.$transaction(async (tx) => {
       const invoice = await tx.invoice.findFirst({
@@ -43,6 +49,33 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
             : null,
         },
       });
+
+      if (paymentIntentId && stripeSubscriptionId) {
+        const tempSub = await tx.subscription.findFirst({
+          where: { providerSubscriptionId: stripeSubscriptionId },
+          select: { userId: true },
+        });
+
+        if (tempSub) {
+          await tx.payment.upsert({
+            where: { providerPaymentId: paymentIntentId },
+            create: {
+              userId: tempSub.userId,
+              invoiceId: invoice.id,
+              provider: PaymentProvider.STRIPE,
+              providerPaymentId: paymentIntentId,
+              amount: stripeInvoice.amount_due / 100,
+              currency: stripeInvoice.currency,
+              status: PaymentStatus.FAILED,
+              paidAt: null,
+            },
+            update: {
+              status: PaymentStatus.FAILED,
+              paidAt: null,
+            },
+          });
+        }
+      }
 
       if (!stripeSubscriptionId) return;
 

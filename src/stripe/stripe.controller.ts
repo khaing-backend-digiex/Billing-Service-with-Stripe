@@ -14,7 +14,7 @@ import {
   ApiResponse as SwaggerResponse,
 } from "@nestjs/swagger";
 import { StripeService } from "./stripe.service";
-import { CreateCheckoutDto } from "./dto/create-checkout.dto";
+import { CreateSubscriptionCheckoutDto, CreateAddonCheckoutDto } from "./dto/create-checkout.dto";
 import { CreatePaymentIntentDto } from "./dto/create-payment-intent.dto";
 import { CreateCustomerDto } from "./dto/create-customer.dto";
 import { ApiResponse } from "../common/dto/api-response.dto";
@@ -62,7 +62,7 @@ export class StripeController {
   @ApiOperation({ summary: "Create a Stripe checkout session for a subscription" })
   async createSubscriptionCheckout(
     @GetUser("id") userId: number,
-    @Body() dto: CreateCheckoutDto,
+    @Body() dto: CreateSubscriptionCheckoutDto,
   ) {
     const user = await this.usersService.findById(userId);
 
@@ -79,13 +79,13 @@ export class StripeController {
       }
     }
 
-    // Validate that the priceId belongs to a valid Subscription Pricing Option
-    const pricingOption = await this.prisma.pricingOption.findFirst({
-      where: { providerPriceId: dto.priceId },
+    // Validate that the pricingOptionId belongs to a valid Subscription Pricing Option
+    const pricingOption = await this.prisma.pricingOption.findUnique({
+      where: { id: dto.pricingOptionId },
     });
 
-    if (!pricingOption) {
-      throw new BadRequestException("Pricing option not found for the given priceId");
+    if (!pricingOption || !pricingOption.providerPriceId) {
+      throw new BadRequestException("Pricing option not found or it does not have a valid Stripe Price ID");
     }
 
     let providerCustomerId = user.providerCustomerId;
@@ -101,7 +101,7 @@ export class StripeController {
 
     const session = await this.stripeService.createCheckoutSession(
       userId,
-      dto.priceId,
+      pricingOption.providerPriceId,
       "subscription",
       providerCustomerId,
     );
@@ -116,21 +116,21 @@ export class StripeController {
   @ApiOperation({ summary: "Create a Stripe checkout session for an addon" })
   async createAddonCheckout(
     @GetUser("id") userId: number,
-    @Body() dto: CreateCheckoutDto,
+    @Body() dto: CreateAddonCheckoutDto,
   ) {
     const user = await this.usersService.findById(userId);
 
-    const addon = await this.prisma.addonPackage.findFirst({
-      where: { providerPriceId: dto.priceId },
+    const addon = await this.prisma.addonPackage.findUnique({
+      where: { id: dto.addonPackageId },
     });
 
-    if (!addon) {
-      throw new BadRequestException("Addon package not found for the given priceId");
+    if (!addon || !addon.providerPriceId) {
+      throw new BadRequestException("Addon package not found or it does not have a valid Stripe Price ID");
     }
 
     const session = await this.stripeService.createCheckoutSession(
       userId,
-      dto.priceId,
+      addon.providerPriceId,
       "payment",
       user.providerCustomerId || undefined,
       { addonPackageId: addon.id }

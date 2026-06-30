@@ -79,27 +79,6 @@ export class StripeService {
       }
     }
 
-    const currentPeriodStart = new Date();
-    const currentPeriodEnd = new Date();
-    currentPeriodEnd.setFullYear(currentPeriodEnd.getFullYear() + 100);
-
-    const nextCreditResetAt = new Date();
-    nextCreditResetAt.setDate(nextCreditResetAt.getDate() + freePlan.resetIntervalDay);
-
-    await this.prisma.subscription.create({
-      data: {
-        userId,
-        pricingOptionId: pricingOption.id,
-        status: SubscriptionStatus.INACTIVE,
-        currentPeriodStart,
-        currentPeriodEnd,
-        subscriptionCreditsRemaining: freePlan.renewalCredits,
-        nextCreditResetAt,
-        provider: PaymentProvider.STRIPE,
-        providerSubscriptionId: stripeSubscription?.id,
-      }
-    });
-
     return stripeSubscription as Stripe.Subscription;
   }
 
