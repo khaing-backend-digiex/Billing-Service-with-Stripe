@@ -20,7 +20,7 @@ export class InvoicePaidStrategy implements WebhookStrategy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly pricingService: PricingService,
-  ) {}
+  ) { }
 
   private readonly invoicePaid = "invoice.paid";
   canHandle(eventType: string): boolean {

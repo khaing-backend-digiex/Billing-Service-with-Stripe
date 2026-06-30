@@ -1,5 +1,4 @@
 import { Module, forwardRef } from "@nestjs/common";
-import { StripeController } from "./stripe.controller";
 import { StripeService } from "./stripe.service";
 import { StripeWebhookController } from "./webhook/stripe-webhook.controller";
 import { StripeWebhookService } from "./webhook/stripe-webhook.service";
@@ -16,7 +15,7 @@ import { WebhookStrategyFactory } from "./webhook/strategies/webhook-strategy.fa
 
 @Module({
   imports: [forwardRef(() => UsersModule), PricingModule],
-  controllers: [StripeController, StripeWebhookController],
+  controllers: [StripeWebhookController],
   providers: [
     StripeService,
     StripeWebhookService,
@@ -60,4 +59,4 @@ import { WebhookStrategyFactory } from "./webhook/strategies/webhook-strategy.fa
   ],
   exports: [StripeService],
 })
-export class StripeModule {}
+export class StripeModule { }

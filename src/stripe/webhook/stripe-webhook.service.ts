@@ -14,14 +14,14 @@ export class StripeWebhookService {
   ) {}
 
   async handleEvent(event: Stripe.Event): Promise<void> {
-    // 1. Idempotency Check
+    // 1. Idempotency check
     const existingEvent = await this.prisma.webhookEvent.findUnique({
       where: { eventId: event.id },
     });
 
     if (existingEvent) {
-      this.logger.log(`Webhook event ${event.id} already processed. Skipping.`);
-      return; // Idempotent: Ignore duplicate webhook
+      this.logger.log('Skipping duplicate webhook event: ' + event.id);
+      return;
     }
 
     // 2. Run strategy trước — nếu fail thì Stripe sẽ retry và lần sau vẫn xử lý được
@@ -34,6 +34,7 @@ export class StripeWebhookService {
     }
 
     // 3. Chỉ đánh dấu processed sau khi strategy chạy thành công
+    // Insert as processed (since we already ran the strategy successfully)
     await this.prisma.webhookEvent.create({
       data: {
         id: event.id,
@@ -46,3 +47,4 @@ export class StripeWebhookService {
     });
   }
 }
+

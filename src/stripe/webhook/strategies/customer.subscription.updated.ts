@@ -19,9 +19,9 @@ const STRIPE_STATUS_MAP: Record<string, SubscriptionStatus> = {
 export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
   private readonly logger = new Logger(CustomerSubscriptionUpdatedStrategy.name);
 
-  constructor(private readonly prisma: PrismaService) {}
-  
-  private readonly customerSubcriptionUpdated="customer.subscription.updated";
+  constructor(private readonly prisma: PrismaService) { }
+
+  private readonly customerSubcriptionUpdated = "customer.subscription.updated";
   canHandle(eventType: string): boolean {
     return eventType === this.customerSubcriptionUpdated;
   }
