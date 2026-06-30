@@ -26,6 +26,16 @@ export class StripeWebhookService {
       return;
     }
 
+    // 2. Run strategy trước — nếu fail thì Stripe sẽ retry và lần sau vẫn xử lý được
+    const strategy = this.strategyFactory.getStrategy(event.type);
+
+    if (strategy) {
+      await strategy.handle(event);
+    } else {
+      this.logger.log(`Unhandled event type: ${event.type}`);
+    }
+
+    // 3. Chỉ đánh dấu processed sau khi strategy chạy thành công
     // Insert as unprocessed
     await this.prisma.webhookEvent.create({
       data: {
@@ -36,6 +46,8 @@ export class StripeWebhookService {
         payload: event as any,
       },
     });
+  }
+}
 
     try {
       // 2. Route to handler

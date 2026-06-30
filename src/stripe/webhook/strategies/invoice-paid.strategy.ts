@@ -1,10 +1,15 @@
 import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
+import {
+  InvoiceStatus,
+  SubscriptionStatus,
+  CreditTransactionType,
+  ReferenceType,
+  SubscriptionEventType,
+} from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
-import { StripeService } from "../../stripe.service";
 import { PricingService } from "../../../pricing/pricing.service";
-import { PaymentProvider, SubscriptionStatus } from "@prisma/client";
 
 @Injectable()
 export class InvoicePaidStrategy implements WebhookStrategy {
@@ -12,74 +17,123 @@ export class InvoicePaidStrategy implements WebhookStrategy {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly stripeService: StripeService,
     private readonly pricingService: PricingService,
   ) {}
 
+  private readonly invoicePaid = "invoice.paid";
   canHandle(eventType: string): boolean {
-    return eventType === "invoice.paid";
+    return eventType === this.invoicePaid;
   }
 
   async handle(event: Stripe.Event): Promise<void> {
-    const invoice = event.data.object as Stripe.Invoice;
-    this.logger.log(`Invoice paid: ${invoice.id}`);
-    
-    if (invoice.subscription) {
-      const subscriptionId = invoice.subscription as string;
-      const stripeSub = await this.stripeService.getCustomer(invoice.customer as string);
-      
-      const lineItem = invoice.lines.data[0];
-      const priceId = lineItem.price?.id;
+    const stripeInvoice = event.data.object as Stripe.Invoice;
+    this.logger.log(`invoice.paid: ${stripeInvoice.id}`);
 
-      if (!priceId) return;
+    const stripeSubscriptionId =
+      typeof stripeInvoice.subscription === "string"
+        ? stripeInvoice.subscription
+        : stripeInvoice.subscription?.id ?? null;
 
-      const pricingOption = await this.pricingService.findByProviderPriceId(priceId);
-      if (!pricingOption) {
-        this.logger.error(`Pricing option not found for priceId ${priceId}`);
-        return;
-      }
-
-      const user = await this.prisma.user.findFirst({
-        where: { providerCustomerId: invoice.customer as string }
-      });
-
-      if (!user) {
-        this.logger.error(`User not found for customer ${invoice.customer}`);
-        return;
-      }
-
-      // Upsert Subscription in DB
-      const currentPeriodEnd = new Date(lineItem.period.end * 1000);
-      const currentPeriodStart = new Date(lineItem.period.start * 1000);
-
-      // Add resetIntervalDay from plan
-      const resetIntervalDay = pricingOption.plan.resetIntervalDay;
-      const nextCreditResetAt = new Date();
-      nextCreditResetAt.setDate(nextCreditResetAt.getDate() + resetIntervalDay);
-
-      await this.prisma.subscription.upsert({
-        where: { userId: user.id },
-        update: {
-          pricingOptionId: pricingOption.id,
-          status: SubscriptionStatus.ACTIVE,
-          currentPeriodStart,
-          currentPeriodEnd,
-          subscriptionCreditsRemaining: pricingOption.plan.renewalCredits,
-          nextCreditResetAt,
-          providerSubscriptionId: subscriptionId,
-        },
-        create: {
-          userId: user.id,
-          pricingOptionId: pricingOption.id,
-          status: SubscriptionStatus.ACTIVE,
-          currentPeriodStart,
-          currentPeriodEnd,
-          subscriptionCreditsRemaining: pricingOption.plan.renewalCredits,
-          nextCreditResetAt,
-          provider: PaymentProvider.STRIPE,
-          providerSubscriptionId: subscriptionId,
-        }
-      });
+    if (!stripeSubscriptionId) {
+      this.logger.log(`Invoice ${stripeInvoice.id} has no linked subscription, skipping`);
+      return;
     }
+
+    // Idempotency: kiểm tra Invoice local
+    const invoice = await this.prisma.invoice.findFirst({
+      where: { providerInvoiceId: stripeInvoice.id },
+    });
+
+    if (!invoice) {
+      this.logger.error(`No local invoice found for Stripe invoice ${stripeInvoice.id}`);
+      return;
+    }
+
+    if (invoice.status === InvoiceStatus.PAID) {
+      this.logger.log(`Invoice ${invoice.id} already PAID – skipping`);
+      return;
+    }
+
+    const subscription = await this.prisma.subscription.findFirst({
+      where: { providerSubscriptionId: stripeSubscriptionId },
+    });
+
+    if (!subscription) {
+      this.logger.error(`No local subscription found for Stripe subscription ${stripeSubscriptionId}`);
+      return;
+    }
+
+    const priceId = stripeInvoice.lines.data[0]?.price?.id;
+    if (!priceId) {
+      this.logger.error(`No price ID in invoice ${stripeInvoice.id} lines`);
+      return;
+    }
+
+    const pricingOption = await this.pricingService.findByProviderPriceId(priceId);
+    if (!pricingOption) {
+      this.logger.error(`No pricing option found for priceId ${priceId}`);
+      return;
+    }
+
+    const plan = pricingOption.plan;
+    const periodStart = new Date(stripeInvoice.period_start * 1000);
+    const periodEnd = new Date(stripeInvoice.period_end * 1000);
+    const nextCreditResetAt = new Date(
+      periodStart.getTime() + plan.resetIntervalDay * 86_400_000,
+    );
+
+    const isInitial = stripeInvoice.billing_reason === "subscription_create";
+    const eventType = isInitial ? SubscriptionEventType.CREATED : SubscriptionEventType.RENEWED;
+    const description = isInitial
+      ? `Credits granted – ${plan.name} (initial)`
+      : `Credits granted – ${plan.name} (renewal)`;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.invoice.update({
+        where: { id: invoice.id },
+        data: { status: InvoiceStatus.PAID, paidAt: new Date() },
+      });
+
+      await tx.subscription.update({
+        where: { id: subscription.id },
+        data: {
+          status: SubscriptionStatus.ACTIVE,
+          pricingOptionId: pricingOption.id,
+          currentPeriodStart: periodStart,
+          currentPeriodEnd: periodEnd,
+          subscriptionCreditsRemaining: plan.renewalCredits,
+          nextCreditResetAt,
+        },
+      });
+
+      await tx.creditTransaction.create({
+        data: {
+          userId: subscription.userId,
+          type: CreditTransactionType.RENEWAL,
+          amount: plan.renewalCredits,
+          description,
+          referenceType: ReferenceType.SUBSCRIPTION,
+          referenceId: subscription.id,
+        },
+      });
+
+      await tx.subscriptionEvent.create({
+        data: {
+          subscriptionId: subscription.id,
+          type: eventType,
+          metadata: {
+            stripeInvoiceId: stripeInvoice.id,
+            creditsGranted: plan.renewalCredits,
+            billingReason: stripeInvoice.billing_reason,
+            periodStart: periodStart.toISOString(),
+            periodEnd: periodEnd.toISOString(),
+          },
+        },
+      });
+    });
+
+    this.logger.log(
+      `Credits granted: subscription=${subscription.id} +${plan.renewalCredits} (${plan.name}, ${stripeInvoice.billing_reason})`,
+    );
   }
 }
