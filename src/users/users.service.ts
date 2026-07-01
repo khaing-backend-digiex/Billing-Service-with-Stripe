@@ -46,7 +46,7 @@ export class UsersService implements OnApplicationBootstrap {
             newAdmin.email,
             newAdmin.name || undefined,
           );
-          await this.stripeService.subscribeToFreePlan(customer.id);
+          await this.stripeService.subscribeToFreePlan(newAdmin.id,customer.id);
         } catch (err) {
           this.logger.error("Failed to create stripe customer for admin", err);
         }

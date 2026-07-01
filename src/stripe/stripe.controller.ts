@@ -14,9 +14,9 @@ import {
   ApiResponse as SwaggerResponse,
 } from "@nestjs/swagger";
 import { StripeService } from "./stripe.service";
-import { CreateSubscriptionCheckoutDto, CreateAddonCheckoutDto } from "./dto/create-checkout.dto";
-import { CreatePaymentIntentDto } from "./dto/create-payment-intent.dto";
-import { CreateCustomerDto } from "./dto/create-customer.dto";
+import { CreateSubscriptionCheckoutDto, CreateAddonCheckoutDto } from "../payments/dto/create-checkout.dto";
+import { CreatePaymentIntentDto } from "../payments/dto/create-payment-intent.dto";
+import { CreateCustomerDto } from "../payments/dto/create-customer.dto";
 import { ApiResponse } from "../common/dto/api-response.dto";
 import { GetUser } from "../common/decorators/get-user.decorator";
 import { RolesGuard } from "../common/guards/roles.guard";
