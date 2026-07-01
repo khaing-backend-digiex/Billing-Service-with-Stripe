@@ -1,7 +1,3 @@
-// ──────────────────────────────────────────────────
-// Prisma Schema – Billing Service with Stripe
-// ──────────────────────────────────────────────────
-
 generator client {
   provider   = "prisma-client-js"
   engineType = "none"
@@ -11,7 +7,184 @@ datasource db {
   provider = "postgresql"
 }
 
-// ─── Enums ───────────────────────────────────────
+model User {
+  email              String              @unique
+  provider           PaymentProvider?
+  providerCustomerId String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  dateOfBirth        DateTime?
+  name               String?
+  roles              String[]            @default(["user"])
+  id                 Int                 @id @default(autoincrement())
+  creditTransactions CreditTransaction[]
+  creditWallet       CreditWallet?
+  payments           Payment[]
+  paymentMethods     PaymentMethod[]
+  subscription       Subscription?
+}
+
+model Plan {
+  id               String          @id @default(cuid())
+  code             String          @unique
+  name             String
+  renewalCredits   Int
+  resetIntervalDay Int
+  isActive         Boolean         @default(true)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  pricingOptions   PricingOption[]
+}
+
+model BillingCycle {
+  id             String          @id @default(cuid())
+  name           String
+  durationDay    Int
+  pricingOptions PricingOption[]
+}
+
+model PricingOption {
+  id                    String              @id @default(cuid())
+  planId                String
+  billingCycleId        String
+  name                  String
+  price                 Decimal
+  currency              String
+  provider              PaymentProvider?
+  providerPriceId       String?
+  isActive              Boolean             @default(true)
+  createdAt             DateTime            @default(now())
+  billingCycle          BillingCycle        @relation(fields: [billingCycleId], references: [id])
+  plan                  Plan                @relation(fields: [planId], references: [id])
+  subscriptions         Subscription[]
+  subscriptionEventsNew SubscriptionEvent[] @relation("NewPricing")
+  subscriptionEventsOld SubscriptionEvent[] @relation("OldPricing")
+}
+
+model Subscription {
+  id                           String              @id @default(cuid())
+  pricingOptionId              String
+  status                       SubscriptionStatus
+  currentPeriodStart           DateTime
+  currentPeriodEnd             DateTime
+  nextCreditResetAt            DateTime
+  subscriptionCreditsRemaining Int
+  autoRenew                    Boolean             @default(true)
+  provider                     PaymentProvider?
+  providerSubscriptionId       String?
+  cancelledAt                  DateTime?
+  createdAt                    DateTime            @default(now())
+  updatedAt                    DateTime            @updatedAt
+  userId                       Int                 @unique
+  trialEnd                     DateTime?
+  trialStart                   DateTime?
+  invoices                     Invoice[]
+  pricingOption                PricingOption       @relation(fields: [pricingOptionId], references: [id])
+  user                         User                @relation(fields: [userId], references: [id])
+  events                       SubscriptionEvent[]
+}
+
+model CreditWallet {
+  addonCredits Int      @default(0)
+  updatedAt    DateTime @updatedAt
+  userId       Int      @id
+  user         User     @relation(fields: [userId], references: [id])
+}
+
+model AddonPackage {
+  id              String           @id @default(cuid())
+  code            String           @unique
+  name            String
+  credits         Int
+  price           Decimal
+  currency        String
+  provider        PaymentProvider?
+  providerPriceId String?
+  isActive        Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  payments        Payment[]
+}
+
+model Invoice {
+  id                String          @id @default(cuid())
+  subscriptionId    String
+  provider          PaymentProvider
+  providerInvoiceId String?         @unique
+  amount            Decimal
+  currency          String
+  status            InvoiceStatus
+  retryCount        Int             @default(0)
+  nextRetryAt       DateTime?
+  dueAt             DateTime
+  paidAt            DateTime?
+  createdAt         DateTime        @default(now())
+  billingReason     String?
+  subscription      Subscription    @relation(fields: [subscriptionId], references: [id])
+  payments          Payment[]
+}
+
+model Payment {
+  id                String          @id @default(cuid())
+  invoiceId         String?
+  addonPackageId    String?
+  provider          PaymentProvider
+  providerPaymentId String          @unique
+  amount            Decimal
+  currency          String
+  status            PaymentStatus
+  paidAt            DateTime?
+  createdAt         DateTime        @default(now())
+  userId            Int
+  addonPackage      AddonPackage?   @relation(fields: [addonPackageId], references: [id])
+  invoice           Invoice?        @relation(fields: [invoiceId], references: [id])
+  user              User            @relation(fields: [userId], references: [id])
+}
+
+model PaymentMethod {
+  id                      String          @id @default(cuid())
+  provider                PaymentProvider
+  providerPaymentMethodId String
+  isDefault               Boolean
+  metadata                Json?
+  createdAt               DateTime        @default(now())
+  userId                  Int
+  user                    User            @relation(fields: [userId], references: [id])
+}
+
+model CreditTransaction {
+  id            String                @id @default(cuid())
+  type          CreditTransactionType
+  amount        Int
+  description   String?
+  referenceType ReferenceType?
+  referenceId   String?
+  createdAt     DateTime              @default(now())
+  userId        Int
+  user          User                  @relation(fields: [userId], references: [id])
+}
+
+model SubscriptionEvent {
+  id                 String                @id @default(cuid())
+  subscriptionId     String
+  type               SubscriptionEventType
+  oldPricingOptionId String?
+  newPricingOptionId String?
+  metadata           Json?
+  createdAt          DateTime              @default(now())
+  newPricingOption   PricingOption?        @relation("NewPricing", fields: [newPricingOptionId], references: [id])
+  oldPricingOption   PricingOption?        @relation("OldPricing", fields: [oldPricingOptionId], references: [id])
+  subscription       Subscription          @relation(fields: [subscriptionId], references: [id])
+}
+
+model WebhookEvent {
+  id          String          @id
+  provider    PaymentProvider
+  eventType   String
+  payload     Json
+  processedAt DateTime?
+  createdAt   DateTime        @default(now())
+}
 
 enum PaymentProvider {
   STRIPE
@@ -19,7 +192,6 @@ enum PaymentProvider {
 
 enum SubscriptionStatus {
   ACTIVE
-  INACTIVE
   PAST_DUE
   CANCELLED
   EXPIRED
@@ -78,9 +250,9 @@ model User {
 
   email String @unique
 
-  name String?
+  name        String?
   dateOfBirth DateTime?
-  roles String[] @default(["user"])
+  roles       String[]  @default(["user"])
 
   provider           PaymentProvider?
   providerCustomerId String?
@@ -140,9 +312,9 @@ model PricingOption {
   createdAt DateTime @default(now())
 
   plan         Plan         @relation(fields: [planId], references: [id])
-  billingCycle BillingCycle  @relation(fields: [billingCycleId], references: [id])
+  billingCycle BillingCycle @relation(fields: [billingCycleId], references: [id])
 
-  subscriptions        Subscription[]
+  subscriptions         Subscription[]
   subscriptionEventsOld SubscriptionEvent[] @relation("OldPricing")
   subscriptionEventsNew SubscriptionEvent[] @relation("NewPricing")
 }
@@ -150,7 +322,7 @@ model PricingOption {
 model Subscription {
   id String @id @default(cuid())
 
-  userId          Int @unique
+  userId          Int    @unique
   pricingOptionId String
 
   status SubscriptionStatus
@@ -219,7 +391,7 @@ model Invoice {
   subscriptionId String
 
   provider          PaymentProvider
-  providerInvoiceId String? @unique
+  providerInvoiceId String?         @unique
 
   amount   Decimal
   currency String
@@ -248,7 +420,7 @@ model Payment {
   addonPackageId String?
 
   provider          PaymentProvider
-  providerPaymentId String @unique
+  providerPaymentId String          @unique
 
   amount   Decimal
   currency String
@@ -314,8 +486,8 @@ model SubscriptionEvent {
   createdAt DateTime @default(now())
 
   subscription     Subscription   @relation(fields: [subscriptionId], references: [id])
-  oldPricingOption  PricingOption? @relation("OldPricing", fields: [oldPricingOptionId], references: [id])
-  newPricingOption  PricingOption? @relation("NewPricing", fields: [newPricingOptionId], references: [id])
+  oldPricingOption PricingOption? @relation("OldPricing", fields: [oldPricingOptionId], references: [id])
+  newPricingOption PricingOption? @relation("NewPricing", fields: [newPricingOptionId], references: [id])
 }
 
 model WebhookEvent {

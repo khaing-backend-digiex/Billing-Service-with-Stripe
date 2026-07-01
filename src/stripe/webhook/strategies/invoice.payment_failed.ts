@@ -20,10 +20,19 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
     const stripeInvoice = event.data.object as Stripe.Invoice;
     this.logger.log(`invoice.payment_failed: ${stripeInvoice.id} (attempt #${stripeInvoice.attempt_count})`);
 
-    const stripeSubscriptionId =
+    let stripeSubscriptionId =
       typeof stripeInvoice.subscription === "string"
         ? stripeInvoice.subscription
         : stripeInvoice.subscription?.id ?? null;
+
+    if (!stripeSubscriptionId) {
+      stripeSubscriptionId = (stripeInvoice as any).parent?.subscription_details?.subscription ?? null;
+    }
+
+    if (!stripeSubscriptionId && stripeInvoice.lines?.data?.length) {
+      const line = stripeInvoice.lines.data[0] as any;
+      stripeSubscriptionId = line?.subscription ?? line?.parent?.subscription_item_details?.subscription ?? null;
+    }
 
     const paymentIntentId =
       typeof stripeInvoice.payment_intent === "string"

@@ -3,6 +3,7 @@ import Stripe from "stripe";
 import { SubscriptionStatus, SubscriptionEventType } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
+import { PricingService } from "../../../pricing/pricing.service";
 
 const STRIPE_STATUS_MAP: Record<string, SubscriptionStatus> = {
   active: SubscriptionStatus.ACTIVE,
@@ -19,11 +20,14 @@ const STRIPE_STATUS_MAP: Record<string, SubscriptionStatus> = {
 export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
   private readonly logger = new Logger(CustomerSubscriptionUpdatedStrategy.name);
 
-  constructor(private readonly prisma: PrismaService) { }
-
-  private readonly customerSubcriptionUpdated = "customer.subscription.updated";
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly pricingService: PricingService,
+  ) {}
+  
+  private readonly customerSubscriptionUpdated="customer.subscription.updated";
   canHandle(eventType: string): boolean {
-    return eventType === this.customerSubcriptionUpdated;
+    return eventType === this.customerSubscriptionUpdated;
   }
 
   async handle(event: Stripe.Event): Promise<void> {
@@ -56,15 +60,33 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
       }
 
       const previousStatus = subscription.status;
+      const previousPricingOptionId = subscription.pricingOptionId;
+      
+      let newPricingOptionId = previousPricingOptionId;
+      
+      const priceId = sub.items.data[0]?.price?.id;
+      if (priceId) {
+        const pricingOption = await this.pricingService.findByProviderPriceId(priceId);
+        if (pricingOption) {
+          newPricingOptionId = pricingOption.id;
+        }
+      }
+
+      const currentPeriodStart = sub.current_period_start ? new Date(sub.current_period_start * 1000) : new Date();
+      const currentPeriodEnd = sub.current_period_end ? new Date(sub.current_period_end * 1000) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
       await tx.subscription.update({
         where: { id: subscription.id },
         data: {
           status: newStatus,
           autoRenew: !sub.cancel_at_period_end,
+          pricingOptionId: newPricingOptionId,
           ...(sub.trial_end !== null && sub.trial_end !== undefined
             ? { trialEnd: new Date(sub.trial_end * 1000) }
             : {}),
+          cancelledAt: sub.cancel_at ? new Date(sub.cancel_at * 1000) : null,
+          currentPeriodStart: currentPeriodStart,
+          currentPeriodEnd: currentPeriodEnd,
         },
       });
 

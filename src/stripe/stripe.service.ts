@@ -147,6 +147,16 @@ export class StripeService {
       throw new InternalServerErrorException("Failed to create checkout session");
     }
   }
+  
+  async cancelSubscription(providerSubscriptionId: string): Promise<void> {
+    try {
+      await this.stripe.subscriptions.cancel(providerSubscriptionId);
+      this.logger.log(`✅ Cancelled Stripe subscription ${providerSubscriptionId}`);
+    } catch (error) {
+      this.logger.error(`Failed to cancel Stripe subscription ${providerSubscriptionId}: ${error}`);
+      // Don't throw here, as this is usually called as cleanup during upgrade
+    }
+  }
 
   async createPaymentIntent(
     userId: number,
