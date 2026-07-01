@@ -11,6 +11,7 @@ import { PricingService } from "../../../pricing/pricing.service";
 import { PaymentProvider, SubscriptionStatus, InvoiceStatus, PaymentStatus } from "@prisma/client";
 import { PLAN_CODES } from "../../../common/constants/plan.constants";
 import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
+import { json } from "stream/consumers";
 
 @Injectable()
 export class InvoicePaidStrategy implements WebhookStrategy {
@@ -29,11 +30,20 @@ export class InvoicePaidStrategy implements WebhookStrategy {
   async handle(event: Stripe.Event): Promise<void> {
     const stripeInvoice = event.data.object as Stripe.Invoice;
     this.logger.log(`invoice.paid: ${stripeInvoice.id}`);
-
-    const stripeSubscriptionId =
+    this.logger.log('Invoice details:', JSON.stringify(stripeInvoice, null, 2));
+    let stripeSubscriptionId =
       typeof stripeInvoice.subscription === "string"
         ? stripeInvoice.subscription
         : stripeInvoice.subscription?.id ?? null;
+
+    if (!stripeSubscriptionId) {
+      stripeSubscriptionId = (stripeInvoice as any).parent?.subscription_details?.subscription ?? null;
+    }
+
+    if (!stripeSubscriptionId && stripeInvoice.lines?.data?.length) {
+      const line = stripeInvoice.lines.data[0] as any;
+      stripeSubscriptionId = line?.subscription ?? line?.parent?.subscription_item_details?.subscription ?? null;
+    }
 
     if (!stripeSubscriptionId) {
       this.logger.log(`Invoice ${stripeInvoice.id} has no linked subscription, skipping`);
@@ -68,8 +78,9 @@ export class InvoicePaidStrategy implements WebhookStrategy {
     let subscription = await this.prisma.subscription.findFirst({
       where: { providerSubscriptionId: stripeSubscriptionId },
     });
-
+    this.logger.log(`Found subscription ${subscription} for Stripe subscription ${stripeSubscriptionId}`);
     let subRetries = 0;
+    this.logger.log(`Checking for subscription ${subRetries} for Stripe subscription ${stripeSubscriptionId}`);
     while (!subscription && subRetries < 5) {
       this.logger.warn(`Subscription ${stripeSubscriptionId} not found locally. Waiting for customer.subscription.created...`);
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -84,8 +95,21 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       return;
     }
 
-    const subscriptionLine = stripeInvoice.lines.data.find(line => line.type === 'subscription');
-    const priceId = subscriptionLine?.price?.id || stripeInvoice.lines.data[0]?.price?.id;
+    const subscriptionLine = stripeInvoice.lines?.data?.find(line => line.type === 'subscription' || (line as any).parent?.type === 'subscription_item_details');
+    const lineToUse = subscriptionLine || stripeInvoice.lines?.data?.[0];
+    
+    let priceId = null;
+    if (lineToUse) {
+      if (typeof lineToUse.price === 'string') {
+        priceId = lineToUse.price;
+      } else if (lineToUse.price?.id) {
+        priceId = lineToUse.price.id;
+      } else if ((lineToUse as any).pricing?.price_details?.price) {
+        priceId = (lineToUse as any).pricing.price_details.price;
+      } else if (lineToUse.plan?.id) {
+        priceId = lineToUse.plan.id;
+      }
+    }
 
     if (!priceId) {
       this.logger.error(`No price ID in invoice ${stripeInvoice.id} lines`);

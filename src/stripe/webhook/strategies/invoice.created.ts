@@ -28,10 +28,19 @@ export class InvoiceCreatedStrategy implements WebhookStrategy {
     const stripeInvoice = event.data.object as Stripe.Invoice;
     this.logger.log(`invoice.created: ${stripeInvoice.id}`);
 
-    const stripeSubscriptionId =
+    let stripeSubscriptionId =
       typeof stripeInvoice.subscription === "string"
         ? stripeInvoice.subscription
         : stripeInvoice.subscription?.id ?? null;
+
+    if (!stripeSubscriptionId) {
+      stripeSubscriptionId = (stripeInvoice as any).parent?.subscription_details?.subscription ?? null;
+    }
+
+    if (!stripeSubscriptionId && stripeInvoice.lines?.data?.length) {
+      const line = stripeInvoice.lines.data[0] as any;
+      stripeSubscriptionId = line?.subscription ?? line?.parent?.subscription_item_details?.subscription ?? null;
+    }
 
     if (!stripeSubscriptionId) {
       this.logger.log(`Invoice ${stripeInvoice.id} has no linked subscription, skipping`);
