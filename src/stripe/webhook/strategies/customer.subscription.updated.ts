@@ -37,13 +37,22 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      const subscription = await tx.subscription.findFirst({
+      let subscription = await tx.subscription.findFirst({
         where: { providerSubscriptionId: sub.id },
       });
 
       if (!subscription) {
+        // Chờ 2 giây để nhường đường cho sự kiện created chạy xong (Race condition fix)
+        this.logger.warn(`Subscription ${sub.id} not found, waiting 2s for created event...`);
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        subscription = await tx.subscription.findFirst({
+          where: { providerSubscriptionId: sub.id },
+        });
+      }
+
+      if (!subscription) {
         this.logger.error(`No local subscription found for Stripe subscription ${sub.id}`);
-        return;
+        throw new Error(`Race condition: subscription ${sub.id} not found yet.`);
       }
 
       const previousStatus = subscription.status;

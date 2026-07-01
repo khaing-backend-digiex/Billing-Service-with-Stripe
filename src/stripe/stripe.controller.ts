@@ -73,9 +73,16 @@ export class StripeController {
     });
 
     if (currentSubscription && currentSubscription.pricingOption) {
-      const price = Number(currentSubscription.pricingOption.price);
-      if (price > 0) {
-        throw new BadRequestException("Bạn chỉ có thể đăng ký gói mới khi đang ở gói FREE. Vui lòng huỷ gói hiện tại trước.");
+      // Cho phép đăng ký lại nếu gói hiện tại đã bị HUỶ hoặc HẾT HẠN
+      const isCancelledOrExpired = 
+        currentSubscription.status === 'CANCELLED' || 
+        currentSubscription.status === 'EXPIRED';
+
+      if (!isCancelledOrExpired) {
+        const price = Number(currentSubscription.pricingOption.price);
+        if (price > 0) {
+          throw new BadRequestException("Bạn chỉ có thể đăng ký gói mới khi đang ở gói FREE hoặc gói cũ đã hoàn toàn bị huỷ. Vui lòng đợi gói hiện tại hết hạn hoặc huỷ nó trước.");
+        }
       }
     }
 
