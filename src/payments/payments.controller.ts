@@ -156,11 +156,6 @@ export class PaymentsController {
       provider,
     );
 
-    await this.prisma.subscription.update({
-      where: { id: subscription.id },
-      data: { autoRenew: false },
-    });
-
     return new ApiResponse(HttpStatus.OK, "Subscription will cancel at period end", null);
   }
 }

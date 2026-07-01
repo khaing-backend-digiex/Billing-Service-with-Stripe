@@ -52,6 +52,7 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
         where: { id: subscription.id },
         data: {
           status: newStatus,
+          autoRenew: !sub.cancel_at_period_end,
           ...(sub.trial_end !== null && sub.trial_end !== undefined
             ? { trialEnd: new Date(sub.trial_end * 1000) }
             : {}),

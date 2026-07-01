@@ -321,7 +321,6 @@ model WebhookEvent {
   id String @id
 
   provider  PaymentProvider
-  eventId   String @unique
   eventType String
 
   payload Json
