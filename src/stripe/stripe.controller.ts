@@ -66,19 +66,6 @@ export class StripeController {
   ) {
     const user = await this.usersService.findById(userId);
 
-    // Rule 4 & 5: Check if user is currently on a PAID plan.
-    const currentSubscription = await this.prisma.subscription.findUnique({
-      where: { userId },
-      include: { pricingOption: true },
-    });
-
-    if (currentSubscription && currentSubscription.pricingOption) {
-      const price = Number(currentSubscription.pricingOption.price);
-      if (price > 0) {
-        throw new BadRequestException("Bạn chỉ có thể đăng ký gói mới khi đang ở gói FREE. Vui lòng huỷ gói hiện tại trước.");
-      }
-    }
-
     // Validate that the pricingOptionId belongs to a valid Subscription Pricing Option
     const pricingOption = await this.prisma.pricingOption.findUnique({
       where: { id: dto.pricingOptionId },

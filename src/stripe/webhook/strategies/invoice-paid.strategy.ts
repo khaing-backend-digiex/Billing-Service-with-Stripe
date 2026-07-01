@@ -19,7 +19,7 @@ export class InvoicePaidStrategy implements WebhookStrategy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly pricingService: PricingService,
-  ) {}
+  ) { }
 
   private readonly invoicePaid = "invoice.paid";
   canHandle(eventType: string): boolean {
@@ -40,13 +40,23 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       return;
     }
 
-    // Idempotency: kiểm tra Invoice local
-    const invoice = await this.prisma.invoice.findFirst({
+    // Idempotency: kiểm tra Invoice local, có retry nhẹ nếu invoice.created đến trễ
+    let invoice = await this.prisma.invoice.findFirst({
       where: { providerInvoiceId: stripeInvoice.id },
     });
 
+    let invoiceRetries = 0;
+    while (!invoice && invoiceRetries < 5) {
+      this.logger.warn(`Invoice ${stripeInvoice.id} not found locally. Waiting for invoice.created...`);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      invoice = await this.prisma.invoice.findFirst({
+        where: { providerInvoiceId: stripeInvoice.id },
+      });
+      invoiceRetries++;
+    }
+
     if (!invoice) {
-      this.logger.error(`No local invoice found for Stripe invoice ${stripeInvoice.id}`);
+      this.logger.error(`No local invoice found for Stripe invoice ${stripeInvoice.id} after retries`);
       return;
     }
 
@@ -55,16 +65,28 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       return;
     }
 
-    const subscription = await this.prisma.subscription.findFirst({
+    let subscription = await this.prisma.subscription.findFirst({
       where: { providerSubscriptionId: stripeSubscriptionId },
     });
 
+    let subRetries = 0;
+    while (!subscription && subRetries < 5) {
+      this.logger.warn(`Subscription ${stripeSubscriptionId} not found locally. Waiting for customer.subscription.created...`);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      subscription = await this.prisma.subscription.findFirst({
+        where: { providerSubscriptionId: stripeSubscriptionId },
+      });
+      subRetries++;
+    }
+
     if (!subscription) {
-      this.logger.error(`No local subscription found for Stripe subscription ${stripeSubscriptionId}`);
+      this.logger.error(`No local subscription found for Stripe subscription ${stripeSubscriptionId} after retries`);
       return;
     }
 
-    const priceId = stripeInvoice.lines.data[0]?.price?.id;
+    const subscriptionLine = stripeInvoice.lines.data.find(line => line.type === 'subscription');
+    const priceId = subscriptionLine?.price?.id || stripeInvoice.lines.data[0]?.price?.id;
+
     if (!priceId) {
       this.logger.error(`No price ID in invoice ${stripeInvoice.id} lines`);
       return;
@@ -117,7 +139,7 @@ export class InvoicePaidStrategy implements WebhookStrategy {
             status: PaymentStatus.SUCCEEDED,
             paidAt: new Date(),
           },
-          update: {status: PaymentStatus.SUCCEEDED, paidAt: new Date()},
+          update: { status: PaymentStatus.SUCCEEDED, paidAt: new Date() },
         });
       }
 
@@ -158,9 +180,9 @@ export class InvoicePaidStrategy implements WebhookStrategy {
         },
       });
 
-    this.logger.log(
-      `Credits granted: subscription=${subscription.id} +${plan.renewalCredits} (${plan.name}, ${stripeInvoice.billing_reason})`,
-    );
-  })
+      this.logger.log(
+        `Credits granted: subscription=${subscription.id} +${plan.renewalCredits} (${plan.name}, ${stripeInvoice.billing_reason})`,
+      );
+    })
   }
 }

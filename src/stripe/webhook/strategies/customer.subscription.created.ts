@@ -4,6 +4,7 @@ import { SubscriptionStatus, PaymentProvider } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { PricingService } from "../../../pricing/pricing.service";
+import { StripeService } from "../../stripe.service";
 
 const STRIPE_STATUS_MAP: Record<string, SubscriptionStatus> = {
   active: SubscriptionStatus.ACTIVE,
@@ -23,6 +24,7 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly pricingService: PricingService,
+    private readonly stripeService: StripeService,
   ) {}
 
   private readonly customerSubscriptionCreated = "customer.subscription.created";
@@ -60,13 +62,33 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
       this.logger.error(`Unknown Stripe subscription status: ${sub.status}`);
       return;
     }
-    const currentPeriodStart = new Date(sub.current_period_start * 1000);
-    const currentPeriodEnd = new Date(sub.current_period_end * 1000);
+    if (!sub.current_period_start || !sub.current_period_end) {
+      this.logger.warn(`Stripe subscription ${sub.id} missing period dates. Keys available: ${Object.keys(sub).join(', ')}`);
+    }
+
+    const currentPeriodStart = sub.current_period_start ? new Date(sub.current_period_start * 1000) : new Date();
+    const currentPeriodEnd = sub.current_period_end ? new Date(sub.current_period_end * 1000) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
     const trialStart = sub.trial_start ? new Date(sub.trial_start * 1000) : null;
     const trialEnd = sub.trial_end ? new Date(sub.trial_end * 1000) : null;
 
-    // credits = 0, sẽ được cấp đúng trong invoice.paid
+    // Check if user already has an active subscription with a different ID (meaning this is an upgrade)
+    const existingSubscription = await this.prisma.subscription.findUnique({
+      where: { userId: user.id },
+    });
+
+    if (
+      existingSubscription && 
+      existingSubscription.providerSubscriptionId && 
+      existingSubscription.providerSubscriptionId !== sub.id
+    ) {
+      this.logger.log(`Cancelling old subscription ${existingSubscription.providerSubscriptionId} as new one ${sub.id} was created.`);
+      await this.stripeService.cancelSubscription(existingSubscription.providerSubscriptionId);
+    }
+
+    // For FREE plans ($0), grant credits immediately to avoid webhook race conditions with invoice.paid
+    const initialCredits = Number(pricingOption.price) === 0 ? pricingOption.plan.renewalCredits : 0;
+
     await this.prisma.subscription.upsert({
       where: { userId: user.id },
       create: {
@@ -75,7 +97,7 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
         status,
         currentPeriodStart,
         currentPeriodEnd,
-        subscriptionCreditsRemaining: 0,
+        subscriptionCreditsRemaining: initialCredits,
         nextCreditResetAt: currentPeriodEnd,
         trialStart,
         trialEnd,
