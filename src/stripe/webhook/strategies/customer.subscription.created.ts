@@ -5,7 +5,6 @@ import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { PricingService } from "../../../pricing/pricing.service";
 import { StripeService } from "../../stripe.service";
-
 const STRIPE_STATUS_MAP: Record<string, SubscriptionStatus> = {
   active: SubscriptionStatus.ACTIVE,
   past_due: SubscriptionStatus.PAST_DUE,
@@ -45,7 +44,8 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
       return;
     }
 
-    const priceId = sub.items.data[0]?.price?.id;
+    const price = sub.items.data[0]?.price;
+    const priceId = typeof price === 'string' ? price : price?.id;
     if (!priceId) {
       this.logger.error(`No price ID in subscription ${sub.id}`);
       return;

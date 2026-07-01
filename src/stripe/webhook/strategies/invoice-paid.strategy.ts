@@ -95,24 +95,30 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       return;
     }
 
-    const subscriptionLine = stripeInvoice.lines?.data?.find(line => line.type === 'subscription' || (line as any).parent?.type === 'subscription_item_details');
-    const lineToUse = subscriptionLine || stripeInvoice.lines?.data?.[0];
-    
-    let priceId = null;
-    if (lineToUse) {
-      if (typeof lineToUse.price === 'string') {
-        priceId = lineToUse.price;
-      } else if (lineToUse.price?.id) {
-        priceId = lineToUse.price.id;
-      } else if ((lineToUse as any).pricing?.price_details?.price) {
-        priceId = (lineToUse as any).pricing.price_details.price;
-      } else if (lineToUse.plan?.id) {
-        priceId = lineToUse.plan.id;
-      }
+    const lineToUse = stripeInvoice.lines?.data?.find(line => line.type === 'subscription') || stripeInvoice.lines?.data?.[0];
+
+    const price = lineToUse?.price;
+    let priceId = typeof price === 'string' ? price : price?.id;
+
+    if (!priceId) {
+      priceId = (lineToUse as any)?.plan?.id;
     }
 
     if (!priceId) {
-      this.logger.error(`No price ID in invoice ${stripeInvoice.id} lines`);
+      priceId = (lineToUse as any)?.pricing?.price_details?.price;
+    }
+
+    if (!priceId) {
+      this.logger.warn(`No price ID found in invoice lines. Falling back to subscription's current pricing option.`);
+      const currentPricingOption = await this.prisma.pricingOption.findUnique({
+        where: { id: subscription.pricingOptionId },
+        select: { providerPriceId: true },
+      });
+      priceId = currentPricingOption?.providerPriceId ?? undefined;
+    }
+
+    if (!priceId) {
+      this.logger.error(`No price ID in invoice ${stripeInvoice.id} lines and no fallback available`);
       return;
     }
 
