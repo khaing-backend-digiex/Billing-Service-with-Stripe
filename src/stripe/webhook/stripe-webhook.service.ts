@@ -14,7 +14,7 @@ export class StripeWebhookService {
   ) {}
 
   async handleEvent(event: Stripe.Event): Promise<void> {
-    // 1. Idempotency check
+    // 1. Check if event is already processed
     const existingEvent = await this.prisma.webhookEvent.findUnique({
       where: { id: event.id },
     });

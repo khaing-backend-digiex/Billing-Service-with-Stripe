@@ -55,7 +55,11 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
       return;
     }
 
-    const status = STRIPE_STATUS_MAP[sub.status] ?? SubscriptionStatus.ACTIVE;
+    const status = STRIPE_STATUS_MAP[sub.status];
+    if(!status) {
+      this.logger.error(`Unknown Stripe subscription status: ${sub.status}`);
+      return;
+    }
     const currentPeriodStart = new Date(sub.current_period_start * 1000);
     const currentPeriodEnd = new Date(sub.current_period_end * 1000);
 

@@ -1,12 +1,13 @@
-import { IsString, IsNotEmpty, IsOptional, IsIn } from "class-validator";
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { IsString, IsNotEmpty } from "class-validator";
 
-export class CreateCheckoutDto {
+export class CreateSubscriptionCheckoutDto {
   @IsString()
   @IsNotEmpty()
-  priceId: string;
+  pricingOptionId: string;
+}
 
-  @IsOptional()
-  @IsIn(["payment", "subscription"])
-  mode?: "payment" | "subscription" = "payment";
+export class CreateAddonCheckoutDto {
+  @IsString()
+  @IsNotEmpty()
+  addonPackageId: string;
 }

@@ -3,6 +3,7 @@ import Stripe from "stripe";
 import { PaymentProvider, PaymentStatus } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
+import { CreditTransactionType } from "@prisma/client";
 
 @Injectable()
 export class CheckoutSessionCompletedStrategy implements WebhookStrategy {
@@ -72,3 +73,4 @@ export class CheckoutSessionCompletedStrategy implements WebhookStrategy {
     );
   }
 }
+

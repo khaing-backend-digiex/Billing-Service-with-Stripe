@@ -1,17 +1,16 @@
 import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
 import {
-  InvoiceStatus,
-  SubscriptionStatus,
   CreditTransactionType,
   ReferenceType,
   SubscriptionEventType,
-  PaymentProvider,
-  PaymentStatus,
 } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { PricingService } from "../../../pricing/pricing.service";
+import { PaymentProvider, SubscriptionStatus, InvoiceStatus, PaymentStatus } from "@prisma/client";
+import { PLAN_CODES } from "../../../common/constants/plan.constants";
+import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
 
 @Injectable()
 export class InvoicePaidStrategy implements WebhookStrategy {
@@ -113,12 +112,12 @@ export class InvoicePaidStrategy implements WebhookStrategy {
             invoiceId: invoice.id,
             provider: PaymentProvider.STRIPE,
             providerPaymentId: paymentIntentId,
-            amount: stripeInvoice.amount_paid / 100,
+            amount: formatStripeAmountToDatabase(stripeInvoice.amount_paid, stripeInvoice.currency),
             currency: stripeInvoice.currency,
             status: PaymentStatus.SUCCEEDED,
             paidAt: new Date(),
           },
-          update: {},
+          update: {status: PaymentStatus.SUCCEEDED, paidAt: new Date()},
         });
       }
 
@@ -158,10 +157,10 @@ export class InvoicePaidStrategy implements WebhookStrategy {
           },
         },
       });
-    });
 
     this.logger.log(
       `Credits granted: subscription=${subscription.id} +${plan.renewalCredits} (${plan.name}, ${stripeInvoice.billing_reason})`,
     );
+  })
   }
 }

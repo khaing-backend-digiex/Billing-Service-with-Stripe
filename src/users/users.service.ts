@@ -79,7 +79,7 @@ export class UsersService implements OnApplicationBootstrap {
           user.name || undefined,
         );
         
-        await this.stripeService.subscribeToFreePlan(customer.id);
+        await this.stripeService.subscribeToFreePlan(user.id, customer.id);
       } catch (err) {
         console.error("Failed to create stripe customer or free plan", err);
       }
