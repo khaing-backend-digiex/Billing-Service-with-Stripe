@@ -11,6 +11,7 @@ import { PricingService } from "../../../pricing/pricing.service";
 import { PaymentProvider, SubscriptionStatus, InvoiceStatus, PaymentStatus } from "@prisma/client";
 import { PLAN_CODES } from "../../../common/constants/plan.constants";
 import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
+import { addCalendarMonths } from "../../../common/utils/date.util";
 import { json } from "stream/consumers";
 
 @Injectable()
@@ -131,9 +132,8 @@ export class InvoicePaidStrategy implements WebhookStrategy {
     const plan = pricingOption.plan;
     const periodStart = new Date(stripeInvoice.period_start * 1000);
     const periodEnd = new Date(stripeInvoice.period_end * 1000);
-    const nextCreditResetAt = new Date(
-      periodStart.getTime() + plan.resetIntervalDay * 86_400_000,
-    );
+    const resetMonths = Math.max(1, Math.round(plan.resetIntervalDay / 30));
+    const nextCreditResetAt = addCalendarMonths(periodStart, resetMonths);
 
     const isInitial = stripeInvoice.billing_reason === "subscription_create";
     const eventType = isInitial ? SubscriptionEventType.CREATED : SubscriptionEventType.RENEWED;

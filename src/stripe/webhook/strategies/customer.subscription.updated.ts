@@ -73,7 +73,12 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
       }
 
       const currentPeriodStart = sub.current_period_start ? new Date(sub.current_period_start * 1000) : new Date();
-      const currentPeriodEnd = sub.current_period_end ? new Date(sub.current_period_end * 1000) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      let currentPeriodEnd = sub.current_period_end ? new Date(sub.current_period_end * 1000) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+      if (newStatus === SubscriptionStatus.CANCELLED && sub.canceled_at) {
+        currentPeriodEnd = new Date(sub.canceled_at * 1000);
+      }
+
 
       await tx.subscription.update({
         where: { id: subscription.id },
