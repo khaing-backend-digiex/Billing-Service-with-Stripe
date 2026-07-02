@@ -29,6 +29,7 @@ export class CreditResetCronService {
       where: {
         status: SubscriptionStatus.ACTIVE,
         nextCreditResetAt: { lte: now },
+        currentPeriodEnd: { gt: now },
       },
       include: {
         pricingOption: {
