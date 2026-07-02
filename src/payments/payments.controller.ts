@@ -65,13 +65,29 @@ export class PaymentsController {
   ) {
     const user = await this.usersService.findById(userId);
     const provider = dto.provider || PaymentProvider.STRIPE;
+    const mode = dto.mode || "payment";
+
+    // One-time payment (mode=payment) → có thể là mua Add-on. Nếu priceId khớp một
+    // AddonPackage thì gắn addonPackageId vào metadata để payment_intent.succeeded
+    // cấp credit. Metadata sẽ được đẩy xuống PaymentIntent trong StripeService.
+    let extraMetadata: Record<string, string> | undefined;
+    if (mode === "payment") {
+      const addon = await this.prisma.addonPackage.findFirst({
+        where: { providerPriceId: dto.priceId },
+      });
+      if (!addon) {
+        throw new BadRequestException("Addon package not found for the given priceId");
+      }
+      extraMetadata = { addonPackageId: addon.id };
+    }
 
     const session = await this.paymentsService.createCheckoutSession(
       userId,
       dto.priceId,
-      dto.mode,
+      mode,
       provider === PaymentProvider.STRIPE ? user.providerCustomerId || undefined : undefined,
       provider,
+      extraMetadata,
     );
 
     return new ApiResponse(HttpStatus.CREATED, "Checkout session created successfully", session);

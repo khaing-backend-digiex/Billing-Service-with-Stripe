@@ -18,7 +18,9 @@ const STRIPE_STATUS_MAP: Record<string, SubscriptionStatus> = {
 
 @Injectable()
 export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
-  private readonly logger = new Logger(CustomerSubscriptionCreatedStrategy.name);
+  private readonly logger = new Logger(
+    CustomerSubscriptionCreatedStrategy.name,
+  );
 
   constructor(
     private readonly prisma: PrismaService,
@@ -26,7 +28,8 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
     private readonly stripeService: StripeService,
   ) {}
 
-  private readonly customerSubscriptionCreated = "customer.subscription.created";
+  private readonly customerSubscriptionCreated =
+    "customer.subscription.created";
   canHandle(eventType: string): boolean {
     return eventType === this.customerSubscriptionCreated;
   }
@@ -51,14 +54,15 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
       return;
     }
 
-    const pricingOption = await this.pricingService.findByProviderPriceId(priceId);
+    const pricingOption =
+      await this.pricingService.findByProviderPriceId(priceId);
     if (!pricingOption) {
       this.logger.error(`No pricing option found for priceId ${priceId}`);
       return;
     }
 
     const status = STRIPE_STATUS_MAP[sub.status];
-    if(!status) {
+    if (!status) {
       this.logger.error(`Unknown Stripe subscription status: ${sub.status}`);
       return;
     }
@@ -69,7 +73,9 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
       ? new Date(sub.current_period_end * 1000)
       : new Date(currentPeriodStart.getTime() + 30 * 24 * 60 * 60 * 1000);
 
-    const trialStart = sub.trial_start ? new Date(sub.trial_start * 1000) : null;
+    const trialStart = sub.trial_start
+      ? new Date(sub.trial_start * 1000)
+      : null;
     const trialEnd = sub.trial_end ? new Date(sub.trial_end * 1000) : null;
 
     // Check if user already has an active subscription with a different ID (meaning this is an upgrade)

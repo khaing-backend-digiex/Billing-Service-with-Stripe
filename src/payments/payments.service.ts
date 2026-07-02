@@ -19,12 +19,19 @@ export class PaymentsService {
     priceId: string,
     mode: "payment" | "subscription" = "payment",
     customerId?: string,
-    provider?: PaymentProvider
+    provider?: PaymentProvider,
+    extraMetadata?: Record<string, string>,
   ) {
     if (provider && provider !== PaymentProvider.STRIPE) {
       throw new BadRequestException(`Payment provider ${provider} is not supported.`);
     }
-    const session = await this.stripeService.createCheckoutSession(userId, priceId, mode, customerId);
+    const session = await this.stripeService.createCheckoutSession(
+      userId,
+      priceId,
+      mode,
+      customerId,
+      extraMetadata,
+    );
     return { sessionId: session.id, url: session.url };
   }
 
