@@ -6,6 +6,7 @@ import { DatabaseModule } from "./database/database.module";
 import { AuthModule } from "./auth/auth.module";
 import { UsersModule } from "./users/users.module";
 import { StripeModule } from "./stripe/stripe.module";
+import { PaymentsModule } from "./payments/payments.module";
 import { HealthController } from "./health/health.controller";
 import { JwtAuthGuard } from "./common/guards/jwt-auth.guard";
 import { PricingModule } from "./pricing/pricing.module";
@@ -19,6 +20,7 @@ import { PricingModule } from "./pricing/pricing.module";
     UsersModule,
     AuthModule,
     StripeModule,
+    PaymentsModule,
     PricingModule,
   ],
   controllers: [HealthController],

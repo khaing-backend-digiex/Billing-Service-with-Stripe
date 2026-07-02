@@ -21,7 +21,7 @@ export class StripeWebhookController {
   constructor(
     private readonly stripeService: StripeService,
     private readonly webhookService: StripeWebhookService,
-  ) {}
+  ) { }
 
   @Public()
   @Post("webhook")

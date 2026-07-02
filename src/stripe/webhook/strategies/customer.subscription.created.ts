@@ -19,7 +19,9 @@ const STRIPE_STATUS_MAP: Record<string, SubscriptionStatus> = {
 
 @Injectable()
 export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
-  private readonly logger = new Logger(CustomerSubscriptionCreatedStrategy.name);
+  private readonly logger = new Logger(
+    CustomerSubscriptionCreatedStrategy.name,
+  );
 
   constructor(
     private readonly prisma: PrismaService,
@@ -27,7 +29,8 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
     private readonly stripeService: StripeService,
   ) {}
 
-  private readonly customerSubscriptionCreated = "customer.subscription.created";
+  private readonly customerSubscriptionCreated =
+    "customer.subscription.created";
   canHandle(eventType: string): boolean {
     return eventType === this.customerSubscriptionCreated;
   }
@@ -51,7 +54,8 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
       return;
     }
 
-    const pricingOption = await this.pricingService.findByProviderPriceId(priceId);
+    const pricingOption =
+      await this.pricingService.findByProviderPriceId(priceId);
     if (!pricingOption) {
       this.logger.error(`No pricing option found for priceId ${priceId}`);
       return;
@@ -69,7 +73,9 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
     const currentPeriodStart = sub.current_period_start ? new Date(sub.current_period_start * 1000) : new Date();
     const currentPeriodEnd = sub.current_period_end ? new Date(sub.current_period_end * 1000) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
-    const trialStart = sub.trial_start ? new Date(sub.trial_start * 1000) : null;
+    const trialStart = sub.trial_start
+      ? new Date(sub.trial_start * 1000)
+      : null;
     const trialEnd = sub.trial_end ? new Date(sub.trial_end * 1000) : null;
 
     // Check if user already has an active subscription with a different ID (meaning this is an upgrade)
@@ -86,9 +92,6 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
       await this.stripeService.cancelSubscription(existingSubscription.providerSubscriptionId);
     }
 
-    // For FREE plans ($0), grant credits immediately to avoid webhook race conditions with invoice.paid
-    const initialCredits = Number(pricingOption.price) === 0 ? pricingOption.plan.renewalCredits : 0;
-
     await this.prisma.subscription.upsert({
       where: { userId: user.id },
       create: {
@@ -97,7 +100,7 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
         status,
         currentPeriodStart,
         currentPeriodEnd,
-        subscriptionCreditsRemaining: initialCredits,
+        subscriptionCreditsRemaining: 0,
         nextCreditResetAt: currentPeriodEnd,
         trialStart,
         trialEnd,

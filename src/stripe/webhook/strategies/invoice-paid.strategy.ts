@@ -140,6 +140,7 @@ export class InvoicePaidStrategy implements WebhookStrategy {
         ? stripeInvoice.payment_intent
         : (stripeInvoice.payment_intent as any)?.id ?? null;
 
+
     await this.prisma.$transaction(async (tx) => {
       await tx.invoice.update({
         where: { id: invoice.id },
@@ -167,10 +168,13 @@ export class InvoicePaidStrategy implements WebhookStrategy {
         });
       }
 
+      this.logger.log(
+        `Invoice ${invoice.id} marked as PAID, subscription ${subscription.id} updated to ACTIVE, credits granted: +${plan.renewalCredits}`,
+      );
       await tx.subscription.update({
         where: { id: subscription.id },
         data: {
-          status: SubscriptionStatus.ACTIVE,
+          status: SubscriptionStatus.ACTIVE, 
           pricingOptionId: pricingOption.id,
           currentPeriodStart: periodStart,
           currentPeriodEnd: periodEnd,
@@ -178,6 +182,9 @@ export class InvoicePaidStrategy implements WebhookStrategy {
           nextCreditResetAt,
         },
       });
+      this.logger.log(
+        `Subscription ${subscription.id} updated: status=ACTIVE, currentPeriodStart=${periodStart.toISOString()}, currentPeriodEnd=${periodEnd.toISOString()}, subscriptionCreditsRemaining=${plan.renewalCredits}, nextCreditResetAt=${nextCreditResetAt.toISOString()}`,
+      );
 
       await tx.creditTransaction.create({
         data: {

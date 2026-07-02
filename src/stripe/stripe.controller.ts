@@ -14,9 +14,9 @@ import {
   ApiResponse as SwaggerResponse,
 } from "@nestjs/swagger";
 import { StripeService } from "./stripe.service";
-import { CreateSubscriptionCheckoutDto, CreateAddonCheckoutDto } from "./dto/create-checkout.dto";
-import { CreatePaymentIntentDto } from "./dto/create-payment-intent.dto";
-import { CreateCustomerDto } from "./dto/create-customer.dto";
+import { CreateSubscriptionCheckoutDto, CreateAddonCheckoutDto } from "../payments/dto/create-checkout.dto";
+import { CreatePaymentIntentDto } from "../payments/dto/create-payment-intent.dto";
+import { CreateCustomerDto } from "../payments/dto/create-customer.dto";
 import { ApiResponse } from "../common/dto/api-response.dto";
 import { GetUser } from "../common/decorators/get-user.decorator";
 import { RolesGuard } from "../common/guards/roles.guard";
@@ -65,6 +65,17 @@ export class StripeController {
     @Body() dto: CreateSubscriptionCheckoutDto,
   ) {
     const user = await this.usersService.findById(userId);
+    // const currentSubscription = await this.prisma.subscription.findUnique({
+    //   where: { userId },
+    //   include: { pricingOption: true },
+    // });
+
+    // if (currentSubscription && currentSubscription.pricingOption) {
+    //   const price = Number(currentSubscription.pricingOption.price);
+    //   if (price > 0) {
+    //     throw new BadRequestException("Bạn chỉ có thể đăng ký gói mới khi đang ở gói FREE. Vui lòng huỷ gói hiện tại trước.");
+    //   }
+    // }
 
     // Validate that the pricingOptionId belongs to a valid Subscription Pricing Option
     const pricingOption = await this.prisma.pricingOption.findUnique({
