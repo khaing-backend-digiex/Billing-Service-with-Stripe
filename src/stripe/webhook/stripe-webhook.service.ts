@@ -22,10 +22,6 @@ export class StripeWebhookService {
   ) {}
 
   async handleEvent(event: Stripe.Event): Promise<void> {
-    // 1. Claim-first: insert trước khi xử lý. event.id là @id → khi Stripe gửi
-    //    trùng event ĐỒNG THỜI, chỉ 1 delivery insert thành công; delivery còn
-    //    lại dính unique violation và bị chặn ngay — check-then-act kiểu cũ
-    //    (findUnique rồi mới xử lý) để lọt cả 2 qua cửa kiểm tra.
     try {
       await this.prisma.webhookEvent.create({
         data: {
@@ -54,13 +50,9 @@ export class StripeWebhookService {
         return;
       }
 
-      // Claim quá cũ → lần xử lý trước crash trước khi kịp đánh dấu processed.
-      // Tiếp tục xử lý lại (strategy đều idempotent).
       this.logger.warn(`Reclaiming stale webhook event ${event.id} (claimed ${Math.round(claimAge / 1000)}s ago)`);
     }
 
-    // 2. Chạy strategy. Fail → nhả claim để Stripe retry xử lý lại được ngay,
-    //    rồi ném lỗi lên cho controller trả non-2xx.
     try {
       const strategy = this.strategyFactory.getStrategy(event.type);
       if (strategy) {
@@ -77,7 +69,6 @@ export class StripeWebhookService {
       throw error;
     }
 
-    // 3. Chỉ đánh dấu processed sau khi strategy chạy thành công
     await this.prisma.webhookEvent.update({
       where: { id: event.id },
       data: { processedAt: new Date() },

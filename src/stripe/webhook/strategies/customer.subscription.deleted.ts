@@ -38,9 +38,7 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
       return;
     }
 
-    // Idempotency: đã CANCELLED thì không tạo duplicate SubscriptionEvent,
-    // nhưng vẫn chạy downgrade bên dưới để Stripe retry có thể hoàn tất
-    // bước subscribe Free nếu lần xử lý trước fail giữa chừng.
+    
     if (subscription.status !== SubscriptionStatus.CANCELLED) {
       await this.prisma.$transaction([
         this.prisma.subscription.update({
@@ -58,7 +56,7 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
             metadata: { stripeSubscriptionId: sub.id },
           },
         }),
-        // History phải đầy đủ: credit bị thu hồi cũng là 1 biến động số dư
+     
         ...(subscription.subscriptionCreditsRemaining > 0
           ? [
               this.prisma.creditTransaction.create({

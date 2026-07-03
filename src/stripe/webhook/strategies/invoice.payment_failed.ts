@@ -14,11 +14,7 @@ import { PrismaService } from "../../../database/prisma.service";
 import { StripeService } from "../../stripe.service";
 import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
 
-// Business rule: tối đa 3 lần retry trong 3 ngày. attempt_count của Stripe
-// tính cả lần charge đầu tiên → retry đã dùng = attempt_count - 1.
-// Lưu ý: lịch retry (thời điểm từng lần) do Stripe Smart Retries quyết định —
-// cần cấu hình dashboard 3 retries/3 days cho khớp; code này là chốt chặn
-// cứng: quá số lần HOẶC quá cửa sổ 3 ngày là hủy, bất kể dashboard để gì.
+
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_WINDOW_MS = 3 * 86_400_000;
 
@@ -73,8 +69,7 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
           : null,
       };
 
-      // Stripe không đảm bảo thứ tự webhook: invoice.payment_failed có thể tới
-      // trước invoice.created → upsert để không mất retry info.
+    
       let invoice: Invoice | null = null;
       if (subscription) {
         invoice = await tx.invoice.upsert({
@@ -109,8 +104,7 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
         });
       }
 
-      // Ghi nhận payment FAILED để lịch sử thanh toán đầy đủ; upsert vì
-      // Stripe có thể gửi lại event này khi retry.
+    
       if (paymentIntentId && subscription) {
         await tx.payment.upsert({
           where: { providerPaymentId: paymentIntentId },
@@ -163,11 +157,7 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
     await this.cancelIfRetriesExhausted(result.invoice, result.subscription, stripeInvoice, stripeSubscriptionId);
   }
 
-  /**
-   * Chốt chặn business rule: quá 3 lần retry HOẶC quá 3 ngày kể từ khi invoice
-   * bắt đầu fail → hủy subscription ngay trên Stripe. Webhook
-   * customer.subscription.deleted sau đó sẽ set CANCELLED + downgrade về Free.
-   */
+ 
   private async cancelIfRetriesExhausted(
     invoice: Invoice,
     subscription: Subscription,

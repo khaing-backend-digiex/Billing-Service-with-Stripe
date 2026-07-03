@@ -56,8 +56,7 @@ export class InvoiceCreatedStrategy implements WebhookStrategy {
       return;
     }
 
-    // Chưa có subscription local → throw để Stripe retry event này với backoff
-    // (event chỉ được đánh dấu processed khi strategy chạy thành công).
+    
     const subscription = await this.prisma.subscription.findFirst({
       where: { providerSubscriptionId: stripeSubscriptionId },
     });

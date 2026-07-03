@@ -62,14 +62,7 @@ export class StripeService {
     return freePlan?.pricingOptions[0]?.providerPriceId ?? null;
   }
 
-  /**
-   * Idempotent: chỉ tạo free subscription nếu customer CHƯA có BẤT KỲ sub nào
-   * đang active (business rule: mỗi user 1 subscription — customer đang có
-   * paid sub thì không được cấp free đè lên, webhook của free sub mới sẽ
-   * cancel nhầm paid sub). Trả về subscription mới nếu vừa tạo, null nếu đã
-   * có sub active hoặc Free plan chưa cấu hình — nhờ đó gọi lại không tạo trùng.
-   * Stripe call fail → throw để caller retry (webhook retry / login lần sau).
-   */
+
   async ensureFreeSubscription(customerId: string): Promise<Stripe.Subscription | null> {
     const freePriceId = await this.getFreePriceId();
     if (!freePriceId) {
@@ -77,18 +70,45 @@ export class StripeService {
       return null;
     }
 
-    const existing = await this.stripe.subscriptions.list({
-      customer: customerId,
-      status: "active",
-      limit: 1,
-    });
-
-    if (existing.data.length > 0) {
+    const existing = await this.findActiveSubscription(customerId);
+    if (existing) {
       this.logger.log(`Customer ${customerId} already has an active subscription – skipping free plan`);
       return null;
     }
 
     return this.subscribeToFreePlan(customerId);
+  }
+
+  async findActiveSubscription(customerId: string): Promise<Stripe.Subscription | null> {
+    const subs = await this.stripe.subscriptions.list({
+      customer: customerId,
+      status: "all",
+      limit: 100,
+    });
+    const live = subs.data.filter((s) =>
+      s.status === "active" || s.status === "trialing" || s.status === "past_due",
+    );
+    if (live.length === 0) return null;
+    if (live.length === 1) return live[0];
+
+    const freePriceId = await this.getFreePriceId();
+    const sorted = [...live].sort((a, b) => b.created - a.created);
+    const paid = sorted.find((s) => {
+      const price = s.items.data[0]?.price;
+      const priceId = typeof price === "string" ? price : price?.id;
+      return freePriceId == null || priceId !== freePriceId;
+    });
+    return paid ?? sorted[0];
+  }
+
+  /** Invoice đã thanh toán gần nhất của 1 subscription (null nếu chưa có). */
+  async getLatestPaidInvoice(subscriptionId: string): Promise<Stripe.Invoice | null> {
+    const invoices = await this.stripe.invoices.list({
+      subscription: subscriptionId,
+      status: "paid",
+      limit: 1,
+    });
+    return invoices.data[0] ?? null;
   }
 
   /**

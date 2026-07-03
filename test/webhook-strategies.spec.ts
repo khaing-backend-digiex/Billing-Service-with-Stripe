@@ -14,6 +14,8 @@ import { CustomerSubscriptionUpdatedStrategy } from "../src/stripe/webhook/strat
 import { CustomerSubscriptionDeletedStrategy } from "../src/stripe/webhook/strategies/customer.subscription.deleted";
 import { CheckoutSessionCompletedStrategy } from "../src/stripe/webhook/strategies/checkout-session-completed.strategy";
 import { PaymentIntentSucceededStrategy } from "../src/stripe/webhook/strategies/payment-intent-succeeded.strategy";
+import { PaidInvoiceSyncService } from "../src/stripe/sync/paid-invoice-sync.service";
+import { SubscriptionSyncService } from "../src/stripe/sync/subscription-sync.service";
 import { TestContext, invoicePayload, rand, stripeEvent, subscriptionPayload } from "./helpers/context";
 
 describe("Webhook strategies (real DB, Stripe mocked)", () => {
@@ -88,7 +90,10 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
 
   // ───────────────────────── invoice.paid ─────────────────────────
   describe("invoice.paid", () => {
-    const strategy = () => new InvoicePaidStrategy(ctx.prisma, pricingServiceStub as any);
+    const strategy = () =>
+      new InvoicePaidStrategy(
+        new PaidInvoiceSyncService(ctx.prisma, pricingServiceStub as any),
+      );
 
     it("marks invoice PAID, activates subscription, grants credits, records payment", async () => {
       const user = await ctx.createUser();
@@ -233,9 +238,11 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
   describe("customer.subscription.created", () => {
     const strategy = () =>
       new CustomerSubscriptionCreatedStrategy(
-        ctx.prisma,
-        pricingServiceStub as any,
-        stripeServiceMock as any,
+        new SubscriptionSyncService(
+          ctx.prisma,
+          pricingServiceStub as any,
+          stripeServiceMock as any,
+        ),
       );
 
     it("creates a local subscription with 0 credits (invoice.paid grants them)", async () => {
@@ -277,7 +284,15 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
   // ───────────────────────── customer.subscription.updated ─────────────────────────
   describe("customer.subscription.updated", () => {
     const strategy = () =>
-      new CustomerSubscriptionUpdatedStrategy(ctx.prisma, freePlanDowngradeMock as any);
+      new CustomerSubscriptionUpdatedStrategy(
+        ctx.prisma,
+        freePlanDowngradeMock as any,
+        new SubscriptionSyncService(
+          ctx.prisma,
+          pricingServiceStub as any,
+          stripeServiceMock as any,
+        ),
+      );
 
     it("PAST_DUE → active syncs status and logs PAYMENT_RECOVERED", async () => {
       const user = await ctx.createUser();
@@ -412,6 +427,8 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       const user = await ctx.createUser();
       const intent = {
         id: `pi_test_${rand()}`,
+        amount_received: 1000,
+        currency: "usd",
         metadata: { addonPackageId: ctx.addon.id, userId: String(user.id) },
       };
 
