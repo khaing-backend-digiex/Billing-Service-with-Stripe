@@ -2,6 +2,7 @@ import { Injectable, InternalServerErrorException } from "@nestjs/common";
 import { PrismaService } from "../database/prisma.service";
 import Stripe from "stripe";
 import { ConfigService } from "@nestjs/config";
+import { formatDatabaseAmountToStripe } from "../stripe/utils/stripe-currency.util";
 
 @Injectable()
 export class PricingService {
@@ -31,15 +32,35 @@ export class PricingService {
       const plan = await this.prisma.plan.findUnique({ where: { id: data.planId } });
       if (!plan) throw new Error("Plan not found");
 
+      const billingCycle = await this.prisma.billingCycle.findUnique({ where: { id: data.billingCycleId } });
+      if (!billingCycle) throw new Error("Billing cycle not found");
+
+      let interval: Stripe.PriceCreateParams.Recurring.Interval = "day";
+      let intervalCount = billingCycle.durationDay;
+
+      if (billingCycle.durationDay === 365 || billingCycle.durationDay === 366) {
+        interval = "year";
+        intervalCount = 1;
+      } else if (billingCycle.durationDay % 30 === 0) {
+        interval = "month";
+        intervalCount = billingCycle.durationDay / 30;
+      } else if (billingCycle.durationDay % 7 === 0) {
+        interval = "week";
+        intervalCount = billingCycle.durationDay / 7;
+      }
+
       const product = await this.stripe.products.create({
-        name: plan.name,
+        name: `${plan.name} - ${billingCycle.name}`,
       });
 
       const price = await this.stripe.prices.create({
         product: product.id,
-        unit_amount: data.price * 100,
+        unit_amount: formatDatabaseAmountToStripe(data.price, data.currency),
         currency: data.currency,
-        recurring: { interval: "month" }, 
+        recurring: { 
+          interval: interval,
+          interval_count: intervalCount
+        }, 
       });
 
       return this.prisma.pricingOption.create({
@@ -74,7 +95,7 @@ export class PricingService {
 
       const price = await this.stripe.prices.create({
         product: product.id,
-        unit_amount: data.price * 100,
+        unit_amount: formatDatabaseAmountToStripe(data.price, data.currency),
         currency: data.currency,
       });
 

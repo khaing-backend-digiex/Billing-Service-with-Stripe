@@ -1,17 +1,18 @@
 import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
 import {
-  InvoiceStatus,
-  SubscriptionStatus,
   CreditTransactionType,
   ReferenceType,
   SubscriptionEventType,
-  PaymentProvider,
-  PaymentStatus,
 } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { PricingService } from "../../../pricing/pricing.service";
+import { PaymentProvider, SubscriptionStatus, InvoiceStatus, PaymentStatus } from "@prisma/client";
+import { PLAN_CODES } from "../../../common/constants/plan.constants";
+import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
+import { addCalendarMonths } from "../../../common/utils/date.util";
+import { json } from "stream/consumers";
 
 @Injectable()
 export class InvoicePaidStrategy implements WebhookStrategy {
@@ -30,24 +31,43 @@ export class InvoicePaidStrategy implements WebhookStrategy {
   async handle(event: Stripe.Event): Promise<void> {
     const stripeInvoice = event.data.object as Stripe.Invoice;
     this.logger.log(`invoice.paid: ${stripeInvoice.id}`);
-
-    const stripeSubscriptionId =
+    this.logger.log('Invoice details:', JSON.stringify(stripeInvoice, null, 2));
+    let stripeSubscriptionId =
       typeof stripeInvoice.subscription === "string"
         ? stripeInvoice.subscription
         : stripeInvoice.subscription?.id ?? null;
+
+    if (!stripeSubscriptionId) {
+      stripeSubscriptionId = (stripeInvoice as any).parent?.subscription_details?.subscription ?? null;
+    }
+
+    if (!stripeSubscriptionId && stripeInvoice.lines?.data?.length) {
+      const line = stripeInvoice.lines.data[0] as any;
+      stripeSubscriptionId = line?.subscription ?? line?.parent?.subscription_item_details?.subscription ?? null;
+    }
 
     if (!stripeSubscriptionId) {
       this.logger.log(`Invoice ${stripeInvoice.id} has no linked subscription, skipping`);
       return;
     }
 
-    // Idempotency: kiểm tra Invoice local
-    const invoice = await this.prisma.invoice.findFirst({
+    // Idempotency: kiểm tra Invoice local, có retry nhẹ nếu invoice.created đến trễ
+    let invoice = await this.prisma.invoice.findFirst({
       where: { providerInvoiceId: stripeInvoice.id },
     });
 
+    let invoiceRetries = 0;
+    while (!invoice && invoiceRetries < 5) {
+      this.logger.warn(`Invoice ${stripeInvoice.id} not found locally. Waiting for invoice.created...`);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      invoice = await this.prisma.invoice.findFirst({
+        where: { providerInvoiceId: stripeInvoice.id },
+      });
+      invoiceRetries++;
+    }
+
     if (!invoice) {
-      this.logger.error(`No local invoice found for Stripe invoice ${stripeInvoice.id}`);
+      this.logger.error(`No local invoice found for Stripe invoice ${stripeInvoice.id} after retries`);
       return;
     }
 
@@ -56,18 +76,50 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       return;
     }
 
-    const subscription = await this.prisma.subscription.findFirst({
+    let subscription = await this.prisma.subscription.findFirst({
       where: { providerSubscriptionId: stripeSubscriptionId },
     });
+    this.logger.log(`Found subscription ${subscription} for Stripe subscription ${stripeSubscriptionId}`);
+    let subRetries = 0;
+    this.logger.log(`Checking for subscription ${subRetries} for Stripe subscription ${stripeSubscriptionId}`);
+    while (!subscription && subRetries < 5) {
+      this.logger.warn(`Subscription ${stripeSubscriptionId} not found locally. Waiting for customer.subscription.created...`);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      subscription = await this.prisma.subscription.findFirst({
+        where: { providerSubscriptionId: stripeSubscriptionId },
+      });
+      subRetries++;
+    }
 
     if (!subscription) {
-      this.logger.error(`No local subscription found for Stripe subscription ${stripeSubscriptionId}`);
+      this.logger.error(`No local subscription found for Stripe subscription ${stripeSubscriptionId} after retries`);
       return;
     }
 
-    const priceId = stripeInvoice.lines.data[0]?.price?.id;
+    const lineToUse = stripeInvoice.lines?.data?.find(line => line.type === 'subscription') || stripeInvoice.lines?.data?.[0];
+
+    const price = lineToUse?.price;
+    let priceId = typeof price === 'string' ? price : price?.id;
+
     if (!priceId) {
-      this.logger.error(`No price ID in invoice ${stripeInvoice.id} lines`);
+      priceId = (lineToUse as any)?.plan?.id;
+    }
+
+    if (!priceId) {
+      priceId = (lineToUse as any)?.pricing?.price_details?.price;
+    }
+
+    if (!priceId) {
+      this.logger.warn(`No price ID found in invoice lines. Falling back to subscription's current pricing option.`);
+      const currentPricingOption = await this.prisma.pricingOption.findUnique({
+        where: { id: subscription.pricingOptionId },
+        select: { providerPriceId: true },
+      });
+      priceId = currentPricingOption?.providerPriceId ?? undefined;
+    }
+
+    if (!priceId) {
+      this.logger.error(`No price ID in invoice ${stripeInvoice.id} lines and no fallback available`);
       return;
     }
 
@@ -80,9 +132,8 @@ export class InvoicePaidStrategy implements WebhookStrategy {
     const plan = pricingOption.plan;
     const periodStart = new Date(stripeInvoice.period_start * 1000);
     const periodEnd = new Date(stripeInvoice.period_end * 1000);
-    const nextCreditResetAt = new Date(
-      periodStart.getTime() + plan.resetIntervalDay * 86_400_000,
-    );
+    const resetMonths = Math.max(1, Math.round(plan.resetIntervalDay / 30));
+    const nextCreditResetAt = addCalendarMonths(periodStart, resetMonths);
 
     const isInitial = stripeInvoice.billing_reason === "subscription_create";
     const eventType = isInitial ? SubscriptionEventType.CREATED : SubscriptionEventType.RENEWED;
@@ -94,6 +145,7 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       typeof stripeInvoice.payment_intent === "string"
         ? stripeInvoice.payment_intent
         : (stripeInvoice.payment_intent as any)?.id ?? null;
+
 
     await this.prisma.$transaction(async (tx) => {
       await tx.invoice.update({
@@ -113,15 +165,18 @@ export class InvoicePaidStrategy implements WebhookStrategy {
             invoiceId: invoice.id,
             provider: PaymentProvider.STRIPE,
             providerPaymentId: paymentIntentId,
-            amount: stripeInvoice.amount_paid / 100,
+            amount: formatStripeAmountToDatabase(stripeInvoice.amount_paid, stripeInvoice.currency),
             currency: stripeInvoice.currency,
             status: PaymentStatus.SUCCEEDED,
             paidAt: new Date(),
           },
-          update: {},
+          update: { status: PaymentStatus.SUCCEEDED, paidAt: new Date() },
         });
       }
 
+      this.logger.log(
+        `Invoice ${invoice.id} marked as PAID, subscription ${subscription.id} updated to ACTIVE, credits granted: +${plan.renewalCredits}`,
+      );
       await tx.subscription.update({
         where: { id: subscription.id },
         data: {
@@ -133,6 +188,9 @@ export class InvoicePaidStrategy implements WebhookStrategy {
           nextCreditResetAt,
         },
       });
+      this.logger.log(
+        `Subscription ${subscription.id} updated: status=ACTIVE, currentPeriodStart=${periodStart.toISOString()}, currentPeriodEnd=${periodEnd.toISOString()}, subscriptionCreditsRemaining=${plan.renewalCredits}, nextCreditResetAt=${nextCreditResetAt.toISOString()}`,
+      );
 
       await tx.creditTransaction.create({
         data: {
@@ -158,10 +216,10 @@ export class InvoicePaidStrategy implements WebhookStrategy {
           },
         },
       });
-    });
 
-    this.logger.log(
-      `Credits granted: subscription=${subscription.id} +${plan.renewalCredits} (${plan.name}, ${stripeInvoice.billing_reason})`,
-    );
+      this.logger.log(
+        `Credits granted: subscription=${subscription.id} +${plan.renewalCredits} (${plan.name}, ${stripeInvoice.billing_reason})`,
+      );
+    })
   }
 }

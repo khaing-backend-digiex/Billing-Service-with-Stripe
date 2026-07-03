@@ -15,7 +15,7 @@ import {
 } from "@nestjs/swagger";
 import { PaymentProvider } from "@prisma/client";
 import { PaymentsService } from "./payments.service";
-import { CreateCheckoutDto } from "./dto/create-checkout.dto";
+import { CreateCheckoutDto } from "../payments/dto/create-checkout.dto";
 import { CreatePaymentIntentDto } from "./dto/create-payment-intent.dto";
 import { CreateCustomerDto } from "./dto/create-customer.dto";
 import { CancelSubscriptionDto } from "./dto/cancel-subscription.dto";
@@ -172,11 +172,7 @@ export class PaymentsController {
       provider,
     );
 
-    await this.prisma.subscription.update({
-      where: { id: subscription.id },
-      data: { autoRenew: false },
-    });
-
     return new ApiResponse(HttpStatus.OK, "Subscription will cancel at period end", null);
   }
 }
+

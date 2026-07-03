@@ -3,6 +3,7 @@ import Stripe from "stripe";
 import { InvoiceStatus, PaymentProvider } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
+import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
 
 const STRIPE_INVOICE_STATUS_MAP: Record<string, InvoiceStatus> = {
   draft: InvoiceStatus.DRAFT,
@@ -27,10 +28,19 @@ export class InvoiceCreatedStrategy implements WebhookStrategy {
     const stripeInvoice = event.data.object as Stripe.Invoice;
     this.logger.log(`invoice.created: ${stripeInvoice.id}`);
 
-    const stripeSubscriptionId =
+    let stripeSubscriptionId =
       typeof stripeInvoice.subscription === "string"
         ? stripeInvoice.subscription
         : stripeInvoice.subscription?.id ?? null;
+
+    if (!stripeSubscriptionId) {
+      stripeSubscriptionId = (stripeInvoice as any).parent?.subscription_details?.subscription ?? null;
+    }
+
+    if (!stripeSubscriptionId && stripeInvoice.lines?.data?.length) {
+      const line = stripeInvoice.lines.data[0] as any;
+      stripeSubscriptionId = line?.subscription ?? line?.parent?.subscription_item_details?.subscription ?? null;
+    }
 
     if (!stripeSubscriptionId) {
       this.logger.log(`Invoice ${stripeInvoice.id} has no linked subscription, skipping`);
@@ -46,17 +56,31 @@ export class InvoiceCreatedStrategy implements WebhookStrategy {
       return;
     }
 
-    const subscription = await this.prisma.subscription.findFirst({
+    let subscription = await this.prisma.subscription.findFirst({
       where: { providerSubscriptionId: stripeSubscriptionId },
     });
 
+    let subRetries = 0;
+    while (!subscription && subRetries < 5) {
+      this.logger.warn(`Subscription ${stripeSubscriptionId} not found locally. Waiting for customer.subscription.created...`);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      subscription = await this.prisma.subscription.findFirst({
+        where: { providerSubscriptionId: stripeSubscriptionId },
+      });
+      subRetries++;
+    }
+
     if (!subscription) {
-      this.logger.error(`No local subscription found for Stripe subscription ${stripeSubscriptionId}`);
+      this.logger.error(`No local subscription found for Stripe subscription ${stripeSubscriptionId} after retries`);
       return;
     }
 
-    const status = STRIPE_INVOICE_STATUS_MAP[stripeInvoice.status ?? "draft"] ?? InvoiceStatus.DRAFT;
-    const amount = stripeInvoice.amount_due / 100;
+    let status = STRIPE_INVOICE_STATUS_MAP[stripeInvoice.status ?? "draft"] ?? InvoiceStatus.DRAFT;
+    if (status === InvoiceStatus.PAID) {
+      status = InvoiceStatus.OPEN;
+    }
+    this.logger.log(`Mapping Stripe invoice status '${stripeInvoice.status}' to local status '${status}'`);
+    const amount = formatStripeAmountToDatabase(stripeInvoice.amount_due, stripeInvoice.currency);
     const dueAt = stripeInvoice.due_date
       ? new Date(stripeInvoice.due_date * 1000)
       : new Date(stripeInvoice.period_end * 1000);

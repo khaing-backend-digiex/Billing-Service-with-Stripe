@@ -7,10 +7,12 @@ import {
   SubscriptionStatus,
   SubscriptionEventType,
   PaymentProvider,
+  PaymentStatus,
 } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { StripeService } from "../../stripe.service";
+import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
 
 // Business rule: tối đa 3 lần retry trong 3 ngày. attempt_count của Stripe
 // tính cả lần charge đầu tiên → retry đã dùng = attempt_count - 1.
@@ -28,7 +30,7 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
     private readonly prisma: PrismaService,
     private readonly stripeService: StripeService,
   ) {}
-  private readonly invoicePaymentFailed = "invoice.payment_failed"
+  private readonly invoicePaymentFailed = "invoice.payment_failed";
   canHandle(eventType: string): boolean {
     return eventType === this.invoicePaymentFailed;
   }
@@ -37,10 +39,24 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
     const stripeInvoice = event.data.object as Stripe.Invoice;
     this.logger.log(`invoice.payment_failed: ${stripeInvoice.id} (attempt #${stripeInvoice.attempt_count})`);
 
-    const stripeSubscriptionId =
+    let stripeSubscriptionId =
       typeof stripeInvoice.subscription === "string"
         ? stripeInvoice.subscription
         : stripeInvoice.subscription?.id ?? null;
+
+    if (!stripeSubscriptionId) {
+      stripeSubscriptionId = (stripeInvoice as any).parent?.subscription_details?.subscription ?? null;
+    }
+
+    if (!stripeSubscriptionId && stripeInvoice.lines?.data?.length) {
+      const line = stripeInvoice.lines.data[0] as any;
+      stripeSubscriptionId = line?.subscription ?? line?.parent?.subscription_item_details?.subscription ?? null;
+    }
+
+    const paymentIntentId =
+      typeof stripeInvoice.payment_intent === "string"
+        ? stripeInvoice.payment_intent
+        : (stripeInvoice.payment_intent as any)?.id ?? null;
 
     const result = await this.prisma.$transaction(async (tx) => {
       const subscription = stripeSubscriptionId
@@ -68,7 +84,7 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
             subscriptionId: subscription.id,
             provider: PaymentProvider.STRIPE,
             providerInvoiceId: stripeInvoice.id,
-            amount: stripeInvoice.amount_due / 100,
+            amount: formatStripeAmountToDatabase(stripeInvoice.amount_due, stripeInvoice.currency),
             currency: stripeInvoice.currency,
             billingReason: stripeInvoice.billing_reason ?? null,
             dueAt: stripeInvoice.due_date
@@ -90,6 +106,28 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
         invoice = await tx.invoice.update({
           where: { id: invoice.id },
           data: retryData,
+        });
+      }
+
+      // Ghi nhận payment FAILED để lịch sử thanh toán đầy đủ; upsert vì
+      // Stripe có thể gửi lại event này khi retry.
+      if (paymentIntentId && subscription) {
+        await tx.payment.upsert({
+          where: { providerPaymentId: paymentIntentId },
+          create: {
+            userId: subscription.userId,
+            invoiceId: invoice.id,
+            provider: PaymentProvider.STRIPE,
+            providerPaymentId: paymentIntentId,
+            amount: formatStripeAmountToDatabase(stripeInvoice.amount_due, stripeInvoice.currency),
+            currency: stripeInvoice.currency,
+            status: PaymentStatus.FAILED,
+            paidAt: null,
+          },
+          update: {
+            status: PaymentStatus.FAILED,
+            paidAt: null,
+          },
         });
       }
 

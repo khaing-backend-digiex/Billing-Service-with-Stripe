@@ -30,9 +30,9 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
     private readonly freePlanDowngrade: FreePlanDowngradeService,
   ) { }
 
-  private readonly customerSubcriptionUpdated = "customer.subscription.updated";
+  private readonly customerSubscriptionUpdated = "customer.subscription.updated";
   canHandle(eventType: string): boolean {
-    return eventType === this.customerSubcriptionUpdated;
+    return eventType === this.customerSubscriptionUpdated;
   }
 
   async handle(event: Stripe.Event): Promise<void> {
@@ -58,17 +58,35 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      const subscription = await tx.subscription.findFirst({
+      let subscription = await tx.subscription.findFirst({
         where: { providerSubscriptionId: sub.id },
         include: { pricingOption: true },
       });
 
       if (!subscription) {
+        // Chờ 2 giây để nhường đường cho sự kiện created chạy xong (Race condition fix)
+        this.logger.warn(`Subscription ${sub.id} not found, waiting 2s for created event...`);
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        subscription = await tx.subscription.findFirst({
+          where: { providerSubscriptionId: sub.id },
+          include: { pricingOption: true },
+        });
+      }
+
+      if (!subscription) {
         this.logger.error(`No local subscription found for Stripe subscription ${sub.id}`);
-        return;
+        throw new Error(`Race condition: subscription ${sub.id} not found yet.`);
       }
 
       const previousStatus = subscription.status;
+
+      const currentPeriodStart = sub.current_period_start ? new Date(sub.current_period_start * 1000) : new Date();
+      let currentPeriodEnd = sub.current_period_end ? new Date(sub.current_period_end * 1000) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+      if (newStatus === SubscriptionStatus.CANCELLED && sub.canceled_at) {
+        currentPeriodEnd = new Date(sub.canceled_at * 1000);
+      }
+
 
       // Plan switch in-place (vd: đổi plan qua billing portal) → sync pricing
       // + ghi lịch sử UPGRADED/DOWNGRADED
@@ -107,6 +125,9 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
           ...(sub.trial_end !== null && sub.trial_end !== undefined
             ? { trialEnd: new Date(sub.trial_end * 1000) }
             : {}),
+          cancelledAt: sub.cancel_at ? new Date(sub.cancel_at * 1000) : null,
+          currentPeriodStart: currentPeriodStart,
+          currentPeriodEnd: currentPeriodEnd,
         },
       });
 

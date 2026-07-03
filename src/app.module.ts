@@ -12,6 +12,7 @@ import { HealthController } from "./health/health.controller";
 import { JwtAuthGuard } from "./common/guards/jwt-auth.guard";
 import { PricingModule } from "./pricing/pricing.module";
 import { CreditsModule } from "./credits/credits.module";
+import { CronModule } from "./cron/cron.module";
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { CreditsModule } from "./credits/credits.module";
     PaymentsModule,
     PricingModule,
     CreditsModule,
+    CronModule,
   ],
   controllers: [HealthController],
   providers: [

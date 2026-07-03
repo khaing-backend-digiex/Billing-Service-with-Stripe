@@ -28,7 +28,7 @@ export class FreePlanDowngradeService {
     stripeSub: Stripe.Subscription,
     reason: string,
   ): Promise<void> {
-    const freePriceId = this.stripeService.getFreePriceId();
+    const freePriceId = await this.stripeService.getFreePriceId();
     if (!freePriceId) return; // ensureFreeSubscription sẽ warn, nhưng khỏi gọi Stripe vô ích
 
     // Subscription vừa kết thúc đã là Free plan → không downgrade (tránh loop resubscribe)
