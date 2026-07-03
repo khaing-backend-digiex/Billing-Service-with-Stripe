@@ -60,6 +60,15 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
       this.logger.log(`Subscription ${subscription.id} already CANCELLED`);
     }
 
+    // Nếu subscription trong DB đã trỏ đến một providerSubscriptionId khác (upgrade),
+    // nghĩa là user đã có gói mới → không cần downgrade về free.
+    if (subscription.providerSubscriptionId !== sub.id) {
+      this.logger.log(
+        `Subscription ${subscription.id} already points to ${subscription.providerSubscriptionId} (not ${sub.id}) — skipping downgrade (upgrade detected)`,
+      );
+      return;
+    }
+
     await this.freePlanDowngrade.downgradeToFree(
       subscription,
       sub,

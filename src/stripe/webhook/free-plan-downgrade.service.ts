@@ -44,6 +44,21 @@ export class FreePlanDowngradeService {
       return;
     }
 
+    // Idempotent: đã có event DOWNGRADED cho subscription này thì skip
+    // (tránh duplicate khi Stripe retry webhook)
+    const existingDowngrade = await this.prisma.subscriptionEvent.findFirst({
+      where: {
+        subscriptionId: subscription.id,
+        type: SubscriptionEventType.DOWNGRADED,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (existingDowngrade) {
+      this.logger.log(`Subscription ${subscription.id} already has DOWNGRADED event — skipping`);
+      return;
+    }
+
     // Idempotent: đã có free sub active thì trả về null → không ghi duplicate event.
     // Nếu Stripe call fail thì exception nổi lên → webhook không được đánh dấu
     // processed → Stripe retry và bước downgrade được chạy lại.

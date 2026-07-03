@@ -83,15 +83,15 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
       where: { userId: user.id },
     });
 
-    if (
-      existingSubscription && 
-      existingSubscription.providerSubscriptionId && 
+    const oldProviderSubId = (
+      existingSubscription &&
+      existingSubscription.providerSubscriptionId &&
       existingSubscription.providerSubscriptionId !== sub.id
-    ) {
-      this.logger.log(`Cancelling old subscription ${existingSubscription.providerSubscriptionId} as new one ${sub.id} was created.`);
-      await this.stripeService.cancelSubscription(existingSubscription.providerSubscriptionId);
-    }
+    ) ? existingSubscription.providerSubscriptionId : null;
 
+    // Upsert TRƯỚC để DB trỏ sang sub mới ngay lập tức.
+    // Khi subscription.deleted fire cho sub cũ, nó sẽ detect upgrade
+    // (providerSubscriptionId khác) và skip downgrade.
     await this.prisma.subscription.upsert({
       where: { userId: user.id },
       create: {
@@ -120,5 +120,11 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
     });
 
     this.logger.log(`Subscription synced for user ${user.id} (${sub.id})`);
+
+    // Cancel sub cũ SAU khi DB đã update xong
+    if (oldProviderSubId) {
+      this.logger.log(`Cancelling old subscription ${oldProviderSubId} as new one ${sub.id} was created.`);
+      await this.stripeService.cancelSubscription(oldProviderSubId);
+    }
   }
 }

@@ -68,7 +68,7 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
             subscriptionId: subscription.id,
             provider: PaymentProvider.STRIPE,
             providerInvoiceId: stripeInvoice.id,
-            amount: stripeInvoice.amount_due / 100,
+            amount: formatStripeAmountToDatabase(stripeInvoice.amount_due, stripeInvoice.currency),
             currency: stripeInvoice.currency,
             billingReason: stripeInvoice.billing_reason ?? null,
             dueAt: stripeInvoice.due_date
@@ -77,69 +77,37 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
             ...retryData,
           },
         });
-      } else {
-        const invoice = await tx.invoice.findFirst({
-          where: { providerInvoiceId: stripeInvoice.id },
-        });
 
-        if (!invoice) {
-          this.logger.error(`No local invoice found for Stripe invoice ${stripeInvoice.id}`);
-          return;
-        }
-
-        await tx.invoice.update({
-          where: { id: invoice.id },
-          data: {
-            status: InvoiceStatus.OPEN,
-            retryCount: stripeInvoice.attempt_count,
-            nextRetryAt: stripeInvoice.next_payment_attempt
-              ? new Date(stripeInvoice.next_payment_attempt * 1000)
-              : null,
-          },
-        });
-
-        if (paymentIntentId && stripeSubscriptionId) {
-          const tempSub = await tx.subscription.findFirst({
-            where: { providerSubscriptionId: stripeSubscriptionId },
-            select: { userId: true },
+        // Ghi nhận Payment record nếu có paymentIntentId
+        if (paymentIntentId) {
+          await tx.payment.upsert({
+            where: { providerPaymentId: paymentIntentId },
+            create: {
+              userId: subscription.userId,
+              invoiceId: (await tx.invoice.findFirst({ where: { providerInvoiceId: stripeInvoice.id } }))?.id ?? undefined,
+              provider: PaymentProvider.STRIPE,
+              providerPaymentId: paymentIntentId,
+              amount: formatStripeAmountToDatabase(stripeInvoice.amount_due, stripeInvoice.currency),
+              currency: stripeInvoice.currency,
+              status: PaymentStatus.FAILED,
+              paidAt: null,
+            },
+            update: {
+              status: PaymentStatus.FAILED,
+              paidAt: null,
+            },
           });
-
-          if (tempSub) {
-            await tx.payment.upsert({
-              where: { providerPaymentId: paymentIntentId },
-              create: {
-                userId: tempSub.userId,
-                invoiceId: invoice.id,
-                provider: PaymentProvider.STRIPE,
-                providerPaymentId: paymentIntentId,
-                amount: formatStripeAmountToDatabase(stripeInvoice.amount_due, stripeInvoice.currency),
-                currency: stripeInvoice.currency,
-                status: PaymentStatus.FAILED,
-                paidAt: null,
-              },
-              update: {
-                status: PaymentStatus.FAILED,
-                paidAt: null,
-              },
-            });
-          }
         }
 
-        if (!stripeSubscriptionId) return;
-
-        if (!subscription) {
-          this.logger.error(`No local subscription found for Stripe subscription ${stripeSubscriptionId}`);
-          return;
-        }
-
+        // Update subscription status to PAST_DUE
         await tx.subscription.update({
-          where: { id: stripeSubscriptionId },
+          where: { id: subscription.id },
           data: { status: SubscriptionStatus.PAST_DUE },
         });
 
         await tx.subscriptionEvent.create({
           data: {
-            subscriptionId: stripeSubscriptionId,
+            subscriptionId: subscription.id,
             type: SubscriptionEventType.PAYMENT_FAILED,
             metadata: {
               stripeInvoiceId: stripeInvoice.id,
@@ -147,6 +115,21 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
               nextPaymentAttempt: stripeInvoice.next_payment_attempt ?? null,
             },
           },
+        });
+      } else {
+        // Không tìm thấy subscription local — chỉ update invoice nếu có
+        const invoice = await tx.invoice.findFirst({
+          where: { providerInvoiceId: stripeInvoice.id },
+        });
+
+        if (!invoice) {
+          this.logger.error(`No local invoice or subscription found for Stripe invoice ${stripeInvoice.id}`);
+          return;
+        }
+
+        await tx.invoice.update({
+          where: { id: invoice.id },
+          data: retryData,
         });
       }
     });

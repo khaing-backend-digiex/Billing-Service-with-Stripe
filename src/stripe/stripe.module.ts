@@ -14,7 +14,7 @@ import { CustomerSubscriptionUpdatedStrategy } from "./webhook/strategies/custom
 import { CustomerSubscriptionDeletedStrategy } from "./webhook/strategies/customer.subscription.deleted";
 import { WebhookStrategyFactory } from "./webhook/strategies/webhook-strategy.factory";
 import { FreePlanDowngradeService } from "./webhook/free-plan-downgrade.service";
-import { StripeController } from "./stripe.controller";
+
 
 @Module({
   imports: [forwardRef(() => UsersModule), PricingModule],

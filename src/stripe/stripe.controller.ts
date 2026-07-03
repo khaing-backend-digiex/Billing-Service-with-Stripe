@@ -65,10 +65,10 @@ export class StripeController {
     @Body() dto: CreateSubscriptionCheckoutDto,
   ) {
     const user = await this.usersService.findById(userId);
-    // const currentSubscription = await this.prisma.subscription.findUnique({
-    //   where: { userId },
-    //   include: { pricingOption: true },
-    // });
+    const currentSubscription = await this.prisma.subscription.findUnique({
+      where: { userId },
+      include: { pricingOption: true },
+    });
 
     if (currentSubscription && currentSubscription.pricingOption) {
       // Cho phép đăng ký lại nếu gói hiện tại đã bị HUỶ hoặc HẾT HẠN
