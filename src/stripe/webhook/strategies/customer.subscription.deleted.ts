@@ -1,6 +1,11 @@
 import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
-import { SubscriptionStatus, SubscriptionEventType } from "@prisma/client";
+import {
+  SubscriptionStatus,
+  SubscriptionEventType,
+  CreditTransactionType,
+  ReferenceType,
+} from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { FreePlanDowngradeService } from "../free-plan-downgrade.service";
@@ -53,6 +58,21 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
             metadata: { stripeSubscriptionId: sub.id },
           },
         }),
+        // History phải đầy đủ: credit bị thu hồi cũng là 1 biến động số dư
+        ...(subscription.subscriptionCreditsRemaining > 0
+          ? [
+              this.prisma.creditTransaction.create({
+                data: {
+                  userId: subscription.userId,
+                  type: CreditTransactionType.EXPIRATION,
+                  amount: -subscription.subscriptionCreditsRemaining,
+                  description: "Credits forfeited – subscription cancelled",
+                  referenceType: ReferenceType.SUBSCRIPTION,
+                  referenceId: subscription.id,
+                },
+              }),
+            ]
+          : []),
       ]);
 
       this.logger.log(`Subscription ${subscription.id} cancelled`);

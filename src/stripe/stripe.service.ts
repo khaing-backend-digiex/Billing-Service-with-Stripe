@@ -233,4 +233,29 @@ export class StripeService {
       cancel_at_period_end: true,
     });
   }
+
+  /**
+   * Hủy subscription NGAY LẬP TỨC (không chờ hết kỳ). Idempotent: đã canceled
+   * hoặc không tồn tại thì coi như xong — webhook retry không bị lỗi lặp.
+   */
+  async cancelSubscriptionNow(subscriptionId: string): Promise<void> {
+    let subscription: Stripe.Subscription;
+    try {
+      subscription = await this.stripe.subscriptions.retrieve(subscriptionId);
+    } catch (error: any) {
+      if (error?.code === "resource_missing") {
+        this.logger.log(`Subscription ${subscriptionId} not found on Stripe – nothing to cancel`);
+        return;
+      }
+      throw error;
+    }
+
+    if (subscription.status === "canceled") {
+      this.logger.log(`Subscription ${subscriptionId} already canceled on Stripe`);
+      return;
+    }
+
+    await this.stripe.subscriptions.cancel(subscriptionId);
+    this.logger.log(`✅ Cancelled Stripe subscription ${subscriptionId} immediately`);
+  }
 }

@@ -1,9 +1,19 @@
 import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
-import { SubscriptionStatus, PaymentProvider } from "@prisma/client";
+import { SubscriptionStatus, SubscriptionEventType, PaymentProvider } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { PricingService } from "../../../pricing/pricing.service";
+import { StripeService } from "../../stripe.service";
+
+// Trạng thái "đang sống": plan switch từ các trạng thái này mới ghi event
+// UPGRADED/DOWNGRADED. EXPIRED/CANCELLED → Free đã được FreePlanDowngradeService
+// ghi DOWNGRADED rồi, không ghi trùng.
+const LIVE_STATUSES: SubscriptionStatus[] = [
+  SubscriptionStatus.ACTIVE,
+  SubscriptionStatus.TRIALING,
+  SubscriptionStatus.PAST_DUE,
+];
 
 const STRIPE_STATUS_MAP: Record<string, SubscriptionStatus> = {
   active: SubscriptionStatus.ACTIVE,
@@ -25,6 +35,7 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly pricingService: PricingService,
+    private readonly stripeService: StripeService,
   ) {}
 
   private readonly customerSubscriptionCreated =
@@ -72,8 +83,13 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
       : null;
     const trialEnd = sub.trial_end ? new Date(sub.trial_end * 1000) : null;
 
+    const existing = await this.prisma.subscription.findUnique({
+      where: { userId: user.id },
+      include: { pricingOption: true },
+    });
+
     // credits = 0, sẽ được cấp đúng trong invoice.paid
-    await this.prisma.subscription.upsert({
+    const localSubscription = await this.prisma.subscription.upsert({
       where: { userId: user.id },
       create: {
         userId: user.id,
@@ -99,6 +115,42 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
         cancelledAt: null,
       },
     });
+
+    // Business rule: mỗi user chỉ có 1 subscription active. Row local đã trỏ
+    // sang sub mới (upsert ở trên) rồi mới hủy sub Stripe cũ — nhờ đó webhook
+    // deleted của sub cũ không tìm thấy row local → không kích hoạt downgrade.
+    if (
+      existing &&
+      existing.providerSubscriptionId &&
+      existing.providerSubscriptionId !== sub.id
+    ) {
+      await this.stripeService.cancelSubscriptionNow(existing.providerSubscriptionId);
+    }
+
+    // Plan switch từ subscription đang sống → ghi lịch sử UPGRADED/DOWNGRADED
+    if (
+      existing &&
+      existing.pricingOptionId !== pricingOption.id &&
+      LIVE_STATUSES.includes(existing.status)
+    ) {
+      const isUpgrade = Number(pricingOption.price) > Number(existing.pricingOption.price);
+      await this.prisma.subscriptionEvent.create({
+        data: {
+          subscriptionId: localSubscription.id,
+          type: isUpgrade ? SubscriptionEventType.UPGRADED : SubscriptionEventType.DOWNGRADED,
+          oldPricingOptionId: existing.pricingOptionId,
+          newPricingOptionId: pricingOption.id,
+          metadata: {
+            oldStripeSubscriptionId: existing.providerSubscriptionId,
+            newStripeSubscriptionId: sub.id,
+          },
+        },
+      });
+      this.logger.log(
+        `Plan ${isUpgrade ? "upgraded" : "downgraded"} for user ${user.id}: ` +
+          `${existing.pricingOption.name} → ${pricingOption.name}`,
+      );
+    }
 
     this.logger.log(`Subscription synced for user ${user.id} (${sub.id})`);
   }

@@ -1,6 +1,11 @@
 import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
-import { SubscriptionStatus, SubscriptionEventType } from "@prisma/client";
+import {
+  SubscriptionStatus,
+  SubscriptionEventType,
+  CreditTransactionType,
+  ReferenceType,
+} from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { FreePlanDowngradeService } from "../free-plan-downgrade.service";
@@ -55,6 +60,7 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
     await this.prisma.$transaction(async (tx) => {
       const subscription = await tx.subscription.findFirst({
         where: { providerSubscriptionId: sub.id },
+        include: { pricingOption: true },
       });
 
       if (!subscription) {
@@ -64,10 +70,40 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
 
       const previousStatus = subscription.status;
 
+      // Plan switch in-place (vd: đổi plan qua billing portal) → sync pricing
+      // + ghi lịch sử UPGRADED/DOWNGRADED
+      const stripePriceId = sub.items?.data[0]?.price?.id;
+      let newPricingOptionId: string | undefined;
+      if (stripePriceId && stripePriceId !== subscription.pricingOption.providerPriceId) {
+        const newOption = await tx.pricingOption.findFirst({
+          where: { providerPriceId: stripePriceId },
+        });
+        if (newOption) {
+          newPricingOptionId = newOption.id;
+          const isUpgrade = Number(newOption.price) > Number(subscription.pricingOption.price);
+          await tx.subscriptionEvent.create({
+            data: {
+              subscriptionId: subscription.id,
+              type: isUpgrade ? SubscriptionEventType.UPGRADED : SubscriptionEventType.DOWNGRADED,
+              oldPricingOptionId: subscription.pricingOptionId,
+              newPricingOptionId: newOption.id,
+              metadata: { stripeSubscriptionId: sub.id },
+            },
+          });
+          this.logger.log(
+            `Plan ${isUpgrade ? "upgraded" : "downgraded"} in-place: ` +
+              `${subscription.pricingOption.name} → ${newOption.name} (${sub.id})`,
+          );
+        } else {
+          this.logger.error(`No pricing option found for priceId ${stripePriceId} – keeping old plan`);
+        }
+      }
+
       await tx.subscription.update({
         where: { id: subscription.id },
         data: {
           status: newStatus,
+          ...(newPricingOptionId ? { pricingOptionId: newPricingOptionId } : {}),
           ...(sub.trial_end !== null && sub.trial_end !== undefined
             ? { trialEnd: new Date(sub.trial_end * 1000) }
             : {}),
@@ -121,6 +157,21 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
             },
           },
         }),
+        // History phải đầy đủ: credit bị thu hồi cũng là 1 biến động số dư
+        ...(subscription.subscriptionCreditsRemaining > 0
+          ? [
+              this.prisma.creditTransaction.create({
+                data: {
+                  userId: subscription.userId,
+                  type: CreditTransactionType.EXPIRATION,
+                  amount: -subscription.subscriptionCreditsRemaining,
+                  description: "Credits forfeited – subscription expired (payment failed)",
+                  referenceType: ReferenceType.SUBSCRIPTION,
+                  referenceId: subscription.id,
+                },
+              }),
+            ]
+          : []),
       ]);
 
       this.logger.log(
