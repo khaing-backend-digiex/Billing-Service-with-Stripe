@@ -9,10 +9,8 @@ import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { PricingService } from "../../../pricing/pricing.service";
 import { PaymentProvider, SubscriptionStatus, InvoiceStatus, PaymentStatus } from "@prisma/client";
-import { PLAN_CODES } from "../../../common/constants/plan.constants";
 import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
 import { addCalendarMonths } from "../../../common/utils/date.util";
-import { json } from "stream/consumers";
 
 @Injectable()
 export class InvoicePaidStrategy implements WebhookStrategy {
@@ -31,7 +29,6 @@ export class InvoicePaidStrategy implements WebhookStrategy {
   async handle(event: Stripe.Event): Promise<void> {
     const stripeInvoice = event.data.object as Stripe.Invoice;
     this.logger.log(`invoice.paid: ${stripeInvoice.id}`);
-    this.logger.log('Invoice details:', JSON.stringify(stripeInvoice, null, 2));
     let stripeSubscriptionId =
       typeof stripeInvoice.subscription === "string"
         ? stripeInvoice.subscription
@@ -51,48 +48,42 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       return;
     }
 
-    // Idempotency: kiểm tra Invoice local, có retry nhẹ nếu invoice.created đến trễ
-    let invoice = await this.prisma.invoice.findFirst({
-      where: { providerInvoiceId: stripeInvoice.id },
+    // Subscription local phải có trước (customer.subscription.created làm các
+    // việc không thể tái tạo từ payload invoice: hủy sub cũ, plan-switch event...).
+    // Chưa có → throw để webhook trả 5xx, Stripe tự retry với backoff — event
+    // chỉ được đánh dấu processed khi strategy chạy thành công.
+    const subscription = await this.prisma.subscription.findFirst({
+      where: { providerSubscriptionId: stripeSubscriptionId },
     });
 
-    let invoiceRetries = 0;
-    while (!invoice && invoiceRetries < 5) {
-      this.logger.warn(`Invoice ${stripeInvoice.id} not found locally. Waiting for invoice.created...`);
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      invoice = await this.prisma.invoice.findFirst({
-        where: { providerInvoiceId: stripeInvoice.id },
-      });
-      invoiceRetries++;
+    if (!subscription) {
+      throw new Error(
+        `No local subscription for Stripe subscription ${stripeSubscriptionId} yet – invoice.paid ${stripeInvoice.id} will be retried by Stripe`,
+      );
     }
 
-    if (!invoice) {
-      this.logger.error(`No local invoice found for Stripe invoice ${stripeInvoice.id} after retries`);
-      return;
-    }
+    // Stripe không đảm bảo thứ tự webhook: invoice.paid có thể tới trước
+    // invoice.created → upsert từ payload thay vì chờ. invoice.created tới sau
+    // sẽ thấy row đã tồn tại và skip.
+    const invoice = await this.prisma.invoice.upsert({
+      where: { providerInvoiceId: stripeInvoice.id },
+      update: {},
+      create: {
+        subscriptionId: subscription.id,
+        provider: PaymentProvider.STRIPE,
+        providerInvoiceId: stripeInvoice.id,
+        amount: formatStripeAmountToDatabase(stripeInvoice.amount_due, stripeInvoice.currency),
+        currency: stripeInvoice.currency,
+        billingReason: stripeInvoice.billing_reason ?? null,
+        status: InvoiceStatus.OPEN,
+        dueAt: stripeInvoice.due_date
+          ? new Date(stripeInvoice.due_date * 1000)
+          : new Date(stripeInvoice.period_end * 1000),
+      },
+    });
 
     if (invoice.status === InvoiceStatus.PAID) {
       this.logger.log(`Invoice ${invoice.id} already PAID – skipping`);
-      return;
-    }
-
-    let subscription = await this.prisma.subscription.findFirst({
-      where: { providerSubscriptionId: stripeSubscriptionId },
-    });
-    this.logger.log(`Found subscription ${subscription} for Stripe subscription ${stripeSubscriptionId}`);
-    let subRetries = 0;
-    this.logger.log(`Checking for subscription ${subRetries} for Stripe subscription ${stripeSubscriptionId}`);
-    while (!subscription && subRetries < 5) {
-      this.logger.warn(`Subscription ${stripeSubscriptionId} not found locally. Waiting for customer.subscription.created...`);
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      subscription = await this.prisma.subscription.findFirst({
-        where: { providerSubscriptionId: stripeSubscriptionId },
-      });
-      subRetries++;
-    }
-
-    if (!subscription) {
-      this.logger.error(`No local subscription found for Stripe subscription ${stripeSubscriptionId} after retries`);
       return;
     }
 
@@ -148,14 +139,23 @@ export class InvoicePaidStrategy implements WebhookStrategy {
 
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.invoice.update({
-        where: { id: invoice.id },
+      // Cổng idempotency nguyên tử: chỉ delivery nào chuyển được invoice sang
+      // PAID mới được cấp credit. Check `status === PAID` phía trên là fast-path
+      // ngoài transaction — 2 delivery đồng thời vẫn có thể cùng lọt qua đó,
+      // nhưng chỉ 1 thắng updateMany này.
+      const claimed = await tx.invoice.updateMany({
+        where: { id: invoice.id, status: { not: InvoiceStatus.PAID } },
         data: {
           status: InvoiceStatus.PAID,
           billingReason: stripeInvoice.billing_reason ?? null,
           paidAt: new Date(),
         },
       });
+
+      if (claimed.count === 0) {
+        this.logger.log(`Invoice ${invoice.id} already PAID (concurrent delivery) – skipping`);
+        return;
+      }
 
       if (paymentIntentId) {
         await tx.payment.upsert({

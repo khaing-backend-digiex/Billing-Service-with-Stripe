@@ -4,8 +4,10 @@ node_modules/
 # Build output
 dist/
 
-# Environment
+# Environment (giữ lại .env.example làm template)
 .env
+.env.*
+!.env.example
 
 # IDE
 .idea/
@@ -17,17 +19,15 @@ dist/
 .DS_Store
 Thumbs.db
 
-# Debug
+# Logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+*.log
 
-# Test
+# Test artifacts (source test/ được track, chỉ ignore output)
 coverage/
 
 # Misc
 api-test.http
 test-renewal.ts
-
-test/
-prisma_gen.log

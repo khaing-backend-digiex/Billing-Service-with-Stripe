@@ -63,59 +63,56 @@ export class StripeService {
   }
 
   /**
-   * Idempotent: chỉ tạo free subscription nếu customer CHƯA có free sub đang active.
-   * Trả về subscription mới nếu vừa tạo, null nếu đã tồn tại hoặc chưa cấu hình
-   * STRIPE_FREE_PRICE_ID — nhờ đó webhook retry không tạo trùng.
+   * Idempotent: chỉ tạo free subscription nếu customer CHƯA có BẤT KỲ sub nào
+   * đang active (business rule: mỗi user 1 subscription — customer đang có
+   * paid sub thì không được cấp free đè lên, webhook của free sub mới sẽ
+   * cancel nhầm paid sub). Trả về subscription mới nếu vừa tạo, null nếu đã
+   * có sub active hoặc Free plan chưa cấu hình — nhờ đó gọi lại không tạo trùng.
+   * Stripe call fail → throw để caller retry (webhook retry / login lần sau).
    */
   async ensureFreeSubscription(customerId: string): Promise<Stripe.Subscription | null> {
     const freePriceId = await this.getFreePriceId();
     if (!freePriceId) {
-      this.logger.warn("STRIPE_FREE_PRICE_ID is not configured. Skipping free subscription.");
+      this.logger.warn("Free plan price is not configured. Skipping free subscription.");
       return null;
     }
 
     const existing = await this.stripe.subscriptions.list({
       customer: customerId,
-      price: freePriceId,
       status: "active",
       limit: 1,
     });
 
     if (existing.data.length > 0) {
-      this.logger.log(`Customer ${customerId} already has an active free subscription – skipping`);
+      this.logger.log(`Customer ${customerId} already has an active subscription – skipping free plan`);
       return null;
     }
 
     return this.subscribeToFreePlan(customerId);
   }
 
-  async subscribeToFreePlan(customerId: string): Promise<Stripe.Subscription> {
+  /**
+   * Tạo free subscription vô điều kiện — KHÔNG idempotent, caller bên ngoài
+   * nên dùng ensureFreeSubscription. Stripe fail → throw (không nuốt lỗi).
+   */
+  async subscribeToFreePlan(customerId: string): Promise<Stripe.Subscription | null> {
     const freePlan = await this.prisma.plan.findUnique({
       where: { code: PLAN_CODES.FREE },
       include: { pricingOptions: { include: { billingCycle: true } } },
     });
 
-    if (!freePlan || freePlan.pricingOptions.length === 0) {
-      this.logger.warn("Free plan not found in database. Skipping free subscription.");
-      return null as any;
+    const pricingOption = freePlan?.pricingOptions[0];
+    if (!pricingOption?.providerPriceId) {
+      this.logger.warn("Free plan not configured (missing plan or provider price). Skipping free subscription.");
+      return null;
     }
 
-    const pricingOption = freePlan.pricingOptions[0];
-    
-    let stripeSubscription;
-    if (pricingOption.providerPriceId) {
-      try {
-        stripeSubscription = await this.stripe.subscriptions.create({
-          customer: customerId,
-          items: [{ price: pricingOption.providerPriceId }],
-        });
-        this.logger.log(`✅ Subscribed customer ${customerId} to free plan (price: ${pricingOption.providerPriceId})`);
-      } catch (error) {
-        this.logger.error(`Failed to subscribe customer to free plan on Stripe: ${error}`);
-      }
-    }
-    this.logger.log(`Subscription created: ${JSON.stringify(stripeSubscription)}`);
-    return stripeSubscription as Stripe.Subscription;
+    const stripeSubscription = await this.stripe.subscriptions.create({
+      customer: customerId,
+      items: [{ price: pricingOption.providerPriceId }],
+    });
+    this.logger.log(`✅ Subscribed customer ${customerId} to free plan (price: ${pricingOption.providerPriceId})`);
+    return stripeSubscription;
   }
 
   async hasDefaultPaymentMethod(customerId: string): Promise<boolean> {

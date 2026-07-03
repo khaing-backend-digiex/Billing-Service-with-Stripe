@@ -93,68 +93,73 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
       include: { pricingOption: true },
     });
 
+    // Upsert + lịch sử plan switch phải nguyên tử: crash giữa 2 bước sẽ mất
+    // event UPGRADED/DOWNGRADED trong khi row subscription đã đổi.
     // credits = 0, sẽ được cấp đúng trong invoice.paid
-    const localSubscription = await this.prisma.subscription.upsert({
-      where: { userId: user.id },
-      create: {
-        userId: user.id,
-        pricingOptionId: pricingOption.id,
-        status,
-        currentPeriodStart,
-        currentPeriodEnd,
-        subscriptionCreditsRemaining: 0,
-        nextCreditResetAt: currentPeriodEnd,
-        trialStart,
-        trialEnd,
-        provider: PaymentProvider.STRIPE,
-        providerSubscriptionId: sub.id,
-      },
-      update: {
-        pricingOptionId: pricingOption.id,
-        status,
-        currentPeriodStart,
-        currentPeriodEnd,
-        trialStart,
-        trialEnd,
-        providerSubscriptionId: sub.id,
-        cancelledAt: null,
-      },
+    await this.prisma.$transaction(async (tx) => {
+      const localSubscription = await tx.subscription.upsert({
+        where: { userId: user.id },
+        create: {
+          userId: user.id,
+          pricingOptionId: pricingOption.id,
+          status,
+          currentPeriodStart,
+          currentPeriodEnd,
+          subscriptionCreditsRemaining: 0,
+          nextCreditResetAt: currentPeriodEnd,
+          trialStart,
+          trialEnd,
+          provider: PaymentProvider.STRIPE,
+          providerSubscriptionId: sub.id,
+        },
+        update: {
+          pricingOptionId: pricingOption.id,
+          status,
+          currentPeriodStart,
+          currentPeriodEnd,
+          trialStart,
+          trialEnd,
+          providerSubscriptionId: sub.id,
+          cancelledAt: null,
+        },
+      });
+
+      // Plan switch từ subscription đang sống → ghi lịch sử UPGRADED/DOWNGRADED
+      if (
+        existing &&
+        existing.pricingOptionId !== pricingOption.id &&
+        LIVE_STATUSES.includes(existing.status)
+      ) {
+        const isUpgrade = Number(pricingOption.price) > Number(existing.pricingOption.price);
+        await tx.subscriptionEvent.create({
+          data: {
+            subscriptionId: localSubscription.id,
+            type: isUpgrade ? SubscriptionEventType.UPGRADED : SubscriptionEventType.DOWNGRADED,
+            oldPricingOptionId: existing.pricingOptionId,
+            newPricingOptionId: pricingOption.id,
+            metadata: {
+              oldStripeSubscriptionId: existing.providerSubscriptionId,
+              newStripeSubscriptionId: sub.id,
+            },
+          },
+        });
+        this.logger.log(
+          `Plan ${isUpgrade ? "upgraded" : "downgraded"} for user ${user.id}: ` +
+            `${existing.pricingOption.name} → ${pricingOption.name}`,
+        );
+      }
     });
 
-    // Business rule: mỗi user chỉ có 1 subscription active. Row local đã trỏ
-    // sang sub mới (upsert ở trên) rồi mới hủy sub Stripe cũ — nhờ đó webhook
-    // deleted của sub cũ không tìm thấy row local → không kích hoạt downgrade.
+    // Business rule: mỗi user chỉ có 1 subscription active. Hủy sub Stripe cũ
+    // SAU khi transaction trên commit — row local đã trỏ sang sub mới nên
+    // webhook deleted của sub cũ không tìm thấy row local → không kích hoạt
+    // downgrade. Cancel fail → throw → Stripe retry event này (upsert idempotent).
     if (
       existing &&
       existing.providerSubscriptionId &&
       existing.providerSubscriptionId !== sub.id
     ) {
       await this.stripeService.cancelSubscriptionNow(existing.providerSubscriptionId);
-    }
-
-    // Plan switch từ subscription đang sống → ghi lịch sử UPGRADED/DOWNGRADED
-    if (
-      existing &&
-      existing.pricingOptionId !== pricingOption.id &&
-      LIVE_STATUSES.includes(existing.status)
-    ) {
-      const isUpgrade = Number(pricingOption.price) > Number(existing.pricingOption.price);
-      await this.prisma.subscriptionEvent.create({
-        data: {
-          subscriptionId: localSubscription.id,
-          type: isUpgrade ? SubscriptionEventType.UPGRADED : SubscriptionEventType.DOWNGRADED,
-          oldPricingOptionId: existing.pricingOptionId,
-          newPricingOptionId: pricingOption.id,
-          metadata: {
-            oldStripeSubscriptionId: existing.providerSubscriptionId,
-            newStripeSubscriptionId: sub.id,
-          },
-        },
-      });
-      this.logger.log(
-        `Plan ${isUpgrade ? "upgraded" : "downgraded"} for user ${user.id}: ` +
-          `${existing.pricingOption.name} → ${pricingOption.name}`,
-      );
     }
 
     this.logger.log(`Subscription synced for user ${user.id} (${sub.id})`);
