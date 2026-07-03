@@ -53,7 +53,43 @@ export class StripeService {
     return this.stripe.customers.retrieve(customerId);
   }
 
-  async subscribeToFreePlan(userId: number, customerId: string): Promise<Stripe.Subscription> {
+  async getFreePriceId(): Promise<string | null> {
+    // return this.configService.get<string>("STRIPE_FREE_PRICE_ID") ?? null;
+    const freePlan = await this.prisma.plan.findUnique({
+      where: { code: PLAN_CODES.FREE },
+      include: { pricingOptions: { include: { billingCycle: true } } },
+    });
+    return freePlan?.pricingOptions[0]?.providerPriceId ?? null;
+  }
+
+  /**
+   * Idempotent: chỉ tạo free subscription nếu customer CHƯA có free sub đang active.
+   * Trả về subscription mới nếu vừa tạo, null nếu đã tồn tại hoặc chưa cấu hình
+   * STRIPE_FREE_PRICE_ID — nhờ đó webhook retry không tạo trùng.
+   */
+  async ensureFreeSubscription(customerId: string): Promise<Stripe.Subscription | null> {
+    const freePriceId = await this.getFreePriceId();
+    if (!freePriceId) {
+      this.logger.warn("STRIPE_FREE_PRICE_ID is not configured. Skipping free subscription.");
+      return null;
+    }
+
+    const existing = await this.stripe.subscriptions.list({
+      customer: customerId,
+      price: freePriceId,
+      status: "active",
+      limit: 1,
+    });
+
+    if (existing.data.length > 0) {
+      this.logger.log(`Customer ${customerId} already has an active free subscription – skipping`);
+      return null;
+    }
+
+    return this.subscribeToFreePlan(customerId);
+  }
+
+  async subscribeToFreePlan(customerId: string): Promise<Stripe.Subscription> {
     const freePlan = await this.prisma.plan.findUnique({
       where: { code: PLAN_CODES.FREE },
       include: { pricingOptions: { include: { billingCycle: true } } },
@@ -78,7 +114,7 @@ export class StripeService {
         this.logger.error(`Failed to subscribe customer to free plan on Stripe: ${error}`);
       }
     }
-
+    this.logger.log(`Subscription created: ${JSON.stringify(stripeSubscription)}`);
     return stripeSubscription as Stripe.Subscription;
   }
 

@@ -92,9 +92,6 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
       await this.stripeService.cancelSubscription(existingSubscription.providerSubscriptionId);
     }
 
-    // For FREE plans ($0), grant credits immediately to avoid webhook race conditions with invoice.paid
-    const initialCredits = Number(pricingOption.price) === 0 ? pricingOption.plan.renewalCredits : 0;
-
     await this.prisma.subscription.upsert({
       where: { userId: user.id },
       create: {
@@ -103,7 +100,7 @@ export class CustomerSubscriptionCreatedStrategy implements WebhookStrategy {
         status,
         currentPeriodStart,
         currentPeriodEnd,
-        subscriptionCreditsRemaining: initialCredits,
+        subscriptionCreditsRemaining: 0,
         nextCreditResetAt: currentPeriodEnd,
         trialStart,
         trialEnd,

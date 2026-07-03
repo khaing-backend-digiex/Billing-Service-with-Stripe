@@ -13,6 +13,8 @@ import { CustomerSubscriptionCreatedStrategy } from "./webhook/strategies/custom
 import { CustomerSubscriptionUpdatedStrategy } from "./webhook/strategies/customer.subscription.updated";
 import { CustomerSubscriptionDeletedStrategy } from "./webhook/strategies/customer.subscription.deleted";
 import { WebhookStrategyFactory } from "./webhook/strategies/webhook-strategy.factory";
+import { FreePlanDowngradeService } from "./webhook/free-plan-downgrade.service";
+import { StripeController } from "./stripe.controller";
 
 @Module({
   imports: [forwardRef(() => UsersModule), PricingModule],
@@ -20,6 +22,7 @@ import { WebhookStrategyFactory } from "./webhook/strategies/webhook-strategy.fa
   providers: [
     StripeService,
     StripeWebhookService,
+    FreePlanDowngradeService,
     InvoiceCreatedStrategy,
     InvoicePaidStrategy,
     InvoicePaymentFailedStrategy,

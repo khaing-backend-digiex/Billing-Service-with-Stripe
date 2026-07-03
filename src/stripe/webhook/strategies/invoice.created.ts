@@ -75,7 +75,11 @@ export class InvoiceCreatedStrategy implements WebhookStrategy {
       return;
     }
 
-    const status = STRIPE_INVOICE_STATUS_MAP[stripeInvoice.status ?? "draft"] ?? InvoiceStatus.DRAFT;
+    let status = STRIPE_INVOICE_STATUS_MAP[stripeInvoice.status ?? "draft"] ?? InvoiceStatus.DRAFT;
+    if (status === InvoiceStatus.PAID) {
+      status = InvoiceStatus.OPEN;
+    }
+    this.logger.log(`Mapping Stripe invoice status '${stripeInvoice.status}' to local status '${status}'`);
     const amount = formatStripeAmountToDatabase(stripeInvoice.amount_due, stripeInvoice.currency);
     const dueAt = stripeInvoice.due_date
       ? new Date(stripeInvoice.due_date * 1000)
