@@ -10,6 +10,17 @@ import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { FreePlanDowngradeService } from "../free-plan-downgrade.service";
 import { SubscriptionSyncService } from "../../sync/subscription-sync.service";
+import { PricingService } from "../../../pricing/pricing.service";
+
+const STRIPE_STATUS_MAP: Record<string, SubscriptionStatus> = {
+  active: SubscriptionStatus.ACTIVE,
+  past_due: SubscriptionStatus.PAST_DUE,
+  unpaid: SubscriptionStatus.PAST_DUE,
+  trialing: SubscriptionStatus.TRIALING,
+  paused: SubscriptionStatus.PAUSED,
+  incomplete: SubscriptionStatus.PAST_DUE,
+  incomplete_expired: SubscriptionStatus.EXPIRED,
+};
 
 @Injectable()
 export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
@@ -30,7 +41,7 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
   async handle(event: Stripe.Event): Promise<void> {
     const sub = event.data.object as Stripe.Subscription;
     this.logger.log(`customer.subscription.updated: ${sub.id} → ${sub.status}`);
-
+    
     
     const isFinalPaymentFailure =
       sub.status === "unpaid" ||

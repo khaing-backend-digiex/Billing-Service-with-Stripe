@@ -65,24 +65,24 @@ export class StripeController {
     @Body() dto: CreateSubscriptionCheckoutDto,
   ) {
     const user = await this.usersService.findById(userId);
-    const currentSubscription = await this.prisma.subscription.findUnique({
-      where: { userId },
-      include: { pricingOption: true },
-    });
+    // const currentSubscription = await this.prisma.subscription.findUnique({
+    //   where: { userId },
+    //   include: { pricingOption: true },
+    // });
 
-    if (currentSubscription && currentSubscription.pricingOption) {
-      // Cho phép đăng ký lại nếu gói hiện tại đã bị HUỶ hoặc HẾT HẠN
-      const isCancelledOrExpired = 
-        currentSubscription.status === 'CANCELLED' || 
-        currentSubscription.status === 'EXPIRED';
+    // if (currentSubscription && currentSubscription.pricingOption) {
+    //   // Cho phép đăng ký lại nếu gói hiện tại đã bị HUỶ hoặc HẾT HẠN
+    //   const isCancelledOrExpired = 
+    //     currentSubscription.status === 'CANCELLED' || 
+    //     currentSubscription.status === 'EXPIRED';
 
-      if (!isCancelledOrExpired) {
-        const price = Number(currentSubscription.pricingOption.price);
-        if (price > 0) {
-          throw new BadRequestException("Bạn chỉ có thể đăng ký gói mới khi đang ở gói FREE hoặc gói cũ đã hoàn toàn bị huỷ. Vui lòng đợi gói hiện tại hết hạn hoặc huỷ nó trước.");
-        }
-      }
-    }
+    //   if (!isCancelledOrExpired) {
+    //     const price = Number(currentSubscription.pricingOption.price);
+    //     if (price > 0) {
+    //       throw new BadRequestException("Bạn chỉ có thể đăng ký gói mới khi đang ở gói FREE hoặc gói cũ đã hoàn toàn bị huỷ. Vui lòng đợi gói hiện tại hết hạn hoặc huỷ nó trước.");
+    //     }
+    //   }
+    // }
 
     // Validate that the pricingOptionId belongs to a valid Subscription Pricing Option
     const pricingOption = await this.prisma.pricingOption.findUnique({

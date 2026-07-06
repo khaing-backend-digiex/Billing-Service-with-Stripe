@@ -67,8 +67,9 @@ export class SubscriptionSyncService {
       this.logger.error(`Unknown Stripe subscription status: ${sub.status}`);
       return null;
     }
-    const currentPeriodStart = new Date(sub.current_period_start * 1000);
-    const currentPeriodEnd = new Date(sub.current_period_end * 1000);
+    const item = sub.items.data[0] as any;
+    const currentPeriodStart = new Date(item.current_period_start * 1000);
+    const currentPeriodEnd = new Date(item.current_period_end * 1000);
 
     const trialStart = sub.trial_start
       ? new Date(sub.trial_start * 1000)

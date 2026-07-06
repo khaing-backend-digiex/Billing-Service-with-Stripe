@@ -2,12 +2,21 @@ import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PaidInvoiceSyncService } from "../../sync/paid-invoice-sync.service";
+import {PaymentProvider, PaymentStatus, InvoiceStatus, SubscriptionStatus, CreditTransactionType, ReferenceType, SubscriptionEventType } from "@prisma/client";
+import { PrismaService } from "@/database/prisma.service";
+import { PricingService } from "@/pricing/pricing.service";
+import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
+import { addCalendarMonths } from "../../../common/utils/date.util";
 
 @Injectable()
 export class InvoicePaidStrategy implements WebhookStrategy {
   private readonly logger = new Logger(InvoicePaidStrategy.name);
 
-  constructor(private readonly paidInvoiceSync: PaidInvoiceSyncService) { }
+  constructor(
+    private readonly paidInvoiceSync: PaidInvoiceSyncService,
+    private readonly prisma: PrismaService,
+    private readonly pricingService: PricingService,
+  ) { }
 
   private readonly invoicePaid = "invoice.paid";
   canHandle(eventType: string): boolean {

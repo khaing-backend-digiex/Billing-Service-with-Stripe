@@ -57,14 +57,23 @@ export class InvoiceCreatedStrategy implements WebhookStrategy {
     }
 
     
-    const subscription = await this.prisma.subscription.findFirst({
+    let subscription = await this.prisma.subscription.findFirst({
       where: { providerSubscriptionId: stripeSubscriptionId },
     });
 
+    let subRetries = 0;
+    while (!subscription && subRetries < 5) {
+      this.logger.warn(`Subscription ${stripeSubscriptionId} not found locally. Waiting for customer.subscription.created...`);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      subscription = await this.prisma.subscription.findFirst({
+        where: { providerSubscriptionId: stripeSubscriptionId },
+      });
+      subRetries++;
+    }
+
     if (!subscription) {
-      throw new Error(
-        `No local subscription for Stripe subscription ${stripeSubscriptionId} yet – invoice.created ${stripeInvoice.id} will be retried by Stripe`,
-      );
+      this.logger.error(`No local subscription found for Stripe subscription ${stripeSubscriptionId} after retries`);
+      return;
     }
 
     const status = STRIPE_INVOICE_STATUS_MAP[stripeInvoice.status ?? "draft"] ?? InvoiceStatus.DRAFT;
