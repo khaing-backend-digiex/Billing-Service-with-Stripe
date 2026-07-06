@@ -67,14 +67,28 @@ export class CreditResetCronService {
       }
 
       try {
-        await this.prisma.$transaction(async (tx) => {
-          await tx.subscription.update({
-            where: { id: subscription.id },
+        const didReset = await this.prisma.$transaction(async (tx) => {
+          // Idempotency (optimistic lock): update chỉ ăn khi nextCreditResetAt
+          // vẫn là giá trị đã đọc ở findMany. Nếu worker khác / invoice.paid
+          // đã đẩy mốc reset đi rồi → count = 0 → bỏ qua, không cấp trùng credit.
+          const updated = await tx.subscription.updateMany({
+            where: {
+              id: subscription.id,
+              status: SubscriptionStatus.ACTIVE,
+              nextCreditResetAt: subscription.nextCreditResetAt,
+            },
             data: {
               subscriptionCreditsRemaining: plan.renewalCredits,
               nextCreditResetAt: newNextReset,
             },
           });
+
+          if (updated.count === 0) {
+            this.logger.log(
+              `Skipping subscription ${subscription.id}: already reset by another worker or invoice.paid.`,
+            );
+            return false;
+          }
 
           await tx.creditTransaction.create({
             data: {
@@ -98,11 +112,15 @@ export class CreditResetCronService {
               },
             },
           });
+
+          return true;
         });
 
-        this.logger.log(
-          `✅ Reset credits for subscription ${subscription.id}: +${plan.renewalCredits} credits, next reset: ${newNextReset.toISOString()}`,
-        );
+        if (didReset) {
+          this.logger.log(
+            `✅ Reset credits for subscription ${subscription.id}: +${plan.renewalCredits} credits, next reset: ${newNextReset.toISOString()}`,
+          );
+        }
       } catch (error) {
         this.logger.error(
           `❌ Failed to reset credits for subscription ${subscription.id}: ${error}`,

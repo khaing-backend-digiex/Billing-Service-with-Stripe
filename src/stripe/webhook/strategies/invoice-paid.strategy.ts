@@ -1,37 +1,24 @@
 import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
-import {
-  CreditTransactionType,
-  ReferenceType,
-  SubscriptionEventType,
-} from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
-import { PrismaService } from "../../../database/prisma.service";
-import { PricingService } from "../../../pricing/pricing.service";
-import { PaymentProvider, SubscriptionStatus, InvoiceStatus, PaymentStatus } from "@prisma/client";
-import { PLAN_CODES } from "../../../common/constants/plan.constants";
-import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
-import { addCalendarMonths } from "../../../common/utils/date.util";
-import { json } from "stream/consumers";
+import { PaidInvoiceSyncService } from "../../sync/paid-invoice-sync.service";
 
 @Injectable()
 export class InvoicePaidStrategy implements WebhookStrategy {
   private readonly logger = new Logger(InvoicePaidStrategy.name);
 
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly pricingService: PricingService,
-  ) { }
+  constructor(private readonly paidInvoiceSync: PaidInvoiceSyncService) { }
 
   private readonly invoicePaid = "invoice.paid";
   canHandle(eventType: string): boolean {
     return eventType === this.invoicePaid;
   }
 
+  
   async handle(event: Stripe.Event): Promise<void> {
     const stripeInvoice = event.data.object as Stripe.Invoice;
     this.logger.log(`invoice.paid: ${stripeInvoice.id}`);
-    this.logger.log('Invoice details:', JSON.stringify(stripeInvoice, null, 2));
+
     let stripeSubscriptionId =
       typeof stripeInvoice.subscription === "string"
         ? stripeInvoice.subscription

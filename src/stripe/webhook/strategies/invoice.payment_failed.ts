@@ -1,20 +1,31 @@
 import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
 import {
+  Invoice,
+  Subscription,
   InvoiceStatus,
   SubscriptionStatus,
   SubscriptionEventType,
+  PaymentProvider,
+  PaymentStatus,
 } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
+import { StripeService } from "../../stripe.service";
 import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
-import { PaymentProvider, PaymentStatus } from "@prisma/client";
+
+
+const MAX_RETRY_ATTEMPTS = 3;
+const RETRY_WINDOW_MS = 3 * 86_400_000;
 
 @Injectable()
 export class InvoicePaymentFailedStrategy implements WebhookStrategy {
   private readonly logger = new Logger(InvoicePaymentFailedStrategy.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly stripeService: StripeService,
+  ) {}
   private readonly invoicePaymentFailed = "invoice.payment_failed";
   canHandle(eventType: string): boolean {
     return eventType === this.invoicePaymentFailed;
@@ -43,7 +54,7 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
         ? stripeInvoice.payment_intent
         : (stripeInvoice.payment_intent as any)?.id ?? null;
 
-    await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const subscription = stripeSubscriptionId
         ? await tx.subscription.findFirst({
             where: { providerSubscriptionId: stripeSubscriptionId },
@@ -58,10 +69,10 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
           : null,
       };
 
-      // Stripe không đảm bảo thứ tự webhook: invoice.payment_failed có thể tới
-      // trước invoice.created → upsert để không mất retry info.
+    
+      let invoice: Invoice | null = null;
       if (subscription) {
-        await tx.invoice.upsert({
+        invoice = await tx.invoice.upsert({
           where: { providerInvoiceId: stripeInvoice.id },
           update: retryData,
           create: {
@@ -77,61 +88,99 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
             ...retryData,
           },
         });
-
-        // Ghi nhận Payment record nếu có paymentIntentId
-        if (paymentIntentId) {
-          await tx.payment.upsert({
-            where: { providerPaymentId: paymentIntentId },
-            create: {
-              userId: subscription.userId,
-              invoiceId: (await tx.invoice.findFirst({ where: { providerInvoiceId: stripeInvoice.id } }))?.id ?? undefined,
-              provider: PaymentProvider.STRIPE,
-              providerPaymentId: paymentIntentId,
-              amount: formatStripeAmountToDatabase(stripeInvoice.amount_due, stripeInvoice.currency),
-              currency: stripeInvoice.currency,
-              status: PaymentStatus.FAILED,
-              paidAt: null,
-            },
-            update: {
-              status: PaymentStatus.FAILED,
-              paidAt: null,
-            },
-          });
-        }
-
-        // Update subscription status to PAST_DUE
-        await tx.subscription.update({
-          where: { id: subscription.id },
-          data: { status: SubscriptionStatus.PAST_DUE },
-        });
-
-        await tx.subscriptionEvent.create({
-          data: {
-            subscriptionId: subscription.id,
-            type: SubscriptionEventType.PAYMENT_FAILED,
-            metadata: {
-              stripeInvoiceId: stripeInvoice.id,
-              attemptCount: stripeInvoice.attempt_count,
-              nextPaymentAttempt: stripeInvoice.next_payment_attempt ?? null,
-            },
-          },
-        });
       } else {
-        // Không tìm thấy subscription local — chỉ update invoice nếu có
-        const invoice = await tx.invoice.findFirst({
+        invoice = await tx.invoice.findFirst({
           where: { providerInvoiceId: stripeInvoice.id },
         });
 
         if (!invoice) {
-          this.logger.error(`No local invoice or subscription found for Stripe invoice ${stripeInvoice.id}`);
-          return;
+          this.logger.error(`No local invoice found for Stripe invoice ${stripeInvoice.id}`);
+          return null;
         }
 
-        await tx.invoice.update({
+        invoice = await tx.invoice.update({
           where: { id: invoice.id },
           data: retryData,
         });
       }
+
+    
+      if (paymentIntentId && subscription) {
+        await tx.payment.upsert({
+          where: { providerPaymentId: paymentIntentId },
+          create: {
+            userId: subscription.userId,
+            invoiceId: invoice.id,
+            provider: PaymentProvider.STRIPE,
+            providerPaymentId: paymentIntentId,
+            amount: formatStripeAmountToDatabase(stripeInvoice.amount_due, stripeInvoice.currency),
+            currency: stripeInvoice.currency,
+            status: PaymentStatus.FAILED,
+            paidAt: null,
+          },
+          update: {
+            status: PaymentStatus.FAILED,
+            paidAt: null,
+          },
+        });
+      }
+
+      if (!stripeSubscriptionId) return { invoice, subscription: null };
+
+      if (!subscription) {
+        this.logger.error(`No local subscription found for Stripe subscription ${stripeSubscriptionId}`);
+        return { invoice, subscription: null };
+      }
+
+      await tx.subscription.update({
+        where: { id: subscription.id },
+        data: { status: SubscriptionStatus.PAST_DUE },
+      });
+
+      await tx.subscriptionEvent.create({
+        data: {
+          subscriptionId: subscription.id,
+          type: SubscriptionEventType.PAYMENT_FAILED,
+          metadata: {
+            stripeInvoiceId: stripeInvoice.id,
+            attemptCount: stripeInvoice.attempt_count,
+            nextPaymentAttempt: stripeInvoice.next_payment_attempt ?? null,
+          },
+        },
+      });
+
+      return { invoice, subscription };
+    });
+
+    if (!result?.subscription || !result.invoice || !stripeSubscriptionId) return;
+
+    await this.cancelIfRetriesExhausted(result.invoice, result.subscription, stripeInvoice, stripeSubscriptionId);
+  }
+
+ 
+  private async cancelIfRetriesExhausted(
+    invoice: Invoice,
+    subscription: Subscription,
+    stripeInvoice: Stripe.Invoice,
+    stripeSubscriptionId: string,
+  ): Promise<void> {
+    const retriesUsed = (stripeInvoice.attempt_count ?? 1) - 1;
+    const windowExceeded = Date.now() - invoice.createdAt.getTime() > RETRY_WINDOW_MS;
+
+    if (retriesUsed < MAX_RETRY_ATTEMPTS && !windowExceeded) return;
+
+    this.logger.warn(
+      `Retries exhausted for subscription ${subscription.id} ` +
+        `(retries: ${retriesUsed}/${MAX_RETRY_ATTEMPTS}, window exceeded: ${windowExceeded}) – cancelling`,
+    );
+
+    // Hủy trên Stripe trước; nếu fail thì throw → Stripe retry event này,
+    // cancelSubscriptionNow idempotent nên retry an toàn.
+    await this.stripeService.cancelSubscriptionNow(stripeSubscriptionId);
+
+    await this.prisma.invoice.update({
+      where: { id: invoice.id },
+      data: { status: InvoiceStatus.UNCOLLECTIBLE, nextRetryAt: null },
     });
   }
 }

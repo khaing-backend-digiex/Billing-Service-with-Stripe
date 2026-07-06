@@ -11,6 +11,7 @@ import { PaymentsModule } from "./payments/payments.module";
 import { HealthController } from "./health/health.controller";
 import { JwtAuthGuard } from "./common/guards/jwt-auth.guard";
 import { PricingModule } from "./pricing/pricing.module";
+import { CreditsModule } from "./credits/credits.module";
 import { CronModule } from "./cron/cron.module";
 
 @Module({
@@ -25,6 +26,7 @@ import { CronModule } from "./cron/cron.module";
     StripeModule,
     PaymentsModule,
     PricingModule,
+    CreditsModule,
     CronModule,
   ],
   controllers: [HealthController],

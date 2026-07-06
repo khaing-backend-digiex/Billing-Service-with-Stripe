@@ -1,6 +1,11 @@
 import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
-import { SubscriptionStatus, SubscriptionEventType } from "@prisma/client";
+import {
+  SubscriptionStatus,
+  SubscriptionEventType,
+  CreditTransactionType,
+  ReferenceType,
+} from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { FreePlanDowngradeService } from "../free-plan-downgrade.service";
@@ -33,9 +38,7 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
       return;
     }
 
-    // Idempotency: đã CANCELLED thì không tạo duplicate SubscriptionEvent,
-    // nhưng vẫn chạy downgrade bên dưới để Stripe retry có thể hoàn tất
-    // bước subscribe Free nếu lần xử lý trước fail giữa chừng.
+    
     if (subscription.status !== SubscriptionStatus.CANCELLED) {
       await this.prisma.$transaction([
         this.prisma.subscription.update({
@@ -53,6 +56,21 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
             metadata: { stripeSubscriptionId: sub.id },
           },
         }),
+     
+        ...(subscription.subscriptionCreditsRemaining > 0
+          ? [
+              this.prisma.creditTransaction.create({
+                data: {
+                  userId: subscription.userId,
+                  type: CreditTransactionType.EXPIRATION,
+                  amount: -subscription.subscriptionCreditsRemaining,
+                  description: "Credits forfeited – subscription cancelled",
+                  referenceType: ReferenceType.SUBSCRIPTION,
+                  referenceId: subscription.id,
+                },
+              }),
+            ]
+          : []),
       ]);
 
       this.logger.log(`Subscription ${subscription.id} cancelled`);
