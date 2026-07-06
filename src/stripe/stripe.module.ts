@@ -1,5 +1,6 @@
 import { Module, forwardRef } from "@nestjs/common";
 import { StripeService } from "./stripe.service";
+import { StripeController } from "./stripe.controller";
 import { StripeWebhookController } from "./webhook/stripe-webhook.controller";
 import { StripeWebhookService } from "./webhook/stripe-webhook.service";
 import { UsersModule } from "../users/users.module";
@@ -12,13 +13,19 @@ import { CustomerSubscriptionCreatedStrategy } from "./webhook/strategies/custom
 import { CustomerSubscriptionUpdatedStrategy } from "./webhook/strategies/customer.subscription.updated";
 import { CustomerSubscriptionDeletedStrategy } from "./webhook/strategies/customer.subscription.deleted";
 import { WebhookStrategyFactory } from "./webhook/strategies/webhook-strategy.factory";
+import { FreePlanDowngradeService } from "./webhook/free-plan-downgrade.service";
+import { SubscriptionSyncService } from "./sync/subscription-sync.service";
+import { PaidInvoiceSyncService } from "./sync/paid-invoice-sync.service";
 
 @Module({
   imports: [forwardRef(() => UsersModule), PricingModule],
-  controllers: [StripeWebhookController],
+  controllers: [StripeController, StripeWebhookController],
   providers: [
     StripeService,
     StripeWebhookService,
+    FreePlanDowngradeService,
+    SubscriptionSyncService,
+    PaidInvoiceSyncService,
     InvoiceCreatedStrategy,
     InvoicePaidStrategy,
     InvoicePaymentFailedStrategy,
@@ -57,6 +64,6 @@ import { WebhookStrategyFactory } from "./webhook/strategies/webhook-strategy.fa
       ],
     },
   ],
-  exports: [StripeService],
+  exports: [StripeService, SubscriptionSyncService, PaidInvoiceSyncService],
 })
 export class StripeModule { }

@@ -9,7 +9,8 @@ import { ConfigService } from "@nestjs/config";
 import Stripe from "stripe";
 import { PrismaService } from "../database/prisma.service";
 import { UsersService } from "../users/users.service";
-import { PaymentStatus, PaymentProvider } from "@prisma/client";
+import { PaymentStatus, PaymentProvider, SubscriptionStatus } from "@prisma/client";
+import { PLAN_CODES } from "../common/constants/plan.constants";
 
 @Injectable()
 export class StripeService {
@@ -52,23 +53,118 @@ export class StripeService {
     return this.stripe.customers.retrieve(customerId);
   }
 
-  async subscribeToFreePlan(customerId: string): Promise<Stripe.Subscription> {
-    const freePriceId = this.configService.get<string>("STRIPE_FREE_PRICE_ID");
+  async getFreePriceId(): Promise<string | null> {
+    // return this.configService.get<string>("STRIPE_FREE_PRICE_ID") ?? null;
+    const freePlan = await this.prisma.plan.findUnique({
+      where: { code: PLAN_CODES.FREE },
+      include: { pricingOptions: { include: { billingCycle: true } } },
+    });
+    return freePlan?.pricingOptions[0]?.providerPriceId ?? null;
+  }
+
+
+  async ensureFreeSubscription(customerId: string): Promise<Stripe.Subscription | null> {
+    const freePriceId = await this.getFreePriceId();
     if (!freePriceId) {
-      this.logger.warn("STRIPE_FREE_PRICE_ID is not configured. Skipping free subscription.");
-      return null as any;
+      this.logger.warn("Free plan price is not configured. Skipping free subscription.");
+      return null;
     }
 
+    const existing = await this.findActiveSubscription(customerId);
+    if (existing) {
+      this.logger.log(`Customer ${customerId} already has an active subscription – skipping free plan`);
+      return null;
+    }
+
+    return this.subscribeToFreePlan(customerId);
+  }
+
+  async findActiveSubscription(customerId: string): Promise<Stripe.Subscription | null> {
+    const subs = await this.stripe.subscriptions.list({
+      customer: customerId,
+      status: "all",
+      limit: 100,
+    });
+    const live = subs.data.filter((s) =>
+      s.status === "active" || s.status === "trialing" || s.status === "past_due",
+    );
+    if (live.length === 0) return null;
+    if (live.length === 1) return live[0];
+
+    const freePriceId = await this.getFreePriceId();
+    const sorted = [...live].sort((a, b) => b.created - a.created);
+    const paid = sorted.find((s) => {
+      const price = s.items.data[0]?.price;
+      const priceId = typeof price === "string" ? price : price?.id;
+      return freePriceId == null || priceId !== freePriceId;
+    });
+    return paid ?? sorted[0];
+  }
+
+  /** Invoice đã thanh toán gần nhất của 1 subscription (null nếu chưa có). */
+  async getLatestPaidInvoice(subscriptionId: string): Promise<Stripe.Invoice | null> {
+    const invoices = await this.stripe.invoices.list({
+      subscription: subscriptionId,
+      status: "paid",
+      limit: 1,
+    });
+    return invoices.data[0] ?? null;
+  }
+
+  /**
+   * Tạo free subscription vô điều kiện — KHÔNG idempotent, caller bên ngoài
+   * nên dùng ensureFreeSubscription. Stripe fail → throw (không nuốt lỗi).
+   */
+  async subscribeToFreePlan(customerId: string): Promise<Stripe.Subscription | null> {
+    const freePlan = await this.prisma.plan.findUnique({
+      where: { code: PLAN_CODES.FREE },
+      include: { pricingOptions: { include: { billingCycle: true } } },
+    });
+
+    const pricingOption = freePlan?.pricingOptions[0];
+    if (!pricingOption?.providerPriceId) {
+      this.logger.warn("Free plan not configured (missing plan or provider price). Skipping free subscription.");
+      return null;
+    }
+
+    const stripeSubscription = await this.stripe.subscriptions.create({
+      customer: customerId,
+      items: [{ price: pricingOption.providerPriceId }],
+    });
+    this.logger.log(`✅ Subscribed customer ${customerId} to free plan (price: ${pricingOption.providerPriceId})`);
+    return stripeSubscription;
+  }
+
+  async hasDefaultPaymentMethod(customerId: string): Promise<boolean> {
+    try {
+      const customer = await this.stripe.customers.retrieve(customerId) as Stripe.Customer;
+      if (customer.deleted) return false;
+      if (customer.invoice_settings?.default_payment_method) return true;
+      if (customer.default_source) return true;
+      
+      const paymentMethods = await this.stripe.paymentMethods.list({
+        customer: customerId,
+        type: 'card',
+      });
+      return paymentMethods.data.length > 0;
+    } catch (error) {
+      this.logger.error(`Error checking payment methods for customer ${customerId}`, error);
+      return false;
+    }
+  }
+
+  async subscribeToPaidPlan(userId: number, customerId: string, priceId: string): Promise<Stripe.Subscription> {
     try {
       const subscription = await this.stripe.subscriptions.create({
         customer: customerId,
-        items: [{ price: freePriceId }],
+        items: [{ price: priceId }],
+        expand: ['latest_invoice.payment_intent'],
       });
-      this.logger.log(`✅ Subscribed customer ${customerId} to free plan`);
+      this.logger.log(`✅ Subscribed customer ${customerId} to paid plan (price: ${priceId})`);
       return subscription;
     } catch (error) {
-      this.logger.error(`Failed to subscribe customer to free plan: ${error}`);
-      throw new InternalServerErrorException("Failed to create free subscription");
+      this.logger.error(`Failed to subscribe customer to paid plan: ${error}`);
+      throw new InternalServerErrorException("Failed to create paid subscription on Stripe");
     }
   }
 
@@ -110,6 +206,16 @@ export class StripeService {
     } catch (error) {
       this.logger.error(`Failed to create checkout session: ${error}`);
       throw new InternalServerErrorException("Failed to create checkout session");
+    }
+  }
+  
+  async cancelSubscription(providerSubscriptionId: string): Promise<void> {
+    try {
+      await this.stripe.subscriptions.cancel(providerSubscriptionId);
+      this.logger.log(`✅ Cancelled Stripe subscription ${providerSubscriptionId}`);
+    } catch (error) {
+      this.logger.error(`Failed to cancel Stripe subscription ${providerSubscriptionId}: ${error}`);
+      // Don't throw here, as this is usually called as cleanup during upgrade
     }
   }
 
@@ -202,4 +308,30 @@ export class StripeService {
       cancel_at_period_end: true,
     });
   }
+
+  /**
+   * Hủy subscription NGAY LẬP TỨC (không chờ hết kỳ). Idempotent: đã canceled
+   * hoặc không tồn tại thì coi như xong — webhook retry không bị lỗi lặp.
+   */
+  async cancelSubscriptionNow(subscriptionId: string): Promise<void> {
+    let subscription: Stripe.Subscription;
+    try {
+      subscription = await this.stripe.subscriptions.retrieve(subscriptionId);
+    } catch (error: any) {
+      if (error?.code === "resource_missing") {
+        this.logger.log(`Subscription ${subscriptionId} not found on Stripe – nothing to cancel`);
+        return;
+      }
+      throw error;
+    }
+
+    if (subscription.status === "canceled") {
+      this.logger.log(`Subscription ${subscriptionId} already canceled on Stripe`);
+      return;
+    }
+
+    await this.stripe.subscriptions.cancel(subscriptionId);
+    this.logger.log(`✅ Cancelled Stripe subscription ${subscriptionId} immediately`);
+  }
 }
+

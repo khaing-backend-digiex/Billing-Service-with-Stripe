@@ -54,7 +54,7 @@ export class StripeWebhookController {
       this.logger.error(
         `❌ Webhook error: ${error instanceof Error ? error.message : error}`,
       );
-      throw new BadRequestException(`Webhook signature verification failed`);
+      throw new BadRequestException(error instanceof Error ? error.message : `Webhook error`);
     }
   }
 }

@@ -8,19 +8,9 @@ import {
 } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
+import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
 
-/**
- * payment_intent.succeeded — một PaymentIntent đã thanh toán thành công.
- *
- * Handler này TỰ CHỨA (self-contained): nó tạo Payment + cấp credit Add-on hoàn toàn
- * dựa trên metadata của chính PaymentIntent, KHÔNG phụ thuộc vào checkout.session.completed
- * hay bất kỳ event nào khác — vì Stripe KHÔNG đảm bảo thứ tự giao webhook.
- *
- * Metadata (userId, addonPackageId) được đẩy xuống PI qua payment_intent_data khi tạo
- * Checkout session (xem StripeService.createCheckoutSession).
- *
- * Chỉ xử lý Add-on. Subscription credit (FREE/PRO) do invoice.paid lo.
- */
+
 @Injectable()
 export class PaymentIntentSucceededStrategy implements WebhookStrategy {
   private readonly logger = new Logger(PaymentIntentSucceededStrategy.name);
@@ -39,7 +29,6 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
     const addonPackageId = paymentIntent.metadata?.addonPackageId;
     const userIdStr = paymentIntent.metadata?.userId;
 
-    // Không phải Add-on (vd: PI của invoice subscription, hoặc bare PI) → bỏ qua.
     if (!addonPackageId || !userIdStr) {
       this.logger.log(`Intent ${paymentIntent.id} is not an addon purchase – skipping`);
       return;
@@ -51,7 +40,6 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
       return;
     }
 
-    // Idempotency: đã cấp credit rồi thì thôi (Stripe có thể gửi lại event).
     const existing = await this.prisma.payment.findUnique({
       where: { providerPaymentId: paymentIntent.id },
     });
@@ -69,7 +57,6 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      // providerPaymentId là @unique → upsert vừa tạo mới, vừa idempotent khi retry.
       const payment = await tx.payment.upsert({
         where: { providerPaymentId: paymentIntent.id },
         create: {
@@ -77,8 +64,8 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
           addonPackageId,
           provider: PaymentProvider.STRIPE,
           providerPaymentId: paymentIntent.id,
-          amount: addon.price,
-          currency: addon.currency,
+          amount: formatStripeAmountToDatabase(paymentIntent.amount_received, paymentIntent.currency),
+          currency: paymentIntent.currency,
           status: PaymentStatus.SUCCEEDED,
           paidAt: new Date(),
         },

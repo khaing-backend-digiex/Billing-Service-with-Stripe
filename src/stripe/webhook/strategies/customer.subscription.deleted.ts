@@ -1,15 +1,24 @@
 import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
-import { SubscriptionStatus, SubscriptionEventType } from "@prisma/client";
+import {
+  SubscriptionStatus,
+  SubscriptionEventType,
+  CreditTransactionType,
+  ReferenceType,
+} from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
+import { FreePlanDowngradeService } from "../free-plan-downgrade.service";
 
 @Injectable()
 export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
   private readonly logger = new Logger(CustomerSubscriptionDeletedStrategy.name);
 
-  constructor(private readonly prisma: PrismaService) {}
-  
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly freePlanDowngrade: FreePlanDowngradeService,
+  ) {}
+
   private readonly customerSubcriptionDeleted = "customer.subscription.deleted"
   canHandle(eventType: string): boolean {
     return eventType === this.customerSubcriptionDeleted;
@@ -21,6 +30,7 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
 
     const subscription = await this.prisma.subscription.findFirst({
       where: { providerSubscriptionId: sub.id },
+      include: { pricingOption: true },
     });
 
     if (!subscription) {
@@ -28,30 +38,59 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
       return;
     }
 
-    // Idempotency: nếu đã CANCELLED thì không tạo duplicate SubscriptionEvent
-    if (subscription.status === SubscriptionStatus.CANCELLED) {
-      this.logger.log(`Subscription ${subscription.id} already CANCELLED – skipping`);
+    
+    if (subscription.status !== SubscriptionStatus.CANCELLED) {
+      await this.prisma.$transaction([
+        this.prisma.subscription.update({
+          where: { id: subscription.id },
+          data: {
+            status: SubscriptionStatus.CANCELLED,
+            cancelledAt: new Date(),
+            subscriptionCreditsRemaining: 0,
+          },
+        }),
+        this.prisma.subscriptionEvent.create({
+          data: {
+            subscriptionId: subscription.id,
+            type: SubscriptionEventType.CANCELLED,
+            metadata: { stripeSubscriptionId: sub.id },
+          },
+        }),
+     
+        ...(subscription.subscriptionCreditsRemaining > 0
+          ? [
+              this.prisma.creditTransaction.create({
+                data: {
+                  userId: subscription.userId,
+                  type: CreditTransactionType.EXPIRATION,
+                  amount: -subscription.subscriptionCreditsRemaining,
+                  description: "Credits forfeited – subscription cancelled",
+                  referenceType: ReferenceType.SUBSCRIPTION,
+                  referenceId: subscription.id,
+                },
+              }),
+            ]
+          : []),
+      ]);
+
+      this.logger.log(`Subscription ${subscription.id} cancelled`);
+    } else {
+      this.logger.log(`Subscription ${subscription.id} already CANCELLED`);
+    }
+
+    // Nếu subscription trong DB đã trỏ đến một providerSubscriptionId khác (upgrade),
+    // nghĩa là user đã có gói mới → không cần downgrade về free.
+    if (subscription.providerSubscriptionId !== sub.id) {
+      this.logger.log(
+        `Subscription ${subscription.id} already points to ${subscription.providerSubscriptionId} (not ${sub.id}) — skipping downgrade (upgrade detected)`,
+      );
       return;
     }
 
-    await this.prisma.$transaction([
-      this.prisma.subscription.update({
-        where: { id: subscription.id },
-        data: {
-          status: SubscriptionStatus.CANCELLED,
-          cancelledAt: new Date(),
-          subscriptionCreditsRemaining: 0,
-        },
-      }),
-      this.prisma.subscriptionEvent.create({
-        data: {
-          subscriptionId: subscription.id,
-          type: SubscriptionEventType.CANCELLED,
-          metadata: { stripeSubscriptionId: sub.id },
-        },
-      }),
-    ]);
-
-    this.logger.log(`Subscription ${subscription.id} cancelled`);
+    await this.freePlanDowngrade.downgradeToFree(
+      subscription,
+      sub,
+      sub.cancellation_details?.reason ?? "subscription_deleted",
+    );
   }
 }
