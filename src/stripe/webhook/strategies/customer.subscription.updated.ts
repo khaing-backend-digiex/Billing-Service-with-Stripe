@@ -12,16 +12,6 @@ import { FreePlanDowngradeService } from "../free-plan-downgrade.service";
 import { SubscriptionSyncService } from "../../sync/subscription-sync.service";
 import { PricingService } from "../../../pricing/pricing.service";
 
-const STRIPE_STATUS_MAP: Record<string, SubscriptionStatus> = {
-  active: SubscriptionStatus.ACTIVE,
-  past_due: SubscriptionStatus.PAST_DUE,
-  unpaid: SubscriptionStatus.PAST_DUE,
-  trialing: SubscriptionStatus.TRIALING,
-  paused: SubscriptionStatus.PAUSED,
-  incomplete: SubscriptionStatus.PAST_DUE,
-  incomplete_expired: SubscriptionStatus.EXPIRED,
-};
-
 @Injectable()
 export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
   private readonly logger = new Logger(CustomerSubscriptionUpdatedStrategy.name);
@@ -94,7 +84,6 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
       return;
     }
 
-   
     if (subscription.status !== SubscriptionStatus.EXPIRED) {
       await this.prisma.$transaction([
         this.prisma.subscription.update({

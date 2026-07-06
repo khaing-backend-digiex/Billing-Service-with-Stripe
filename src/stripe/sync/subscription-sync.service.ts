@@ -112,6 +112,7 @@ export class SubscriptionSyncService {
           trialEnd,
           providerSubscriptionId: sub.id,
           cancelledAt,
+          autoRenew: sub.cancel_at_period_end === false,
         },
       });
 
