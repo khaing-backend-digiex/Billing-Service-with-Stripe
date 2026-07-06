@@ -16,11 +16,11 @@ export class CreditResetCronService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Chạy mỗi ngày lúc 00:00 UTC.
+   * Chạy mỗi giờ.
    * Quét tất cả subscription ACTIVE có nextCreditResetAt <= now,
    * reset credit và đẩy nextCreditResetAt sang tháng tiếp theo.
    */
-  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  @Cron(CronExpression.EVERY_HOUR)
   async handleCreditReset(): Promise<void> {
     const now = new Date();
     this.logger.log(`⏰ Credit reset cron started at ${now.toISOString()}`);
@@ -52,13 +52,15 @@ export class CreditResetCronService {
     for (const subscription of subscriptions) {
       const plan = subscription.pricingOption.plan;
       const resetMonths = Math.max(1, Math.round(plan.resetIntervalDay / 30));
-      const newNextReset = addCalendarMonths(
+      let newNextReset = addCalendarMonths(
         subscription.nextCreditResetAt,
         resetMonths,
       );
+      while (newNextReset <= now) {
+        newNextReset = addCalendarMonths(newNextReset, resetMonths);
+      }
 
-      // Guard: Nếu mốc reset tiếp theo vượt qua currentPeriodEnd,
-      // bỏ qua — để invoice.paid xử lý khi Stripe renew.
+    
       if (newNextReset > subscription.currentPeriodEnd) {
         this.logger.log(
           `Skipping subscription ${subscription.id}: next reset ${newNextReset.toISOString()} exceeds period end ${subscription.currentPeriodEnd.toISOString()}. Will be handled by invoice.paid on renewal.`,
@@ -68,9 +70,6 @@ export class CreditResetCronService {
 
       try {
         const didReset = await this.prisma.$transaction(async (tx) => {
-          // Idempotency (optimistic lock): update chỉ ăn khi nextCreditResetAt
-          // vẫn là giá trị đã đọc ở findMany. Nếu worker khác / invoice.paid
-          // đã đẩy mốc reset đi rồi → count = 0 → bỏ qua, không cấp trùng credit.
           const updated = await tx.subscription.updateMany({
             where: {
               id: subscription.id,
