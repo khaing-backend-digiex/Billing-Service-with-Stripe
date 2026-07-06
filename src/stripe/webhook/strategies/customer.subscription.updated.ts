@@ -10,17 +10,13 @@ import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { FreePlanDowngradeService } from "../free-plan-downgrade.service";
 import { SubscriptionSyncService } from "../../sync/subscription-sync.service";
-import { PricingService } from "../../../pricing/pricing.service";
 
-const STRIPE_STATUS_MAP: Record<string, SubscriptionStatus> = {
-  active: SubscriptionStatus.ACTIVE,
-  past_due: SubscriptionStatus.PAST_DUE,
-  unpaid: SubscriptionStatus.PAST_DUE,
-  trialing: SubscriptionStatus.TRIALING,
-  paused: SubscriptionStatus.PAUSED,
-  incomplete: SubscriptionStatus.PAST_DUE,
-  incomplete_expired: SubscriptionStatus.EXPIRED,
-};
+const EVENT_TYPE = "customer.subscription.updated";
+
+const STATUS_UNPAID: Stripe.Subscription.Status = "unpaid";
+const STATUS_CANCELED: Stripe.Subscription.Status = "canceled";
+const REASON_PAYMENT_FAILED: Stripe.Subscription.CancellationDetails.Reason =
+  "payment_failed";
 
 @Injectable()
 export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
@@ -30,22 +26,21 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
     private readonly prisma: PrismaService,
     private readonly freePlanDowngrade: FreePlanDowngradeService,
     private readonly subscriptionSyncService: SubscriptionSyncService,
-    private readonly pricingService: PricingService,
   ) { }
 
-  private readonly customerSubscriptionUpdated = "customer.subscription.updated";
   canHandle(eventType: string): boolean {
-    return eventType === this.customerSubscriptionUpdated;
+    return eventType === EVENT_TYPE;
   }
 
   async handle(event: Stripe.Event): Promise<void> {
     const sub = event.data.object as Stripe.Subscription;
-    this.logger.log(`customer.subscription.updated: ${sub.id} → ${sub.status}`);
-    
-    
+    this.logger.log(`${EVENT_TYPE}: ${sub.id} → ${sub.status}`);
+
+
     const isFinalPaymentFailure =
-      sub.status === "unpaid" ||
-      (sub.status === "canceled" && sub.cancellation_details?.reason === "payment_failed");
+      sub.status === STATUS_UNPAID ||
+      (sub.status === STATUS_CANCELED &&
+        sub.cancellation_details?.reason === REASON_PAYMENT_FAILED);
 
     if (isFinalPaymentFailure) {
       await this.expireSubscription(sub);
@@ -111,7 +106,7 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
             metadata: {
               stripeSubscriptionId: sub.id,
               stripeStatus: sub.status,
-              reason: "payment_failed",
+              reason: REASON_PAYMENT_FAILED,
             },
           },
         }),
@@ -139,6 +134,6 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
       this.logger.log(`Subscription ${subscription.id} already EXPIRED`);
     }
 
-    await this.freePlanDowngrade.downgradeToFree(subscription, sub, "payment_failed");
+    await this.freePlanDowngrade.downgradeToFree(subscription, sub, REASON_PAYMENT_FAILED);
   }
 }

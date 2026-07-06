@@ -75,9 +75,6 @@ export class SubscriptionSyncService {
       ? new Date(sub.trial_start * 1000)
       : null;
     const trialEnd = sub.trial_end ? new Date(sub.trial_end * 1000) : null;
-    // Lấy từ Stripe thay vì hardcode null: khi user hẹn hủy cuối kỳ
-    // (cancel_at_period_end) Stripe gửi updated với cancel_at set, status vẫn
-    // active — mốc này cần được lưu lại chứ không xoá về null.
     const cancelledAt = sub.cancel_at ? new Date(sub.cancel_at * 1000) : null;
 
     const existing = await this.prisma.subscription.findUnique({
@@ -112,6 +109,7 @@ export class SubscriptionSyncService {
           trialEnd,
           providerSubscriptionId: sub.id,
           cancelledAt,
+          renew: sub.cancel_at_period_end === false,
         },
       });
 

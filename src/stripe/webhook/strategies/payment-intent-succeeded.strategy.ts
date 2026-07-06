@@ -10,18 +10,7 @@ import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
 
-/**
- * payment_intent.succeeded — một PaymentIntent đã thanh toán thành công.
- *
- * Handler này TỰ CHỨA (self-contained): nó tạo Payment + cấp credit Add-on hoàn toàn
- * dựa trên metadata của chính PaymentIntent, KHÔNG phụ thuộc vào checkout.session.completed
- * hay bất kỳ event nào khác — vì Stripe KHÔNG đảm bảo thứ tự giao webhook.
- *
- * Metadata (userId, addonPackageId) được đẩy xuống PI qua payment_intent_data khi tạo
- * Checkout session (xem StripeService.createCheckoutSession).
- *
- * Chỉ xử lý Add-on. Subscription credit (FREE/PRO) do invoice.paid lo.
- */
+
 @Injectable()
 export class PaymentIntentSucceededStrategy implements WebhookStrategy {
   private readonly logger = new Logger(PaymentIntentSucceededStrategy.name);

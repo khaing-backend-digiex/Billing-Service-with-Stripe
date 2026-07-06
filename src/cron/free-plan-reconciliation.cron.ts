@@ -8,19 +8,7 @@ import { PaidInvoiceSyncService } from "../stripe/sync/paid-invoice-sync.service
 const GRACE_MS = 15 * 60_000;
 const BATCH_SIZE = 50;
 
-/**
- * Reconciliation: đưa user về trạng thái chuẩn "có Stripe customer + có
- * subscription local". Stripe là source of truth:
- *
- * - Stripe ĐÃ có sub active nhưng local thiếu row (webhook created bị mất
- *   vĩnh viễn — Stripe chỉ retry ~3 ngày) → tự heal: sync row từ Stripe +
- *   áp dụng invoice paid gần nhất để cấp credits. Đi qua đúng 2 service mà
- *   webhook dùng nên webhook về trễ chỉ replay vô hại (upsert + claim gate).
- * - Stripe chưa có sub → tạo free subscription; row local + credits do
- *   webhook lo, nếu webhook mất thì lần chạy sau rơi vào nhánh heal ở trên.
- *
- * Cron KHÔNG ghi webhookEvent — bảng đó chỉ dành cho delivery thật.
- */
+
 @Injectable()
 export class FreePlanReconciliationCron {
   private readonly logger = new Logger(FreePlanReconciliationCron.name);
