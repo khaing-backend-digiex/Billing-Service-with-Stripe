@@ -5,11 +5,9 @@ import { StripeWebhookController } from "./webhook/stripe-webhook.controller";
 import { StripeWebhookService } from "./webhook/stripe-webhook.service";
 import { UsersModule } from "../users/users.module";
 import { PricingModule } from "../pricing/pricing.module";
-import { InvoiceCreatedStrategy } from "./webhook/strategies/invoice.created";
 import { InvoicePaidStrategy } from "./webhook/strategies/invoice-paid.strategy";
 import { InvoicePaymentFailedStrategy } from "./webhook/strategies/invoice.payment_failed";
 import { PaymentIntentSucceededStrategy } from "./webhook/strategies/payment-intent-succeeded.strategy";
-import { CustomerSubscriptionCreatedStrategy } from "./webhook/strategies/customer.subscription.created";
 import { CustomerSubscriptionUpdatedStrategy } from "./webhook/strategies/customer.subscription.updated";
 import { CustomerSubscriptionDeletedStrategy } from "./webhook/strategies/customer.subscription.deleted";
 import { WebhookStrategyFactory } from "./webhook/strategies/webhook-strategy.factory";
@@ -26,39 +24,31 @@ import { PaidInvoiceSyncService } from "./sync/paid-invoice-sync.service";
     FreePlanDowngradeService,
     SubscriptionSyncService,
     PaidInvoiceSyncService,
-    InvoiceCreatedStrategy,
     InvoicePaidStrategy,
     InvoicePaymentFailedStrategy,
     PaymentIntentSucceededStrategy,
-    CustomerSubscriptionCreatedStrategy,
     CustomerSubscriptionUpdatedStrategy,
     CustomerSubscriptionDeletedStrategy,
     WebhookStrategyFactory,
     {
       provide: "WEBHOOK_STRATEGIES",
       useFactory: (
-        invoiceCreatedStrategy: InvoiceCreatedStrategy,
         invoicePaidStrategy: InvoicePaidStrategy,
         invoicePaymentFailedStrategy: InvoicePaymentFailedStrategy,
         paymentIntentSucceededStrategy: PaymentIntentSucceededStrategy,
-        customerSubscriptionCreatedStrategy: CustomerSubscriptionCreatedStrategy,
         customerSubscriptionUpdatedStrategy: CustomerSubscriptionUpdatedStrategy,
         customerSubscriptionDeletedStrategy: CustomerSubscriptionDeletedStrategy,
       ) => [
-        invoiceCreatedStrategy,
         invoicePaidStrategy,
         invoicePaymentFailedStrategy,
         paymentIntentSucceededStrategy,
-        customerSubscriptionCreatedStrategy,
         customerSubscriptionUpdatedStrategy,
         customerSubscriptionDeletedStrategy,
       ],
       inject: [
-        InvoiceCreatedStrategy,
         InvoicePaidStrategy,
         InvoicePaymentFailedStrategy,
         PaymentIntentSucceededStrategy,
-        CustomerSubscriptionCreatedStrategy,
         CustomerSubscriptionUpdatedStrategy,
         CustomerSubscriptionDeletedStrategy,
       ],

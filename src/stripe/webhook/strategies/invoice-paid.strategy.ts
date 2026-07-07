@@ -27,95 +27,29 @@ export class InvoicePaidStrategy implements WebhookStrategy {
   async handle(event: Stripe.Event): Promise<void> {
     const stripeInvoice = event.data.object as Stripe.Invoice;
     this.logger.log(`invoice.paid: ${stripeInvoice.id}`);
-
-    let stripeSubscriptionId =
-      typeof stripeInvoice.subscription === "string"
-        ? stripeInvoice.subscription
-        : stripeInvoice.subscription?.id ?? null;
-
-    if (!stripeSubscriptionId) {
-      stripeSubscriptionId = (stripeInvoice as any).parent?.subscription_details?.subscription ?? null;
-    }
-
-    if (!stripeSubscriptionId && stripeInvoice.lines?.data?.length) {
-      const line = stripeInvoice.lines.data[0] as any;
-      stripeSubscriptionId = line?.subscription ?? line?.parent?.subscription_item_details?.subscription ?? null;
-    }
-
-    if (!stripeSubscriptionId) {
-      this.logger.log(`Invoice ${stripeInvoice.id} has no linked subscription, skipping`);
-      return;
-    }
-
-    // Idempotency: kiểm tra Invoice local, có retry nhẹ nếu invoice.created đến trễ
-    let invoice = await this.prisma.invoice.findFirst({
-      where: { providerInvoiceId: stripeInvoice.id },
-    });
-
-    let invoiceRetries = 0;
-    while (!invoice && invoiceRetries < 5) {
-      this.logger.warn(`Invoice ${stripeInvoice.id} not found locally. Waiting for invoice.created...`);
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      invoice = await this.prisma.invoice.findFirst({
-        where: { providerInvoiceId: stripeInvoice.id },
-      });
-      invoiceRetries++;
-    }
-
-    if (!invoice) {
-      this.logger.error(`No local invoice found for Stripe invoice ${stripeInvoice.id} after retries`);
-      return;
-    }
-
-    if (invoice.status === InvoiceStatus.PAID) {
-      this.logger.log(`Invoice ${invoice.id} already PAID – skipping`);
-      return;
-    }
-
-    let subscription = await this.prisma.subscription.findFirst({
-      where: { providerSubscriptionId: stripeSubscriptionId },
-    });
-    this.logger.log(`Found subscription ${subscription} for Stripe subscription ${stripeSubscriptionId}`);
-    let subRetries = 0;
-    this.logger.log(`Checking for subscription ${subRetries} for Stripe subscription ${stripeSubscriptionId}`);
-    while (!subscription && subRetries < 5) {
-      this.logger.warn(`Subscription ${stripeSubscriptionId} not found locally. Waiting for customer.subscription.created...`);
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      subscription = await this.prisma.subscription.findFirst({
-        where: { providerSubscriptionId: stripeSubscriptionId },
-      });
-      subRetries++;
-    }
-
-    if (!subscription) {
-      this.logger.error(`No local subscription found for Stripe subscription ${stripeSubscriptionId} after retries`);
-      return;
-    }
-
+    
     const lineToUse = stripeInvoice.lines?.data?.find(line => line.type === 'subscription') || stripeInvoice.lines?.data?.[0];
+    let stripeSubscriptionId = lineToUse?.subscription ?? (lineToUse as any)?.parent?.subscription_item_details?.subscription ?? null;
 
-    const price = lineToUse?.price;
-    let priceId = typeof price === 'string' ? price : price?.id;
-
-    if (!priceId) {
-      priceId = (lineToUse as any)?.plan?.id;
+    if (!stripeSubscriptionId) {
+      this.logger.error(`Invoice ${stripeInvoice.id} has no linked subscription, skipping`);
+      return;
     }
 
-    if (!priceId) {
-      priceId = (lineToUse as any)?.pricing?.price_details?.price;
+    const userId = await this.prisma.user.findFirst({
+      where: { providerCustomerId: stripeInvoice.customer as string },
+      select: { id: true },
+    });
+    
+    if (!userId) {
+      this.logger.error(`No user found for Stripe customer ${stripeInvoice.customer}`);
+      return;
     }
 
-    if (!priceId) {
-      this.logger.warn(`No price ID found in invoice lines. Falling back to subscription's current pricing option.`);
-      const currentPricingOption = await this.prisma.pricingOption.findUnique({
-        where: { id: subscription.pricingOptionId },
-        select: { providerPriceId: true },
-      });
-      priceId = currentPricingOption?.providerPriceId ?? undefined;
-    }
+    let priceId = (lineToUse as any)?.pricing?.price_details?.price;
 
     if (!priceId) {
-      this.logger.error(`No price ID in invoice ${stripeInvoice.id} lines and no fallback available`);
+      this.logger.error(`No price ID found in invoice lines.`);
       return;
     }
 
@@ -134,59 +68,51 @@ export class InvoicePaidStrategy implements WebhookStrategy {
     const isInitial = stripeInvoice.billing_reason === "subscription_create";
     const eventType = isInitial ? SubscriptionEventType.CREATED : SubscriptionEventType.RENEWED;
     const description = isInitial
-      ? `Credits granted – ${plan.name} (initial)`
-      : `Credits granted – ${plan.name} (renewal)`;
-
-    const paymentIntentId =
-      typeof stripeInvoice.payment_intent === "string"
-        ? stripeInvoice.payment_intent
-        : (stripeInvoice.payment_intent as any)?.id ?? null;
-
+      ? `Credits granted ${plan.name} (initial)`
+      : `Credits granted ${plan.name} (renewal)`;
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.invoice.update({
-        where: { id: invoice.id },
-        data: {
-          status: InvoiceStatus.PAID,
-          billingReason: stripeInvoice.billing_reason ?? null,
-          paidAt: new Date(),
-        },
-      });
-
-      if (paymentIntentId) {
-        await tx.payment.upsert({
-          where: { providerPaymentId: paymentIntentId },
-          create: {
-            userId: subscription.userId,
-            invoiceId: invoice.id,
-            provider: PaymentProvider.STRIPE,
-            providerPaymentId: paymentIntentId,
-            amount: formatStripeAmountToDatabase(stripeInvoice.amount_paid, stripeInvoice.currency),
-            currency: stripeInvoice.currency,
-            status: PaymentStatus.SUCCEEDED,
-            paidAt: new Date(),
-          },
-          update: { status: PaymentStatus.SUCCEEDED, paidAt: new Date() },
-        });
-      }
-
-      this.logger.log(
-        `Invoice ${invoice.id} marked as PAID, subscription ${subscription.id} updated to ACTIVE, credits granted: +${plan.renewalCredits}`,
-      );
-      await tx.subscription.update({
-        where: { id: subscription.id },
-        data: {
+      const subscription = await tx.subscription.upsert({
+        where: { userId: userId.id },
+        create: {
+          userId: userId.id,
           status: SubscriptionStatus.ACTIVE,
           pricingOptionId: pricingOption.id,
           currentPeriodStart: periodStart,
           currentPeriodEnd: periodEnd,
           subscriptionCreditsRemaining: plan.renewalCredits,
           nextCreditResetAt,
+          provider: PaymentProvider.STRIPE,
+          providerSubscriptionId: stripeSubscriptionId,
         },
+        update: {
+          status: SubscriptionStatus.ACTIVE,
+          pricingOptionId: pricingOption.id,
+          currentPeriodStart: periodStart,
+          currentPeriodEnd: periodEnd,
+          subscriptionCreditsRemaining: plan.renewalCredits,
+          nextCreditResetAt,
+        }
       });
       this.logger.log(
         `Subscription ${subscription.id} updated: status=ACTIVE, currentPeriodStart=${periodStart.toISOString()}, currentPeriodEnd=${periodEnd.toISOString()}, subscriptionCreditsRemaining=${plan.renewalCredits}, nextCreditResetAt=${nextCreditResetAt.toISOString()}`,
       );
+      const invoice = await tx.invoice.create({
+        data: {
+          subscriptionId: subscription.id,
+          provider: PaymentProvider.STRIPE,
+          providerInvoiceId: stripeInvoice.id,
+          amount: formatStripeAmountToDatabase(stripeInvoice.amount_due, stripeInvoice.currency),
+          currency: stripeInvoice.currency,
+          status: InvoiceStatus.PAID,
+          dueAt: stripeInvoice.due_date ? new Date(stripeInvoice.due_date * 1000) : new Date(stripeInvoice.period_end * 1000),
+        },
+      });
+
+      this.logger.log(
+        `Invoice ${invoice.id} marked as PAID, subscription ${subscription.id} updated to ACTIVE, credits granted: +${plan.renewalCredits}`,
+      );
+      
 
       await tx.creditTransaction.create({
         data: {
