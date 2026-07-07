@@ -15,12 +15,7 @@ export class CreditResetCronService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  /**
-   * Chạy mỗi giờ.
-   * Quét tất cả subscription ACTIVE có nextCreditResetAt <= now,
-   * reset credit và đẩy nextCreditResetAt sang tháng tiếp theo.
-   */
-  @Cron(CronExpression.EVERY_HOUR)
+  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
   async handleCreditReset(): Promise<void> {
     const now = new Date();
     this.logger.log(`⏰ Credit reset cron started at ${now.toISOString()}`);

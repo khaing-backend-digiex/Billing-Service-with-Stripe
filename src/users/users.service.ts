@@ -18,7 +18,7 @@ export class UsersService implements OnApplicationBootstrap {
     private readonly prisma: PrismaService,
     @Inject(forwardRef(() => StripeService))
     private readonly stripeService: StripeService,
-  ) {}
+  ) { }
 
   async onApplicationBootstrap() {
     try {
@@ -30,67 +30,64 @@ export class UsersService implements OnApplicationBootstrap {
         },
       });
 
-      if (!adminExists) {
-        this.logger.log("Admin user not found. Creating default admin...");
-        const newAdmin = await this.prisma.user.create({
-          data: {
-            email: "admin@example.com",
-            name: "Super Admin",
-            roles: ["admin", "user"],
-          },
-        });
-        
-        try {
-          await this.ensureStripeSetup(newAdmin);
-        } catch (err) {
-          this.logger.error("Failed to create stripe customer for admin", err);
-        }
-
-        this.logger.log(`Default admin created with email: ${newAdmin.email}`);
-      } else {
-        this.logger.log("Admin user already exists.");
+      if (adminExists) {
+        this.logger.log("Admin already exists");
+        return;
       }
-    } catch (error) {
-      this.logger.error("Failed to seed admin user on startup", error);
-    }
-  }
-
-  async findOrCreateByEmail(email: string, name?: string): Promise<User> {
-    let user = await this.prisma.user.findUnique({ where: { email } });
-    if (!user) {
-      user = await this.prisma.user.create({
+      const newAdmin = await this.prisma.user.create({
         data: {
-          email,
-          name: name || null,
-          roles: ["user"],
-        },
-      });
+          email: "[EMAIL_ADDRESS]",
+          name: "Admin",
+          roles: ["admin"],
+        }
+      })
+
+      await this.ensureStripeSetup(newAdmin);
+      this.logger.log(`Default admin created with email: ${newAdmin.email}`);
+    }
+    catch (err) {
+      this.logger.error("Failed to create admin user on startup", err);
+      throw err;
     }
 
-    // Self-healing: lần signup trước có thể fail giữa chừng (Stripe down) →
-    // user tồn tại nhưng thiếu customer hoặc chưa có subscription local.
-    // Mỗi lần gọi lại sẽ kiểm tra và setup bù (idempotent — ensureFreeSubscription
-    // skip nếu customer đã có sub active). Lỗi chỉ log để không chặn login,
-    // lần gọi sau tự retry.
-    const hasSubscription =
-      (await this.prisma.subscription.count({ where: { userId: user.id } })) > 0;
-    if (!user.providerCustomerId || !hasSubscription) {
-      try {
-        await this.ensureStripeSetup(user);
-      } catch (err) {
-        this.logger.error(
-          `Failed to set up Stripe for user ${user.id} – will retry on next call`,
-          err,
-        );
-      }
-    }
-    return user;
+  }
+  async createUser(email: string, name?: string): Promise<User> {
+    return this.prisma.user.create({
+      data: {
+        email,
+        name: name ?? null,
+        roles: ["user"],
+      },
+    });
   }
 
-  /**
-   * Idempotent: tạo Stripe customer nếu user chưa có, rồi đảm bảo có free
-   * subscription. Gọi lại nhiều lần an toàn.
-   */
+  async findOrCreateByEmail(
+    email: string,
+    name?: string,
+  ): Promise<User> {
+    const existingUser = await this.prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (existingUser) {
+      return existingUser;
+    }
+
+    return this.createUser(email, name);
+  }
+
+ async initializeUser(user: User): Promise<void> {
+  try {
+    await this.ensureStripeSetup(user);
+  } catch (error) {
+    this.logger.error(
+      `Failed to initialize user ${user.id}.`,
+      error,
+    );
+    throw error;
+  }
+}
+
   private async ensureStripeSetup(user: User): Promise<void> {
     let customerId = user.providerCustomerId;
     if (!customerId) {

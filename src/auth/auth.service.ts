@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
@@ -14,39 +15,41 @@ export class AuthService {
   ) {}
 
   async login(loginDto: LoginDto) {
-    const { email } = loginDto;
+  const user = await this.usersService.findOrCreateByEmail(
+    loginDto.email,
+  );
 
-    const user = await this.usersService.findOrCreateByEmail(email);
+  const payload = {
+    sub: user.id,
+    email: user.email,
+    roles: user.roles,
+  };
 
-    const payload = {
-      sub: user.id,
-      email: user.email,
-      roles: user.roles,
-    };
+  return {
+    accessToken: this.jwtService.sign(payload),
+    user,
+  };
+}
 
-    const accessToken = this.jwtService.sign(payload);
+async register(registerDto: RegisterDto) {
+  const { email, name } = registerDto;
 
-    return {
-      accessToken,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        roles: user.roles,
-      },
-    };
+  const existingUser = await this.usersService.findByEmail(email);
+
+  if (existingUser) {
+    throw new BadRequestException("Email already exists.");
   }
 
-  async register(registerDto: RegisterDto) {
-    const { email, name } = registerDto;
 
-    const user = await this.usersService.findOrCreateByEmail(email, name);
+  const user = await this.usersService.createUser(email, name);
 
-    return {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      roles: user.roles,
-    };
-  }
+  await this.usersService.initializeUser(user);
+
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    roles: user.roles,
+  };
+}
 }

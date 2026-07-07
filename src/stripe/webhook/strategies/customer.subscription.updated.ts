@@ -47,7 +47,6 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
       return;
     }
 
-    // syncFromStripe tự map status (và trả null nếu status/plan không hợp lệ).
     const previousSubscription = await this.prisma.subscription.findFirst({
       where: { providerSubscriptionId: sub.id },
     });
