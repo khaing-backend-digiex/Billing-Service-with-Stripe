@@ -39,6 +39,16 @@ export class FreePlanReconciliationCron {
     for (const user of users) {
       try {
         let customerId = user.providerCustomerId;
+
+        // Customer cũ (account Stripe khác) → resource_missing. Bỏ id chết để
+        // tạo lại customer mới trên account hiện tại, thay vì để findActiveSubscription ném lỗi.
+        if (customerId && !(await this.stripeService.customerExists(customerId))) {
+          this.logger.warn(
+            `User ${user.id}: customer ${customerId} không tồn tại trên Stripe (account cũ) – tạo lại`,
+          );
+          customerId = null;
+        }
+
         if (!customerId) {
           const customer = await this.stripeService.createCustomer(
             user.id,
@@ -70,7 +80,9 @@ export class FreePlanReconciliationCron {
           }
         }
       } catch (err) {
-        this.logger.error(`Reconciliation failed for user ${user.id}`, err);
+        this.logger.error(
+          `Reconciliation failed for user ${user.id}: ${err instanceof Error ? err.message : err}`,
+        );
       }
     }
 
