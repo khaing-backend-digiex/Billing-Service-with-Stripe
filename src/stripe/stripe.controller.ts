@@ -51,15 +51,16 @@ export class StripeController {
       throw new BadRequestException("User already has a Stripe customer account");
     }
 
-    const customer = await this.stripeService.createCustomer(
-      userId,
-      dto.email || user.email,
-      dto.name || user.name || undefined,
-    );
+    const customerId = await this.usersService.ensureStripeCustomerId({
+      id: user.id,
+      email: dto.email || user.email,
+      name: dto.name || user.name || undefined,
+      providerCustomerId: user.providerCustomerId || undefined,
+    });
 
     return new ApiResponse(HttpStatus.CREATED, "Stripe customer created", {
-      customerId: customer.id,
-      email: customer.email,
+      customerId,
+      email: dto.email || user.email,
     });
   }
 
@@ -100,12 +101,7 @@ export class StripeController {
     let providerCustomerId = user.providerCustomerId;
 
     if (!providerCustomerId) {
-      const customer = await this.stripeService.createCustomer(
-        userId,
-        user.email,
-        user.name || undefined,
-      );
-      providerCustomerId = customer.id;
+      providerCustomerId = await this.usersService.ensureStripeCustomerId(user);
     }
 
     const session = await this.stripeService.createCheckoutSession(

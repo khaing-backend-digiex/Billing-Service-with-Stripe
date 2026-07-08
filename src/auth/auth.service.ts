@@ -15,9 +15,6 @@ export class AuthService {
   ) {}
 
   async login(loginDto: LoginDto) {
-    const publicUser = await this.usersService.findOrCreateByEmail(
-      loginDto.email,
-    );
     const user = await this.usersService.findByEmail(loginDto.email);
 
     if (!user) {
@@ -32,7 +29,11 @@ export class AuthService {
 
     return {
       accessToken: this.jwtService.sign(payload),
-      user: publicUser,
+      user: {
+        email: user.email,
+        name: user.name,
+        roles: user.roles,
+      },
     };
   }
 

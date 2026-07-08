@@ -2,13 +2,10 @@ import {
   Injectable,
   Logger,
   InternalServerErrorException,
-  forwardRef,
-  Inject,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import Stripe from "stripe";
 import { PrismaService } from "../database/prisma.service";
-import { UsersService } from "../users/users.service";
 import { PaymentStatus, PaymentProvider, SubscriptionStatus } from "@prisma/client";
 import { PLAN_CODES } from "../common/constants/plan.constants";
 
@@ -19,8 +16,6 @@ export class StripeService {
 
   constructor(
     private readonly configService: ConfigService,
-    @Inject(forwardRef(() => UsersService))
-    private readonly usersService: UsersService,
     private readonly prisma: PrismaService,
   ) {
     const secretKey = this.configService.get<string>("STRIPE_SECRET_KEY");
@@ -32,20 +27,22 @@ export class StripeService {
     email: string,
     name?: string,
   ): Promise<Stripe.Customer> {
+    return this.stripe.customers.create({
+      email,
+      name,
+      metadata: { userId: String(userId) },
+    });
+  }
+
+  async deleteCustomer(customerId: string): Promise<void> {
     try {
-      const customer = await this.stripe.customers.create({
-        email,
-        name,
-        metadata: { userId: String(userId) },
-      });
-
-      await this.usersService.updateStripeCustomerId(userId, customer.id);
-
-      this.logger.log(`✅ Created Stripe customer ${customer.id} for user ${userId}`);
-      return customer;
+      await this.stripe.customers.del(customerId);
+      this.logger.log(`✅ Deleted Stripe customer ${customerId}`);
     } catch (error) {
-      this.logger.error(`Failed to create Stripe customer: ${error}`);
-      throw new InternalServerErrorException("Failed to create Stripe customer");
+      if ((error as Stripe.StripeRawError)?.code === "resource_missing") {
+        return;
+      }
+      throw error;
     }
   }
 

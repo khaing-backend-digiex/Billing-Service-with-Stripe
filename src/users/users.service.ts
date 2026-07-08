@@ -1,7 +1,7 @@
 import {
   Injectable,
   NotFoundException,
-  BadRequestException,
+  InternalServerErrorException,
   forwardRef,
   Inject,
   OnApplicationBootstrap,
@@ -42,15 +42,12 @@ export class UsersService implements OnApplicationBootstrap {
         this.logger.log("Admin already exists");
         return;
       }
-      const newAdmin = await this.prisma.user.create({
-        data: {
-          email: "[EMAIL_ADDRESS]",
-          name: "Admin",
-          roles: ["admin"],
-        }
-      })
+      const newAdmin = await this.provisionUser({
+        email: "[EMAIL_ADDRESS]",
+        name: "Admin",
+        roles: ["admin"],
+      });
 
-      await this.ensureStripeSetup(newAdmin);
       this.logger.log(`Default admin created with email: ${newAdmin.email}`);
     }
     catch (err) {
@@ -60,54 +57,118 @@ export class UsersService implements OnApplicationBootstrap {
 
   }
   async createUser(email: string, name?: string): Promise<PublicUser> {
-    const newUser = await this.prisma.user.create({
-      data: {
-        email,
-        name,
-      },
+    const newUser = await this.provisionUser({
+      email,
+      name,
     });
-    await this.initializeUser(newUser);
     return toPublicUser(newUser);
   }
 
-  async findOrCreateByEmail(
-    email: string,
-    name?: string,
-  ): Promise<PublicUser> {
-    const existingUser = await this.prisma.user.findUnique({
-      where: { email },
-    });
-
-    if (existingUser) {
-      return toPublicUser(existingUser);
+  async ensureStripeCustomerId(user: {
+    id: number;
+    email: string;
+    name?: string | null;
+    providerCustomerId?: string | null;
+  }): Promise<string> {
+    if (user.providerCustomerId) {
+      return user.providerCustomerId;
     }
 
-    return this.createUser(email, name);
+    const customer = await this.stripeService.createCustomer(
+      user.id,
+      user.email,
+      user.name || undefined,
+    );
+
+    try {
+      await this.updateStripeCustomerId(user.id, customer.id);
+      return customer.id;
+    } catch (error) {
+      await this.cleanupStripeCustomer(customer.id);
+      throw error;
+    }
+  }
+
+  private async cleanupStripeCustomer(customerId: string): Promise<void> {
+    try {
+      await this.stripeService.deleteCustomer(customerId);
+    } catch (deleteError) {
+      this.logger.warn(
+        `Failed to clean up Stripe customer ${customerId} after DB update failure: ${deleteError}`,
+      );
+    }
+  }
+
+  private async provisionUser(data: {
+    email: string;
+    name?: string;
+    roles?: string[];
+  }): Promise<User> {
+    const newUser = await this.prisma.user.create({
+      data: {
+        email: data.email,
+        name: data.name,
+        roles: data.roles,
+      },
+    });
+
+    try {
+      await this.initializeUser(newUser);
+      return newUser;
+    } catch (error) {
+      await this.rollbackProvisionedUser(newUser.id);
+      throw error;
+    }
+  }
+
+  private async rollbackProvisionedUser(userId: number): Promise<void> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { providerCustomerId: true },
+    });
+
+    if (user?.providerCustomerId) {
+      try {
+        await this.stripeService.deleteCustomer(user.providerCustomerId);
+      } catch (error) {
+        this.logger.warn(
+          `Failed to rollback Stripe customer for user ${userId}: ${error}`,
+        );
+      }
+    }
+
+    try {
+      await this.prisma.user.delete({ where: { id: userId } });
+    } catch (error) {
+      this.logger.warn(`Failed to rollback database user ${userId}: ${error}`);
+    }
   }
 
  async initializeUser(user: User): Promise<void> {
-  try {
-    await this.ensureStripeSetup(user);
-  } catch (error) {
-    this.logger.error(
-      `Failed to initialize user ${user.id}.`,
-      error,
-    );
-    throw error;
+    try {
+      await this.ensureStripeSetup(user);
+    } catch (error) {
+      this.logger.error(
+        `Failed to initialize user ${user.id}.`,
+        error,
+      );
+      throw error;
+    }
   }
-}
 
   private async ensureStripeSetup(user: User): Promise<void> {
-    let customerId = user.providerCustomerId;
-    if (!customerId) {
-      const customer = await this.stripeService.createCustomer(
-        user.id,
-        user.email,
-        user.name || undefined,
+    const customerId = await this.ensureStripeCustomerId(user);
+    try {
+      await this.stripeService.ensureFreeSubscription(customerId);
+    } catch (error) {
+      this.logger.error(
+        `Failed to register free plan for user ${user.id} with Stripe customer ${customerId}`,
+        error,
       );
-      customerId = customer.id;
+      throw new InternalServerErrorException(
+        `Failed to register free plan for user ${user.id}`,
+      );
     }
-    await this.stripeService.ensureFreeSubscription(customerId);
   }
 
   async findAll(limit: number = 10, offset: number = 0): Promise<User[]> {

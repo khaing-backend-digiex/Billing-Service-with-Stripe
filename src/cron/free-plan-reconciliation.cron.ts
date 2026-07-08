@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { Cron, CronExpression } from "@nestjs/schedule";
 import { PrismaService } from "../database/prisma.service";
 import { StripeService } from "../stripe/stripe.service";
+import { UsersService } from "../users/users.service";
 import { SubscriptionSyncService } from "../stripe/sync/subscription-sync.service";
 import { PaidInvoiceSyncService } from "../stripe/sync/paid-invoice-sync.service";
 
@@ -16,6 +17,7 @@ export class FreePlanReconciliationCron {
   constructor(
     private readonly prisma: PrismaService,
     private readonly stripeService: StripeService,
+    private readonly usersService: UsersService,
     private readonly subscriptionSync: SubscriptionSyncService,
     private readonly paidInvoiceSync: PaidInvoiceSyncService,
   ) {}
@@ -39,9 +41,6 @@ export class FreePlanReconciliationCron {
     for (const user of users) {
       try {
         let customerId = user.providerCustomerId;
-
-        // Customer cũ (account Stripe khác) → resource_missing. Bỏ id chết để
-        // tạo lại customer mới trên account hiện tại, thay vì để findActiveSubscription ném lỗi.
         if (customerId && !(await this.stripeService.customerExists(customerId))) {
           this.logger.warn(
             `User ${user.id}: customer ${customerId} không tồn tại trên Stripe (account cũ) – tạo lại`,
@@ -50,12 +49,7 @@ export class FreePlanReconciliationCron {
         }
 
         if (!customerId) {
-          const customer = await this.stripeService.createCustomer(
-            user.id,
-            user.email,
-            user.name || undefined,
-          );
-          customerId = customer.id;
+          customerId = await this.usersService.ensureStripeCustomerId(user);
         }
 
         const activeSub = await this.stripeService.findActiveSubscription(customerId);
