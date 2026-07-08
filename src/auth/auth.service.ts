@@ -15,9 +15,14 @@ export class AuthService {
   ) {}
 
   async login(loginDto: LoginDto) {
-    const user = await this.usersService.findOrCreateByEmail(
+    const publicUser = await this.usersService.findOrCreateByEmail(
       loginDto.email,
     );
+    const user = await this.usersService.findByEmail(loginDto.email);
+
+    if (!user) {
+      throw new BadRequestException("User not found.");
+    }
 
     const payload = {
       sub: user.id,
@@ -27,7 +32,7 @@ export class AuthService {
 
     return {
       accessToken: this.jwtService.sign(payload),
-      user,
+      user: publicUser,
     };
   }
 
@@ -40,13 +45,9 @@ export class AuthService {
       throw new BadRequestException("Email already exists.");
     }
 
-
     const user = await this.usersService.createUser(email, name);
 
-    await this.usersService.initializeUser(user);
-
     return {
-      id: user.id,
       name: user.name,
       email: user.email,
       roles: user.roles,

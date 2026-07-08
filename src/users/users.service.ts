@@ -11,6 +11,14 @@ import { PrismaService } from "../database/prisma.service";
 import { StripeService } from "../stripe/stripe.service";
 import { User } from "@prisma/client";
 
+export type PublicUser = Pick<User, "email" | "name" | "roles">;
+
+const toPublicUser = (user: User): PublicUser => ({
+  email: user.email,
+  name: user.name,
+  roles: user.roles,
+});
+
 @Injectable()
 export class UsersService implements OnApplicationBootstrap {
   private readonly logger = new Logger(UsersService.name);
@@ -51,26 +59,30 @@ export class UsersService implements OnApplicationBootstrap {
     }
 
   }
-  async createUser(email: string, name?: string): Promise<User> {
-    return this.prisma.user.create({
-      data: {
-        email,
-        name: name ?? null,
-        roles: ["user"],
-      },
+  async createUser(email: string, name?: string): Promise<PublicUser> {
+    const user = await this.prisma.$transaction(async (tx) => {
+      const newUser = await tx.user.create({
+        data: {
+          email,
+          name,
+        },
+      });
+      await this.initializeUser(newUser);
+      return newUser;
     });
+    return toPublicUser(user);
   }
 
   async findOrCreateByEmail(
     email: string,
     name?: string,
-  ): Promise<User> {
+  ): Promise<PublicUser> {
     const existingUser = await this.prisma.user.findUnique({
       where: { email },
     });
 
     if (existingUser) {
-      return existingUser;
+      return toPublicUser(existingUser);
     }
 
     return this.createUser(email, name);
