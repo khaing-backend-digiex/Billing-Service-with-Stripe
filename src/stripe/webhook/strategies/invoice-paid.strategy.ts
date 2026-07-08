@@ -127,13 +127,9 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       });
 
       const isActivePaid = plan.code !== PLAN_CODES.FREE;
-      await tx.creditWallet.upsert({
-        where: { userId: subscription.userId },
-        create: {
-          userId: subscription.userId,
-          is_active: isActivePaid,
-        },
-        update: {
+      await tx.creditWallet.update({
+        where: { userId: userId.id },
+        data: {
           is_active: isActivePaid,
         },
       });

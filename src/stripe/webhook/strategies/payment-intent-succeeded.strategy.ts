@@ -75,7 +75,7 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
       await tx.creditWallet.upsert({
         where: { userId },
         update: { addonCredits: { increment: addon.credits } },
-        create: { userId, addonCredits: addon.credits },
+        create: { userId, addonCredits: addon.credits, is_active: true },
       });
 
       await tx.creditTransaction.create({
