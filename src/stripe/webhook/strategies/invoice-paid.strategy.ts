@@ -109,21 +109,7 @@ export class InvoicePaidStrategy implements WebhookStrategy {
         },
         update: {},
       });
-
-      const claimed = await tx.invoice.updateMany({
-        where: { id: invoice.id, status: { not: InvoiceStatus.PAID } },
-        data: { status: InvoiceStatus.PAID, paidAt: new Date() },
-      });
-      if (claimed.count === 0) {
-        this.logger.log(`Invoice ${stripeInvoice.id} already PAID – skipping credit grant`);
-        return;
-      }
-
-      this.logger.log(
-        `Invoice ${invoice.id} marked as PAID, subscription ${subscription.id} updated to ACTIVE, credits granted: +${plan.renewalCredits}`,
-      );
-
-
+      
       await tx.creditTransaction.create({
         data: {
           userId: subscription.userId,
@@ -136,12 +122,16 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       });
 
       const isActivePaid = plan.code !== PLAN_CODES.FREE;
-      await tx.creditWallet.update({
+      const creditWalletUpdateResult = await tx.creditWallet.updateMany({
         where: { userId: userId.id },
         data: {
           is_active: isActivePaid,
         },
       });
+
+      if (creditWalletUpdateResult.count === 0) {
+        this.logger.log(`No credit wallet found for user ${userId.id}, skipping wallet update`);
+      }
 
       await tx.subscriptionEvent.create({
         data: {

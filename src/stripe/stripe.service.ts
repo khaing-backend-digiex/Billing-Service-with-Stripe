@@ -53,11 +53,6 @@ export class StripeService {
     return this.stripe.customers.retrieve(customerId);
   }
 
-  /**
-   * Kiểm tra customer còn tồn tại trên Stripe account hiện tại không.
-   * Trả false nếu bị xóa hoặc thuộc account cũ (resource_missing) — dùng để
-   * reconcile tự heal thay vì ném lỗi và làm bẩn log.
-   */
   async customerExists(customerId: string): Promise<boolean> {
     try {
       const customer = await this.stripe.customers.retrieve(customerId);
