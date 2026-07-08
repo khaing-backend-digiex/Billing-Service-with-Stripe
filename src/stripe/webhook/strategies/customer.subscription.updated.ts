@@ -6,6 +6,7 @@ import {
   CreditTransactionType,
   ReferenceType,
 } from "@prisma/client";
+
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { FreePlanDowngradeService } from "../free-plan-downgrade.service";
@@ -13,10 +14,14 @@ import { SubscriptionSyncService } from "../../sync/subscription-sync.service";
 
 const EVENT_TYPE = "customer.subscription.updated";
 
-const STATUS_UNPAID: Stripe.Subscription.Status = "unpaid";
-const STATUS_CANCELED: Stripe.Subscription.Status = "canceled";
-const REASON_PAYMENT_FAILED: Stripe.Subscription.CancellationDetails.Reason =
-  "payment_failed";
+const STRIPE_STATUS = {
+  UNPAID: "unpaid",
+  CANCELED: "canceled",
+} as const;
+
+const CANCELLATION_REASON = {
+  PAYMENT_FAILED: "payment_failed",
+} as const;
 
 @Injectable()
 export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
@@ -26,65 +31,92 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
     private readonly prisma: PrismaService,
     private readonly freePlanDowngrade: FreePlanDowngradeService,
     private readonly subscriptionSyncService: SubscriptionSyncService,
-  ) { }
+  ) {}
 
   canHandle(eventType: string): boolean {
     return eventType === EVENT_TYPE;
   }
 
   async handle(event: Stripe.Event): Promise<void> {
-    const sub = event.data.object as Stripe.Subscription;
-    this.logger.log(`${EVENT_TYPE}: ${sub.id} → ${sub.status}`);
+    const stripeSubscription = event.data.object as Stripe.Subscription;
 
+    this.logger.log(
+      `${EVENT_TYPE}: ${stripeSubscription.id} -> ${stripeSubscription.status}`,
+    );
 
-    const isFinalPaymentFailure =
-      sub.status === STATUS_UNPAID ||
-      (sub.status === STATUS_CANCELED &&
-        sub.cancellation_details?.reason === REASON_PAYMENT_FAILED);
-
-    if (isFinalPaymentFailure) {
-      await this.expireSubscription(sub);
+    if (this.isPaymentFailure(stripeSubscription)) {
+      await this.handlePaymentFailureExpiration(stripeSubscription);
       return;
     }
 
-    const previousSubscription = await this.prisma.subscription.findFirst({
-      where: { providerSubscriptionId: sub.id },
-    });
-    const previousStatus = previousSubscription?.status;
-
-    const subscription = await this.subscriptionSyncService.syncFromStripe(sub);
-    if (!subscription) {
-      return;
-    }
-
-    if (
-      previousStatus === SubscriptionStatus.PAST_DUE &&
-      subscription.status === SubscriptionStatus.ACTIVE
-    ) {
-      await this.prisma.subscriptionEvent.create({
-        data: {
-          subscriptionId: subscription.id,
-          type: SubscriptionEventType.PAYMENT_RECOVERED,
-          metadata: {
-            stripeSubscriptionId: sub.id,
-          },
-        },
-      });
-
-      this.logger.log(
-        `Payment recovered: subscription ${subscription.id} → ACTIVE`,
-      );
-    }
+    await this.syncSubscription(stripeSubscription);
   }
 
-  private async expireSubscription(sub: Stripe.Subscription): Promise<void> {
+  private isPaymentFailure(subscription: Stripe.Subscription): boolean {
+    return (
+      subscription.status === STRIPE_STATUS.UNPAID ||
+      (subscription.status === STRIPE_STATUS.CANCELED &&
+        subscription.cancellation_details?.reason === CANCELLATION_REASON.PAYMENT_FAILED)
+    );
+  }
+
+  private async syncSubscription(stripeSubscription: Stripe.Subscription): Promise<void> {
+    const existing = await this.prisma.subscription.findFirst({
+      where: { providerSubscriptionId: stripeSubscription.id },
+    });
+
+    const previousStatus = existing?.status;
+
+    const subscription = await this.subscriptionSyncService.syncFromStripe(stripeSubscription);
+
+    if (!subscription) {
+      this.logger.warn(`Cannot sync subscription ${stripeSubscription.id}`);
+      return;
+    }
+
+    await this.handlePaymentRecovery(
+      previousStatus,
+      subscription.status,
+      subscription.id,
+      stripeSubscription.id,
+    );
+  }
+
+  private async handlePaymentRecovery(
+    previousStatus: SubscriptionStatus | undefined,
+    currentStatus: SubscriptionStatus,
+    subscriptionId: string,
+    stripeSubscriptionId: string,
+  ): Promise<void> {
+    const recovered =
+      previousStatus === SubscriptionStatus.PAST_DUE &&
+      currentStatus === SubscriptionStatus.ACTIVE;
+
+    if (!recovered) {
+      return;
+    }
+
+    await this.prisma.subscriptionEvent.create({
+      data: {
+        subscriptionId,
+        type: SubscriptionEventType.PAYMENT_RECOVERED,
+        metadata: {
+          stripeSubscriptionId,
+        },
+      },
+    });
+
+    this.logger.log(`Payment recovered: subscription ${subscriptionId} -> ACTIVE`);
+  }
+
+  private async handlePaymentFailureExpiration(stripeSubscription: Stripe.Subscription): Promise<void> {
     const subscription = await this.prisma.subscription.findFirst({
-      where: { providerSubscriptionId: sub.id },
+      where: { providerSubscriptionId: stripeSubscription.id },
       include: { pricingOption: true },
     });
 
     if (!subscription) {
-      this.logger.error(`No local subscription found for Stripe subscription ${sub.id}`);
+      this.logger.error(`No local subscription found for Stripe subscription ${stripeSubscription.id}`);
       return;
     }
 
@@ -97,18 +129,19 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
             subscriptionCreditsRemaining: 0,
           },
         }),
+
         this.prisma.subscriptionEvent.create({
           data: {
             subscriptionId: subscription.id,
             type: SubscriptionEventType.EXPIRED,
             metadata: {
-              stripeSubscriptionId: sub.id,
-              stripeStatus: sub.status,
-              reason: REASON_PAYMENT_FAILED,
+              stripeSubscriptionId: stripeSubscription.id,
+              stripeStatus: stripeSubscription.status,
+              reason: CANCELLATION_REASON.PAYMENT_FAILED,
             },
           },
         }),
-        
+
         ...(subscription.subscriptionCreditsRemaining > 0
           ? [
               this.prisma.creditTransaction.create({
@@ -126,12 +159,17 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
       ]);
 
       this.logger.log(
-        `Subscription ${subscription.id} EXPIRED after exhausted payment retries (stripe status: ${sub.status})`,
+        `Subscription ${subscription.id} EXPIRED after exhausted payment retries (stripe status: ${stripeSubscription.status})`,
       );
     } else {
       this.logger.log(`Subscription ${subscription.id} already EXPIRED`);
     }
 
-    await this.freePlanDowngrade.downgradeToFree(subscription, sub, REASON_PAYMENT_FAILED);
+
+    await this.freePlanDowngrade.downgradeToFree(
+      subscription,
+      stripeSubscription,
+      CANCELLATION_REASON.PAYMENT_FAILED,
+    );
   }
 }
