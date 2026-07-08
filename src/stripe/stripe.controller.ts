@@ -22,7 +22,8 @@ import { GetUser } from "../common/decorators/get-user.decorator";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { UsersService } from "../users/users.service";
 import { PrismaService } from "../database/prisma.service";
-import {SubscriptionStatus} from "@prisma/client";
+import { SubscriptionStatus } from "@prisma/client";
+import { PLAN_CODES } from "../common/constants/plan.constants";
 
 @ApiTags("Stripe")
 @ApiBearerAuth("JWT-auth")
@@ -112,7 +113,6 @@ export class StripeController {
     );
 
     return new ApiResponse(HttpStatus.CREATED, "Subscription checkout session created", {
-      sessionId: session.id,
       url: session.url,
     });
   }
@@ -124,6 +124,20 @@ export class StripeController {
     @Body() dto: CreateAddonCheckoutDto,
   ) {
     const user = await this.usersService.findById(userId);
+
+    const currentSubscription = await this.prisma.subscription.findUnique({
+      where: { userId },
+      include: { pricingOption: { include: { plan: true } } },
+    });
+
+    const isPaidPlanActive = 
+      currentSubscription && 
+      currentSubscription.status === SubscriptionStatus.ACTIVE && 
+      currentSubscription.pricingOption?.plan?.code !== PLAN_CODES.FREE;
+
+    if (!isPaidPlanActive) {
+      throw new BadRequestException("You must have an active paid subscription to purchase addons.");
+    }
 
     const addon = await this.prisma.addonPackage.findUnique({
       where: { id: dto.addonPackageId },
@@ -142,7 +156,6 @@ export class StripeController {
     );
 
     return new ApiResponse(HttpStatus.CREATED, "Addon checkout session created", {
-      sessionId: session.id,
       url: session.url,
     });
   }
