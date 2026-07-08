@@ -7,6 +7,7 @@ import { PrismaService } from "@/database/prisma.service";
 import { PricingService } from "@/pricing/pricing.service";
 import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
 import { addCalendarMonths } from "../../../common/utils/date.util";
+import { PLAN_CODES } from "../../../common/constants/plan.constants";
 
 @Injectable()
 export class InvoicePaidStrategy implements WebhookStrategy {
@@ -122,6 +123,18 @@ export class InvoicePaidStrategy implements WebhookStrategy {
           description,
           referenceType: ReferenceType.SUBSCRIPTION,
           referenceId: subscription.id,
+        },
+      });
+
+      const isActivePaid = plan.code !== PLAN_CODES.FREE;
+      await tx.creditWallet.upsert({
+        where: { userId: subscription.userId },
+        create: {
+          userId: subscription.userId,
+          is_active: isActivePaid,
+        },
+        update: {
+          is_active: isActivePaid,
         },
       });
 
