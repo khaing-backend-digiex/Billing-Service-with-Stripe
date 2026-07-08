@@ -15,41 +15,41 @@ export class AuthService {
   ) {}
 
   async login(loginDto: LoginDto) {
-  const user = await this.usersService.findOrCreateByEmail(
-    loginDto.email,
-  );
+    const user = await this.usersService.findOrCreateByEmail(
+      loginDto.email,
+    );
 
-  const payload = {
-    sub: user.id,
-    email: user.email,
-    roles: user.roles,
-  };
+    const payload = {
+      sub: user.id,
+      email: user.email,
+      roles: user.roles,
+    };
 
-  return {
-    accessToken: this.jwtService.sign(payload),
-    user,
-  };
-}
-
-async register(registerDto: RegisterDto) {
-  const { email, name } = registerDto;
-
-  const existingUser = await this.usersService.findByEmail(email);
-
-  if (existingUser) {
-    throw new BadRequestException("Email already exists.");
+    return {
+      accessToken: this.jwtService.sign(payload),
+      user,
+    };
   }
 
+  async register(registerDto: RegisterDto) {
+    const { email, name } = registerDto;
 
-  const user = await this.usersService.createUser(email, name);
+    const existingUser = await this.usersService.findByEmail(email);
 
-  await this.usersService.initializeUser(user);
+    if (existingUser) {
+      throw new BadRequestException("Email already exists.");
+    }
 
-  return {
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    roles: user.roles,
-  };
-}
+
+    const user = await this.usersService.createUser(email, name);
+
+    await this.usersService.initializeUser(user);
+
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      roles: user.roles,
+    };
+  }
 }

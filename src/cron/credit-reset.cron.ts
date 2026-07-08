@@ -55,7 +55,6 @@ export class CreditResetCronService {
         newNextReset = addCalendarMonths(newNextReset, resetMonths);
       }
 
-    
       if (newNextReset > subscription.currentPeriodEnd) {
         this.logger.log(
           `Skipping subscription ${subscription.id}: next reset ${newNextReset.toISOString()} exceeds period end ${subscription.currentPeriodEnd.toISOString()}. Will be handled by invoice.paid on renewal.`,

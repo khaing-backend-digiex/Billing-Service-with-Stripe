@@ -22,6 +22,7 @@ import { GetUser } from "../common/decorators/get-user.decorator";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { UsersService } from "../users/users.service";
 import { PrismaService } from "../database/prisma.service";
+import {SubscriptionStatus} from "@prisma/client";
 
 @ApiTags("Stripe")
 @ApiBearerAuth("JWT-auth")
@@ -71,15 +72,14 @@ export class StripeController {
     });
 
     if (currentSubscription && currentSubscription.pricingOption) {
-      // Cho phép đăng ký lại nếu gói hiện tại đã bị HUỶ hoặc HẾT HẠN
       const isCancelledOrExpired = 
-        currentSubscription.status === 'CANCELLED' || 
-        currentSubscription.status === 'EXPIRED';
+        currentSubscription.status === SubscriptionStatus.CANCELLED || 
+        currentSubscription.status === SubscriptionStatus.EXPIRED;
 
       if (!isCancelledOrExpired) {
         const price = Number(currentSubscription.pricingOption.price);
         if (price > 0) {
-          throw new BadRequestException("Bạn chỉ có thể đăng ký gói mới khi đang ở gói FREE hoặc gói cũ đã hoàn toàn bị huỷ. Vui lòng đợi gói hiện tại hết hạn hoặc huỷ nó trước.");
+          throw new BadRequestException("Cannot create a new subscription checkout session while an active paid subscription exists. Please cancel your current subscription first.");
         }
       }
     }
