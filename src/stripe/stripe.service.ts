@@ -53,6 +53,23 @@ export class StripeService {
     return this.stripe.customers.retrieve(customerId);
   }
 
+  /**
+   * Kiểm tra customer còn tồn tại trên Stripe account hiện tại không.
+   * Trả false nếu bị xóa hoặc thuộc account cũ (resource_missing) — dùng để
+   * reconcile tự heal thay vì ném lỗi và làm bẩn log.
+   */
+  async customerExists(customerId: string): Promise<boolean> {
+    try {
+      const customer = await this.stripe.customers.retrieve(customerId);
+      return !(customer as Stripe.DeletedCustomer).deleted;
+    } catch (error) {
+      if ((error as Stripe.StripeRawError)?.code === "resource_missing") {
+        return false;
+      }
+      throw error;
+    }
+  }
+
   async getFreePriceId(): Promise<string | null> {
     const freePlan = await this.prisma.plan.findUnique({
       where: { code: PLAN_CODES.FREE },

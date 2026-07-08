@@ -1,8 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
 import { WebhookStrategy } from "./webhook-strategy.interface";
-import { PaidInvoiceSyncService } from "../../sync/paid-invoice-sync.service";
-import {PaymentProvider, PaymentStatus, InvoiceStatus, SubscriptionStatus, CreditTransactionType, ReferenceType, SubscriptionEventType } from "@prisma/client";
+import {PaymentProvider, InvoiceStatus, SubscriptionStatus, CreditTransactionType, ReferenceType, SubscriptionEventType } from "@prisma/client";
 import { PrismaService } from "@/database/prisma.service";
 import { PricingService } from "@/pricing/pricing.service";
 import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
@@ -14,7 +13,6 @@ export class InvoicePaidStrategy implements WebhookStrategy {
   private readonly logger = new Logger(InvoicePaidStrategy.name);
 
   constructor(
-    private readonly paidInvoiceSync: PaidInvoiceSyncService,
     private readonly prisma: PrismaService,
     private readonly pricingService: PricingService,
   ) { }
@@ -98,22 +96,33 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       this.logger.log(
         `Subscription ${subscription.id} updated: status=ACTIVE, currentPeriodStart=${periodStart.toISOString()}, currentPeriodEnd=${periodEnd.toISOString()}, subscriptionCreditsRemaining=${plan.renewalCredits}, nextCreditResetAt=${nextCreditResetAt.toISOString()}`,
       );
-      const invoice = await tx.invoice.create({
-        data: {
+      const invoice = await tx.invoice.upsert({
+        where: { providerInvoiceId: stripeInvoice.id },
+        create: {
           subscriptionId: subscription.id,
           provider: PaymentProvider.STRIPE,
           providerInvoiceId: stripeInvoice.id,
           amount: formatStripeAmountToDatabase(stripeInvoice.amount_due, stripeInvoice.currency),
           currency: stripeInvoice.currency,
-          status: InvoiceStatus.PAID,
+          status: InvoiceStatus.OPEN,
           dueAt: stripeInvoice.due_date ? new Date(stripeInvoice.due_date * 1000) : new Date(stripeInvoice.period_end * 1000),
         },
+        update: {},
       });
+
+      const claimed = await tx.invoice.updateMany({
+        where: { id: invoice.id, status: { not: InvoiceStatus.PAID } },
+        data: { status: InvoiceStatus.PAID, paidAt: new Date() },
+      });
+      if (claimed.count === 0) {
+        this.logger.log(`Invoice ${stripeInvoice.id} already PAID – skipping credit grant`);
+        return;
+      }
 
       this.logger.log(
         `Invoice ${invoice.id} marked as PAID, subscription ${subscription.id} updated to ACTIVE, credits granted: +${plan.renewalCredits}`,
       );
-      
+
 
       await tx.creditTransaction.create({
         data: {
