@@ -24,6 +24,8 @@ import { UsersService } from "../users/users.service";
 import { PrismaService } from "../database/prisma.service";
 import { SubscriptionStatus } from "@prisma/client";
 import { PLAN_CODES } from "../common/constants/plan.constants";
+import { Roles } from "../common/decorators/roles.decorator";
+import { Role } from "../common/constants/roles.enum";
 
 @ApiTags("Stripe")
 @ApiBearerAuth("JWT-auth")
@@ -37,6 +39,7 @@ export class StripeController {
   ) {}
 
   @Post("customers")
+  @Roles(Role.ADMIN)
   @ApiOperation({ summary: "Create a Stripe customer for the current user" })
   async createCustomer(
     @GetUser("id") userId: number,
