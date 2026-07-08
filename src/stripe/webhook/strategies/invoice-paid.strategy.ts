@@ -1,19 +1,18 @@
 import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
 import { WebhookStrategy } from "./webhook-strategy.interface";
-import { PaidInvoiceSyncService } from "../../sync/paid-invoice-sync.service";
-import {PaymentProvider, PaymentStatus, InvoiceStatus, SubscriptionStatus, CreditTransactionType, ReferenceType, SubscriptionEventType } from "@prisma/client";
+import {PaymentProvider, InvoiceStatus, SubscriptionStatus, CreditTransactionType, ReferenceType, SubscriptionEventType } from "@prisma/client";
 import { PrismaService } from "@/database/prisma.service";
 import { PricingService } from "@/pricing/pricing.service";
 import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
 import { addCalendarMonths } from "../../../common/utils/date.util";
+import { PLAN_CODES } from "../../../common/constants/plan.constants";
 
 @Injectable()
 export class InvoicePaidStrategy implements WebhookStrategy {
   private readonly logger = new Logger(InvoicePaidStrategy.name);
 
   constructor(
-    private readonly paidInvoiceSync: PaidInvoiceSyncService,
     private readonly prisma: PrismaService,
     private readonly pricingService: PricingService,
   ) { }
@@ -97,23 +96,20 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       this.logger.log(
         `Subscription ${subscription.id} updated: status=ACTIVE, currentPeriodStart=${periodStart.toISOString()}, currentPeriodEnd=${periodEnd.toISOString()}, subscriptionCreditsRemaining=${plan.renewalCredits}, nextCreditResetAt=${nextCreditResetAt.toISOString()}`,
       );
-      const invoice = await tx.invoice.create({
-        data: {
+      const invoice = await tx.invoice.upsert({
+        where: { providerInvoiceId: stripeInvoice.id },
+        create: {
           subscriptionId: subscription.id,
           provider: PaymentProvider.STRIPE,
           providerInvoiceId: stripeInvoice.id,
           amount: formatStripeAmountToDatabase(stripeInvoice.amount_due, stripeInvoice.currency),
           currency: stripeInvoice.currency,
-          status: InvoiceStatus.PAID,
+          status: InvoiceStatus.OPEN,
           dueAt: stripeInvoice.due_date ? new Date(stripeInvoice.due_date * 1000) : new Date(stripeInvoice.period_end * 1000),
         },
+        update: {},
       });
-
-      this.logger.log(
-        `Invoice ${invoice.id} marked as PAID, subscription ${subscription.id} updated to ACTIVE, credits granted: +${plan.renewalCredits}`,
-      );
       
-
       await tx.creditTransaction.create({
         data: {
           userId: subscription.userId,
@@ -124,6 +120,18 @@ export class InvoicePaidStrategy implements WebhookStrategy {
           referenceId: subscription.id,
         },
       });
+
+      const isActivePaid = plan.code !== PLAN_CODES.FREE;
+      const creditWalletUpdateResult = await tx.creditWallet.updateMany({
+        where: { userId: userId.id },
+        data: {
+          is_active: isActivePaid,
+        },
+      });
+
+      if (creditWalletUpdateResult.count === 0) {
+        this.logger.log(`No credit wallet found for user ${userId.id}, skipping wallet update`);
+      }
 
       await tx.subscriptionEvent.create({
         data: {

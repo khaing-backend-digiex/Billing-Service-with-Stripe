@@ -60,17 +60,14 @@ export class UsersService implements OnApplicationBootstrap {
 
   }
   async createUser(email: string, name?: string): Promise<PublicUser> {
-    const user = await this.prisma.$transaction(async (tx) => {
-      const newUser = await tx.user.create({
-        data: {
-          email,
-          name,
-        },
-      });
-      await this.initializeUser(newUser);
-      return newUser;
+    const newUser = await this.prisma.user.create({
+      data: {
+        email,
+        name,
+      },
     });
-    return toPublicUser(user);
+    await this.initializeUser(newUser);
+    return toPublicUser(newUser);
   }
 
   async findOrCreateByEmail(

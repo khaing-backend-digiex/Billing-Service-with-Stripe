@@ -53,6 +53,18 @@ export class StripeService {
     return this.stripe.customers.retrieve(customerId);
   }
 
+  async customerExists(customerId: string): Promise<boolean> {
+    try {
+      const customer = await this.stripe.customers.retrieve(customerId);
+      return !(customer as Stripe.DeletedCustomer).deleted;
+    } catch (error) {
+      if ((error as Stripe.StripeRawError)?.code === "resource_missing") {
+        return false;
+      }
+      throw error;
+    }
+  }
+
   async getFreePriceId(): Promise<string | null> {
     const freePlan = await this.prisma.plan.findUnique({
       where: { code: PLAN_CODES.FREE },
