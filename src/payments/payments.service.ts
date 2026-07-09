@@ -4,7 +4,7 @@ import { StripeService } from "../stripe/stripe.service";
 
 @Injectable()
 export class PaymentsService {
-  constructor(private readonly stripeService: StripeService) {}
+  constructor(private readonly stripeService: StripeService) { }
 
   async createCustomer(userId: number, email: string, name?: string, provider?: PaymentProvider) {
     if (provider && provider !== PaymentProvider.STRIPE) {

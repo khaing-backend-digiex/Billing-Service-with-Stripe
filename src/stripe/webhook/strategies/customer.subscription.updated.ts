@@ -31,7 +31,7 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
     private readonly prisma: PrismaService,
     private readonly freePlanDowngrade: FreePlanDowngradeService,
     private readonly subscriptionSyncService: SubscriptionSyncService,
-  ) {}
+  ) { }
 
   canHandle(eventType: string): boolean {
     return eventType === EVENT_TYPE;
@@ -48,7 +48,6 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
       await this.handlePaymentFailureExpiration(stripeSubscription);
       return;
     }
-
     await this.syncSubscription(stripeSubscription);
   }
 
@@ -144,17 +143,17 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
 
         ...(subscription.subscriptionCreditsRemaining > 0
           ? [
-              this.prisma.creditTransaction.create({
-                data: {
-                  userId: subscription.userId,
-                  type: CreditTransactionType.EXPIRATION,
-                  amount: -subscription.subscriptionCreditsRemaining,
-                  description: "Credits forfeited – subscription expired (payment failed)",
-                  referenceType: ReferenceType.SUBSCRIPTION,
-                  referenceId: subscription.id,
-                },
-              }),
-            ]
+            this.prisma.creditTransaction.create({
+              data: {
+                userId: subscription.userId,
+                type: CreditTransactionType.EXPIRATION,
+                amount: -subscription.subscriptionCreditsRemaining,
+                description: "Credits forfeited – subscription expired (payment failed)",
+                referenceType: ReferenceType.SUBSCRIPTION,
+                referenceId: subscription.id,
+              },
+            }),
+          ]
           : []),
       ]);
 

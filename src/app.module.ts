@@ -35,4 +35,4 @@ import { CronModule } from "./cron/cron.module";
     },
   ],
 })
-export class AppModule {}
+export class AppModule { }

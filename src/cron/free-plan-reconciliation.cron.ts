@@ -43,7 +43,7 @@ export class FreePlanReconciliationCron {
         let customerId = user.providerCustomerId;
         if (customerId && !(await this.stripeService.customerExists(customerId))) {
           this.logger.warn(
-            `User ${user.id}: customer ${customerId} không tồn tại trên Stripe (account cũ) – tạo lại`,
+            `User ${user.id}: customer ${customerId} didn't exist`,
           );
           customerId = null;
         }
@@ -59,8 +59,7 @@ export class FreePlanReconciliationCron {
             `User ${user.id}: active Stripe subscription ${activeSub.id} has no local row – healing from Stripe`,
           );
           const local = await this.subscriptionSync.syncFromStripe(activeSub);
-          if (!local) continue; // thiếu dữ kiện (đã log) → thử lại lần sweep sau
-
+          if (!local) continue; 
           const latestPaid = await this.stripeService.getLatestPaidInvoice(activeSub.id);
           if (latestPaid) {
             await this.paidInvoiceSync.applyPaidInvoice(latestPaid, activeSub.id);

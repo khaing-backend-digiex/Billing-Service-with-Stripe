@@ -1,159 +1,77 @@
+import { Injectable, Inject, Logger } from "@nestjs/common";
 import {
-  Injectable,
-  Logger,
-  InternalServerErrorException,
-} from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
-import Stripe from "stripe";
-import { PrismaService } from "../database/prisma.service";
-import { PaymentStatus, PaymentProvider, SubscriptionStatus } from "@prisma/client";
-import { PLAN_CODES } from "../common/constants/plan.constants";
+  IPaymentAdapter,
+  StripeSubscription,
+  StripeInvoice,
+  StripeCheckoutSession,
+  StripeCustomer,
+  StripeDeletedCustomer,
+  StripePaymentIntent,
+  StripeBillingPortalSession,
+  StripeEvent,
+} from "./adapter/payment-adapter.interface";
 
 @Injectable()
 export class StripeService {
-  private readonly stripe: Stripe;
   private readonly logger = new Logger(StripeService.name);
 
   constructor(
-    private readonly configService: ConfigService,
-    private readonly prisma: PrismaService,
-  ) {
-    const secretKey = this.configService.get<string>("STRIPE_SECRET_KEY");
-    this.stripe = new Stripe(secretKey || "");
-  }
+    @Inject("PAYMENT_ADAPTER")
+    private readonly paymentAdapter: IPaymentAdapter,
+  ) { }
 
   async createCustomer(
     userId: number,
     email: string,
     name?: string,
-  ): Promise<Stripe.Customer> {
-    return this.stripe.customers.create({
-      email,
-      name,
-      metadata: { userId: String(userId) },
-    });
+  ): Promise<StripeCustomer> {
+    return this.paymentAdapter.createCustomer(userId, email, name);
   }
 
   async deleteCustomer(customerId: string): Promise<void> {
-    try {
-      await this.stripe.customers.del(customerId);
-      this.logger.log(`✅ Deleted Stripe customer ${customerId}`);
-    } catch (error) {
-      if ((error as Stripe.StripeRawError)?.code === "resource_missing") {
-        return;
-      }
-      throw error;
-    }
+    return this.paymentAdapter.deleteCustomer(customerId);
   }
 
-  async getCustomer(customerId: string): Promise<Stripe.Customer | Stripe.DeletedCustomer> {
-    return this.stripe.customers.retrieve(customerId);
+  async getCustomer(
+    customerId: string,
+  ): Promise<StripeCustomer | StripeDeletedCustomer> {
+    return this.paymentAdapter.getCustomer(customerId);
   }
 
   async customerExists(customerId: string): Promise<boolean> {
-    try {
-      const customer = await this.stripe.customers.retrieve(customerId);
-      return !(customer as Stripe.DeletedCustomer).deleted;
-    } catch (error) {
-      if ((error as Stripe.StripeRawError)?.code === "resource_missing") {
-        return false;
-      }
-      throw error;
-    }
+    return this.paymentAdapter.customerExists(customerId);
   }
 
   async getFreePriceId(): Promise<string | null> {
-    const freePlan = await this.prisma.plan.findUnique({
-      where: { code: PLAN_CODES.FREE },
-      include: { pricingOptions: { include: { billingCycle: true } } },
-    });
-    return freePlan?.pricingOptions[0]?.providerPriceId ?? null;
+    return this.paymentAdapter.getFreePriceId();
   }
 
-
-  async ensureFreeSubscription(customerId: string): Promise<Stripe.Subscription | null> {
-    const freePriceId = await this.getFreePriceId();
-    if (!freePriceId) {
-      this.logger.warn("Free plan price is not configured. Skipping free subscription.");
-      return null;
-    }
-
-    const existing = await this.findActiveSubscription(customerId);
-    if (existing) {
-      this.logger.log(`Customer ${customerId} already has an active subscription – skipping free plan`);
-      return null;
-    }
-
-    return this.subscribeToFreePlan(customerId);
+  async ensureFreeSubscription(
+    customerId: string,
+  ): Promise<StripeSubscription | null> {
+    return this.paymentAdapter.ensureFreeSubscription(customerId);
   }
 
-  async findActiveSubscription(customerId: string): Promise<Stripe.Subscription | null> {
-    const subs = await this.stripe.subscriptions.list({
-      customer: customerId,
-      status: "all",
-      limit: 100,
-    });
-    const live = subs.data.filter((s) =>
-      s.status === "active" || s.status === "trialing" || s.status === "past_due",
-    );
-    if (live.length === 0) return null;
-    if (live.length === 1) return live[0];
-
-    const freePriceId = await this.getFreePriceId();
-    const sorted = [...live].sort((a, b) => b.created - a.created);
-    const paid = sorted.find((s) => {
-      const price = s.items.data[0]?.price;
-      const priceId = typeof price === "string" ? price : price?.id;
-      return freePriceId == null || priceId !== freePriceId;
-    });
-    return paid ?? sorted[0];
+  async findActiveSubscription(
+    customerId: string,
+  ): Promise<StripeSubscription | null> {
+    return this.paymentAdapter.findActiveSubscription(customerId);
   }
 
-  async getLatestPaidInvoice(subscriptionId: string): Promise<Stripe.Invoice | null> {
-    const invoices = await this.stripe.invoices.list({
-      subscription: subscriptionId,
-      status: "paid",
-      limit: 1,
-    });
-    return invoices.data[0] ?? null;
+  async getLatestPaidInvoice(
+    subscriptionId: string,
+  ): Promise<StripeInvoice | null> {
+    return this.paymentAdapter.getLatestPaidInvoice(subscriptionId);
   }
 
-  async subscribeToFreePlan(customerId: string): Promise<Stripe.Subscription | null> {
-    const freePlan = await this.prisma.plan.findUnique({
-      where: { code: PLAN_CODES.FREE },
-      include: { pricingOptions: { include: { billingCycle: true } } },
-    });
-
-    const pricingOption = freePlan?.pricingOptions[0];
-    if (!pricingOption?.providerPriceId) {
-      this.logger.warn("Free plan not configured (missing plan or provider price). Skipping free subscription.");
-      return null;
-    }
-
-    const stripeSubscription = await this.stripe.subscriptions.create({
-      customer: customerId,
-      items: [{ price: pricingOption.providerPriceId }],
-    });
-    this.logger.log(`✅ Subscribed customer ${customerId} to free plan (price: ${pricingOption.providerPriceId})`);
-    return stripeSubscription;
+  async subscribeToFreePlan(
+    customerId: string,
+  ): Promise<StripeSubscription | null> {
+    return this.paymentAdapter.subscribeToFreePlan(customerId);
   }
 
   async hasDefaultPaymentMethod(customerId: string): Promise<boolean> {
-    try {
-      const customer = await this.stripe.customers.retrieve(customerId) as Stripe.Customer;
-      if (customer.deleted) return false;
-      if (customer.invoice_settings?.default_payment_method) return true;
-      if (customer.default_source) return true;
-
-      const paymentMethods = await this.stripe.paymentMethods.list({
-        customer: customerId,
-        type: 'card',
-      });
-      return paymentMethods.data.length > 0;
-    } catch (error) {
-      this.logger.error(`Error checking payment methods for customer ${customerId}`, error);
-      return false;
-    }
+    return this.paymentAdapter.hasDefaultPaymentMethod(customerId);
   }
 
   async createCheckoutSession(
@@ -162,37 +80,18 @@ export class StripeService {
     mode: "payment" | "subscription" = "payment",
     customerId?: string,
     extraMetadata?: Record<string, string>,
-  ): Promise<Stripe.Checkout.Session> {
-    try {
-      const metadata = { userId: String(userId), ...extraMetadata };
-
-      const sessionData: Stripe.Checkout.SessionCreateParams = {
-        payment_method_types: ["card"],
-        line_items: [{ price: priceId, quantity: 1 }],
-        mode,
-        success_url:
-          this.configService.get<string>("STRIPE_SUCCESS_URL", "http://localhost:3000/success") +
-          "?session_id={CHECKOUT_SESSION_ID}",
-        cancel_url: this.configService.get<string>("STRIPE_CANCEL_URL", "http://localhost:3000/cancel"),
-        metadata,
-      };
-
-      if (mode === "payment") {
-        sessionData.payment_intent_data = { metadata };
-      }
-
-      if (customerId) {
-        sessionData.customer = customerId;
-      }
-
-      const session = await this.stripe.checkout.sessions.create(sessionData);
-
-      this.logger.log(`Created checkout session ${session.id} for user ${userId}`);
-      return session;
-    } catch (error) {
-      this.logger.error(`Failed to create checkout session: ${error}`);
-      throw new InternalServerErrorException("Failed to create checkout session");
-    }
+    successUrl?: string,
+    cancelUrl?: string,
+  ): Promise<StripeCheckoutSession> {
+    return this.paymentAdapter.createCheckoutSession(
+      userId,
+      priceId,
+      mode,
+      customerId,
+      extraMetadata,
+      successUrl,
+      cancelUrl,
+    );
   }
 
   async createPaymentIntent(
@@ -201,93 +100,35 @@ export class StripeService {
     currency: string = "usd",
     description?: string,
     customerId?: string,
-  ): Promise<Stripe.PaymentIntent> {
-    try {
-      const intentData: Stripe.PaymentIntentCreateParams = {
-        amount,
-        currency,
-        description,
-        metadata: { userId: String(userId) },
-        automatic_payment_methods: { enabled: true },
-      };
-
-      if (customerId) {
-        intentData.customer = customerId;
-      }
-
-      const paymentIntent = await this.stripe.paymentIntents.create(intentData);
-
-      await this.prisma.payment.create({
-        data: {
-          providerPaymentId: paymentIntent.id,
-          amount,
-          currency,
-          status: PaymentStatus.PENDING,
-          userId,
-          provider: PaymentProvider.STRIPE,
-        },
-      });
-
-      this.logger.log(`✅ Created payment intent ${paymentIntent.id} for user ${userId}`);
-      return paymentIntent;
-    } catch (error) {
-      this.logger.error(`Failed to create payment intent: ${error}`);
-      throw new InternalServerErrorException("Failed to create payment intent");
-    }
+  ): Promise<StripePaymentIntent> {
+    return this.paymentAdapter.createPaymentIntent(
+      userId,
+      amount,
+      currency,
+      description,
+      customerId,
+    );
   }
 
   async createBillingPortalSession(
     customerId: string,
     returnUrl?: string,
-  ): Promise<Stripe.BillingPortal.Session> {
-    try {
-      const session = await this.stripe.billingPortal.sessions.create({
-        customer: customerId,
-        return_url:
-          returnUrl ||
-          this.configService.get<string>("STRIPE_SUCCESS_URL", "http://localhost:3000"),
-      });
-
-      this.logger.log(`✅ Created billing portal session for customer ${customerId}`);
-      return session;
-    } catch (error) {
-      this.logger.error(`Failed to create billing portal session: ${error}`);
-      throw new InternalServerErrorException("Failed to create billing portal session");
-    }
+  ): Promise<StripeBillingPortalSession> {
+    return this.paymentAdapter.createBillingPortalSession(
+      customerId,
+      returnUrl,
+    );
   }
 
-  constructWebhookEvent(rawBody: Buffer, signature: string): Stripe.Event {
-    const webhookSecret = this.configService.get<string>("STRIPE_WEBHOOK_SECRET");
-    if (!webhookSecret) {
-      throw new InternalServerErrorException("STRIPE_WEBHOOK_SECRET is not configured");
-    }
-
-    return this.stripe.webhooks.constructEvent(rawBody, signature, webhookSecret);
+  constructWebhookEvent(rawBody: Buffer, signature: string): StripeEvent {
+    return this.paymentAdapter.constructWebhookEvent(rawBody, signature);
   }
 
   async cancelSubscriptionAtPeriodEnd(subscriptionId: string): Promise<void> {
-    await this.stripe.subscriptions.update(subscriptionId, {
-      cancel_at_period_end: true,
-    });
+    return this.paymentAdapter.cancelSubscriptionAtPeriodEnd(subscriptionId);
   }
 
   async cancelSubscriptionNow(subscriptionId: string): Promise<void> {
-    let subscription: Stripe.Subscription;
-    try {
-      subscription = await this.stripe.subscriptions.retrieve(subscriptionId);
-      if (subscription.status === "canceled") {
-        this.logger.log(`Subscription ${subscriptionId} already canceled on Stripe`);
-        return;
-      }
-      await this.stripe.subscriptions.cancel(subscriptionId);
-      this.logger.log(`✅ Cancelled Stripe subscription ${subscriptionId} immediately`);
-    } catch (error: any) {
-      if (error?.code === "resource_missing") {
-        this.logger.log(`Subscription ${subscriptionId} not found on Stripe – nothing to cancel`);
-        return;
-      }
-      throw error;
-    }
+    return this.paymentAdapter.cancelSubscriptionNow(subscriptionId);
   }
 }
-
