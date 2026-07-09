@@ -43,7 +43,7 @@ describe("StripeWebhookService event dedupe (real DB)", () => {
     expect(handled).toBe(1);
 
     const row = await ctx.prisma.webhookEvent.findUniqueOrThrow({ where: { id: event.id } });
-    expect(row.processedAt).not.toBeNull();
+    expect(row.status).toBe("SUCCESS");
   });
 
   it("skips a replay of an already-processed event", async () => {
@@ -59,17 +59,20 @@ describe("StripeWebhookService event dedupe (real DB)", () => {
     expect(handled).toBe(1);
   });
 
-  it("releases the claim on strategy failure so a Stripe retry can reprocess", async () => {
+  it("marks event as FAILED on strategy failure so a Stripe retry can reprocess", async () => {
     const event = makeEvent();
     const failing = makeService(async () => {
-      throw new Error("boom");
+      // Need a retriable exception to test the retry behavior
+      const { DatabaseException } = require("../src/common/exceptions/database.exception");
+      throw new DatabaseException("boom");
     });
 
     await expect(failing.handleEvent(event)).rejects.toThrow("boom");
 
-    // Claim đã được nhả → không còn row chặn retry
+    // Event is kept but marked as FAILED with error message
     const afterFailure = await ctx.prisma.webhookEvent.findUnique({ where: { id: event.id } });
-    expect(afterFailure).toBeNull();
+    expect(afterFailure?.status).toBe("FAILED");
+    expect(afterFailure?.errorMessage).toBe("boom");
 
     // Retry (delivery kế tiếp của Stripe) xử lý thành công
     let handled = 0;
@@ -80,6 +83,6 @@ describe("StripeWebhookService event dedupe (real DB)", () => {
     expect(handled).toBe(1);
 
     const row = await ctx.prisma.webhookEvent.findUniqueOrThrow({ where: { id: event.id } });
-    expect(row.processedAt).not.toBeNull();
+    expect(row.status).toBe("SUCCESS");
   });
 });
