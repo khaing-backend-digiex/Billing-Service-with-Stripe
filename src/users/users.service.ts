@@ -26,7 +26,7 @@ export class UsersService implements OnApplicationBootstrap {
     private readonly prisma: PrismaService,
     @Inject(forwardRef(() => StripeService))
     private readonly stripeService: StripeService,
-  ) { }
+  ) {}
 
   async onApplicationBootstrap() {
     try {
@@ -49,12 +49,10 @@ export class UsersService implements OnApplicationBootstrap {
       });
 
       this.logger.log(`Default admin created with email: ${newAdmin.email}`);
-    }
-    catch (err) {
+    } catch (err) {
       this.logger.error("Failed to create admin user on startup", err);
       throw err;
     }
-
   }
   async createUser(email: string, name?: string): Promise<PublicUser> {
     const newUser = await this.provisionUser({
@@ -96,6 +94,22 @@ export class UsersService implements OnApplicationBootstrap {
       this.logger.warn(
         `Failed to clean up Stripe customer ${customerId} after DB update failure: ${deleteError}`,
       );
+      await this.enqueueStripeCustomerCleanup(customerId);
+    }
+  }
+
+  private async enqueueStripeCustomerCleanup(customerId: string): Promise<void> {
+    try {
+      await this.prisma.cleanupTask.upsert({
+        where: { type_target: { type: "STRIPE_CUSTOMER", target: customerId } },
+        create: { type: "STRIPE_CUSTOMER", target: customerId },
+        update: { status: "PENDING", attempts: 0 },
+      });
+      this.logger.warn(`Queued cleanup for orphan Stripe customer ${customerId}`);
+    } catch (error) {
+      this.logger.error(
+        `Failed to queue cleanup for Stripe customer ${customerId}: ${error}`,
+      );
     }
   }
 
@@ -122,36 +136,42 @@ export class UsersService implements OnApplicationBootstrap {
   }
 
   private async rollbackProvisionedUser(userId: number): Promise<void> {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { providerCustomerId: true },
-    });
+    try {
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { providerCustomerId: true },
+      });
 
-    if (user?.providerCustomerId) {
+      if (user?.providerCustomerId) {
+        try {
+          await this.stripeService.deleteCustomer(user.providerCustomerId);
+        } catch (error) {
+          this.logger.warn(
+            `Failed to rollback Stripe customer for user ${userId}: ${error}`,
+          );
+          await this.enqueueStripeCustomerCleanup(user.providerCustomerId);
+        }
+      }
+
       try {
-        await this.stripeService.deleteCustomer(user.providerCustomerId);
+        await this.prisma.user.delete({ where: { id: userId } });
       } catch (error) {
         this.logger.warn(
-          `Failed to rollback Stripe customer for user ${userId}: ${error}`,
+          `Failed to rollback database user ${userId}: ${error}`,
         );
       }
-    }
-
-    try {
-      await this.prisma.user.delete({ where: { id: userId } });
     } catch (error) {
-      this.logger.warn(`Failed to rollback database user ${userId}: ${error}`);
+      this.logger.warn(
+        `Failed to prepare rollback for user ${userId}: ${error}`,
+      );
     }
   }
 
- async initializeUser(user: User): Promise<void> {
+  async initializeUser(user: User): Promise<void> {
     try {
       await this.ensureStripeSetup(user);
     } catch (error) {
-      this.logger.error(
-        `Failed to initialize user ${user.id}.`,
-        error,
-      );
+      this.logger.error(`Failed to initialize user ${user.id}.`, error);
       throw error;
     }
   }
@@ -192,7 +212,9 @@ export class UsersService implements OnApplicationBootstrap {
   }
 
   async findByStripeCustomerId(stripeCustomerId: string): Promise<User | null> {
-    return this.prisma.user.findFirst({ where: { providerCustomerId: stripeCustomerId } });
+    return this.prisma.user.findFirst({
+      where: { providerCustomerId: stripeCustomerId },
+    });
   }
 
   async updateStripeCustomerId(

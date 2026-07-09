@@ -187,8 +187,31 @@ model WebhookEvent {
   createdAt   DateTime        @default(now())
 }
 
+model CleanupTask {
+  id        String            @id @default(cuid())
+  type      CleanupTaskType
+  target    String
+  status    CleanupTaskStatus @default(PENDING)
+  attempts  Int               @default(0)
+  lastError String?
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  @@unique([type, target])
+}
+
 enum PaymentProvider {
   STRIPE
+}
+
+enum CleanupTaskType {
+  STRIPE_CUSTOMER
+}
+
+enum CleanupTaskStatus {
+  PENDING
+  DONE
+  FAILED
 }
 
 enum SubscriptionStatus {

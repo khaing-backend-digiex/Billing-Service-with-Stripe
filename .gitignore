@@ -31,3 +31,6 @@ coverage/
 # Misc
 api-test.http
 test-renewal.ts
+
+# Local-only integration test (dùng DB/Stripe thật, không commit)
+test/users.rollback.integration.spec.ts
