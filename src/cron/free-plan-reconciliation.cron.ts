@@ -60,7 +60,7 @@ export class FreePlanReconciliationCron {
 
   private async reconcileUser(user: User): Promise<ReconcileOutcome> {
     try {
-      const customerId = await this.usersService.ensureValidStripeCustomerId(user);
+      const customerId = await this.stripeService.ensureValidCustomerId(user);
       const activeSub = await this.stripeService.findActiveSubscription(customerId);
 
       if (activeSub) {

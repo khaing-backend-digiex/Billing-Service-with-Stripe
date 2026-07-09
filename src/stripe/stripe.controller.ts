@@ -51,7 +51,7 @@ export class StripeController {
       throw new BadRequestException("User already has a Stripe customer account");
     }
 
-    const customerId = await this.usersService.ensureStripeCustomerId({
+    const customerId = await this.stripeService.ensureCustomerId({
       id: user.id,
       email: dto.email || user.email,
       name: dto.name || user.name || undefined,
@@ -101,7 +101,7 @@ export class StripeController {
     let providerCustomerId = user.providerCustomerId;
 
     if (!providerCustomerId) {
-      providerCustomerId = await this.usersService.ensureStripeCustomerId(user);
+      providerCustomerId = await this.stripeService.ensureCustomerId(user);
     }
 
     const session = await this.stripeService.createCheckoutSession(
