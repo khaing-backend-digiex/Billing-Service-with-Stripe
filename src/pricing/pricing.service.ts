@@ -4,6 +4,12 @@ import Stripe from "stripe";
 import { ConfigService } from "@nestjs/config";
 import { formatDatabaseAmountToStripe } from "../stripe/utils/stripe-currency.util";
 
+const INTERVAL = {
+  DAY: "day",
+  WEEK: "week",
+  MONTH: "month",
+  YEAR: "year",
+} as const;
 @Injectable()
 export class PricingService {
   private readonly stripe: Stripe;
@@ -35,17 +41,17 @@ export class PricingService {
       const billingCycle = await this.prisma.billingCycle.findUnique({ where: { id: data.billingCycleId } });
       if (!billingCycle) throw new Error("Billing cycle not found");
 
-      let interval: Stripe.PriceCreateParams.Recurring.Interval = "day";
+      let interval: Stripe.PriceCreateParams.Recurring.Interval = INTERVAL.DAY;
       let intervalCount = billingCycle.durationDay;
 
       if (billingCycle.durationDay === 365 || billingCycle.durationDay === 366) {
-        interval = "year";
+        interval = INTERVAL.YEAR;
         intervalCount = 1;
       } else if (billingCycle.durationDay % 30 === 0) {
-        interval = "month";
+        interval = INTERVAL.MONTH;
         intervalCount = billingCycle.durationDay / 30;
       } else if (billingCycle.durationDay % 7 === 0) {
-        interval = "week";
+        interval = INTERVAL.WEEK;
         intervalCount = billingCycle.durationDay / 7;
       }
 

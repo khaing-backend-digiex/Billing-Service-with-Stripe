@@ -104,7 +104,7 @@ export class InvoicePaidStrategy implements WebhookStrategy {
           providerInvoiceId: stripeInvoice.id,
           amount: formatStripeAmountToDatabase(stripeInvoice.amount_due, stripeInvoice.currency),
           currency: stripeInvoice.currency,
-          status: InvoiceStatus.OPEN,
+          status: InvoiceStatus.PAID,
           dueAt: stripeInvoice.due_date ? new Date(stripeInvoice.due_date * 1000) : new Date(stripeInvoice.period_end * 1000),
         },
         update: {},
