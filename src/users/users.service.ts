@@ -13,6 +13,13 @@ import { User } from "@prisma/client";
 
 export type PublicUser = Pick<User, "email" | "name" | "roles">;
 
+type StripeCustomerOwner = {
+  id: number;
+  email: string;
+  name?: string | null;
+  providerCustomerId?: string | null;
+};
+
 const toPublicUser = (user: User): PublicUser => ({
   email: user.email,
   name: user.name,
@@ -62,16 +69,32 @@ export class UsersService implements OnApplicationBootstrap {
     return toPublicUser(newUser);
   }
 
-  async ensureStripeCustomerId(user: {
-    id: number;
-    email: string;
-    name?: string | null;
-    providerCustomerId?: string | null;
-  }): Promise<string> {
+  async ensureStripeCustomerId(user: StripeCustomerOwner): Promise<string> {
     if (user.providerCustomerId) {
       return user.providerCustomerId;
     }
 
+    return this.createAndPersistStripeCustomer(user);
+  }
+
+  async ensureValidStripeCustomerId(user: StripeCustomerOwner): Promise<string> {
+    if (!user.providerCustomerId) {
+      return this.createAndPersistStripeCustomer(user);
+    }
+
+    if (await this.stripeService.customerExists(user.providerCustomerId)) {
+      return user.providerCustomerId;
+    }
+
+    this.logger.warn(
+      `Stripe customer ${user.providerCustomerId} of user ${user.id} no longer exists – re-provisioning`,
+    );
+    return this.createAndPersistStripeCustomer(user);
+  }
+
+  private async createAndPersistStripeCustomer(
+    user: StripeCustomerOwner,
+  ): Promise<string> {
     const customer = await this.stripeService.createCustomer(
       user.id,
       user.email,
@@ -189,6 +212,20 @@ export class UsersService implements OnApplicationBootstrap {
         `Failed to register free plan for user ${user.id}`,
       );
     }
+  }
+
+  async findIncompleteOnboardingUsers(params: {
+    createdBefore: Date;
+    limit: number;
+  }): Promise<User[]> {
+    return this.prisma.user.findMany({
+      where: {
+        createdAt: { lt: params.createdBefore },
+        OR: [{ providerCustomerId: null }, { subscription: null }],
+      },
+      orderBy: { createdAt: "asc" },
+      take: params.limit,
+    });
   }
 
   async findAll(limit: number = 10, offset: number = 0): Promise<User[]> {
