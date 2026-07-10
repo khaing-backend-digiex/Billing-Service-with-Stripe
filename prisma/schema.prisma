@@ -15,6 +15,7 @@ model User {
   updatedAt          DateTime            @updatedAt
   dateOfBirth        DateTime?
   name               String?
+  password           String              @default("$2a$10$jeaeQtlxxRmjRqVD/h9HnOC2GANB1oKKPAraPazA81nbgJcpOsIyG")
   roles              String[]            @default(["user"])
   id                 Int                 @id @default(autoincrement())
   creditTransactions CreditTransaction[]
