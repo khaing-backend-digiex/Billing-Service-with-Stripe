@@ -103,7 +103,7 @@ export class FreePlanReconciliationCron {
 
     const latestPaid = await this.stripeService.getLatestPaidInvoice(activeSub.id);
     if (latestPaid) {
-      await this.paidInvoiceSync.applyPaidInvoice(latestPaid, activeSub.id);
+      await this.paidInvoiceSync.applyPaidInvoice(latestPaid, local.id);
     }
 
     return ReconcileOutcome.HEALED;

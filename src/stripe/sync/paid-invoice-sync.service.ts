@@ -13,7 +13,7 @@ import { PrismaService } from "../../database/prisma.service";
 import { PricingService } from "../../pricing/pricing.service";
 import { formatStripeAmountToDatabase } from "../utils/stripe-currency.util";
 import { addCalendarMonths } from "../../common/utils/date.util";
-
+import { PLAN_CODES } from "../../common/constants/plan.constants";
 
 @Injectable()
 export class PaidInvoiceSyncService {
@@ -26,19 +26,18 @@ export class PaidInvoiceSyncService {
 
   async applyPaidInvoice(
     stripeInvoice: Stripe.Invoice,
-    stripeSubscriptionId: string,
+    subscriptionId: string,
   ): Promise<void> {
-    const subscription = await this.prisma.subscription.findFirst({
-      where: { providerSubscriptionId: stripeSubscriptionId },
+    const subscription = await this.prisma.subscription.findUnique({
+      where: { id: subscriptionId },
     });
 
     if (!subscription) {
       throw new Error(
-        `No local subscription for Stripe subscription ${stripeSubscriptionId} yet – invoice ${stripeInvoice.id} will be retried`,
+        `No local subscription ${subscriptionId} for invoice ${stripeInvoice.id}`,
       );
     }
 
-   
     const invoice = await this.prisma.invoice.upsert({
       where: { providerInvoiceId: stripeInvoice.id },
       update: {},
@@ -46,7 +45,10 @@ export class PaidInvoiceSyncService {
         subscriptionId: subscription.id,
         provider: PaymentProvider.STRIPE,
         providerInvoiceId: stripeInvoice.id,
-        amount: formatStripeAmountToDatabase(stripeInvoice.amount_due, stripeInvoice.currency),
+        amount: formatStripeAmountToDatabase(
+          stripeInvoice.amount_due,
+          stripeInvoice.currency,
+        ),
         currency: stripeInvoice.currency,
         billingReason: stripeInvoice.billing_reason ?? null,
         status: InvoiceStatus.OPEN,
@@ -65,9 +67,8 @@ export class PaidInvoiceSyncService {
       stripeInvoice.lines?.data?.find((line) => line.type === "subscription") ??
       stripeInvoice.lines?.data?.[0];
 
-    // Line price là nguồn chính; line lạ (proration…) thiếu price → dùng pricing
-    // option hiện tại của subscription để không bỏ lỡ lần cấp credit.
-    let priceId = lineToUse?.price?.id;
+    let priceId: string | undefined =
+      (lineToUse as any)?.pricing?.price_details?.price ?? lineToUse?.price?.id;
     if (!priceId) {
       const current = await this.prisma.pricingOption.findUnique({
         where: { id: subscription.pricingOptionId },
@@ -77,11 +78,14 @@ export class PaidInvoiceSyncService {
     }
 
     if (!priceId) {
-      this.logger.error(`No price ID for invoice ${stripeInvoice.id} and no fallback available`);
+      this.logger.error(
+        `No price ID for invoice ${stripeInvoice.id} and no fallback available`,
+      );
       return;
     }
 
-    const pricingOption = await this.pricingService.findByProviderPriceId(priceId);
+    const pricingOption =
+      await this.pricingService.findByProviderPriceId(priceId);
     if (!pricingOption) {
       this.logger.error(`No pricing option found for priceId ${priceId}`);
       return;
@@ -94,7 +98,9 @@ export class PaidInvoiceSyncService {
     const nextCreditResetAt = addCalendarMonths(periodStart, resetMonths);
 
     const isInitial = stripeInvoice.billing_reason === "subscription_create";
-    const eventType = isInitial ? SubscriptionEventType.CREATED : SubscriptionEventType.RENEWED;
+    const eventType = isInitial
+      ? SubscriptionEventType.CREATED
+      : SubscriptionEventType.RENEWED;
     const description = isInitial
       ? `Credits granted – ${plan.name} (initial)`
       : `Credits granted – ${plan.name} (renewal)`;
@@ -102,10 +108,9 @@ export class PaidInvoiceSyncService {
     const paymentIntentId =
       typeof stripeInvoice.payment_intent === "string"
         ? stripeInvoice.payment_intent
-        : (stripeInvoice.payment_intent as any)?.id ?? null;
+        : ((stripeInvoice.payment_intent as any)?.id ?? null);
 
     await this.prisma.$transaction(async (tx) => {
-      
       const claimed = await tx.invoice.updateMany({
         where: { id: invoice.id, status: { not: InvoiceStatus.PAID } },
         data: {
@@ -116,7 +121,9 @@ export class PaidInvoiceSyncService {
       });
 
       if (claimed.count === 0) {
-        this.logger.log(`Invoice ${invoice.id} already PAID (concurrent delivery) – skipping`);
+        this.logger.log(
+          `Invoice ${invoice.id} already PAID (concurrent delivery) – skipping`,
+        );
         return;
       }
 
@@ -128,7 +135,10 @@ export class PaidInvoiceSyncService {
             invoiceId: invoice.id,
             provider: PaymentProvider.STRIPE,
             providerPaymentId: paymentIntentId,
-            amount: formatStripeAmountToDatabase(stripeInvoice.amount_paid, stripeInvoice.currency),
+            amount: formatStripeAmountToDatabase(
+              stripeInvoice.amount_paid,
+              stripeInvoice.currency,
+            ),
             currency: stripeInvoice.currency,
             status: PaymentStatus.SUCCEEDED,
             paidAt: new Date(),
@@ -162,6 +172,17 @@ export class PaidInvoiceSyncService {
           referenceId: subscription.id,
         },
       });
+
+      const walletUpdate = await tx.creditWallet.updateMany({
+        where: { userId: subscription.userId },
+        data: { is_active: plan.code !== PLAN_CODES.FREE },
+      });
+
+      if (walletUpdate.count === 0) {
+        this.logger.log(
+          `No credit wallet found for user ${subscription.userId}, skipping wallet update`,
+        );
+      }
 
       await tx.subscriptionEvent.create({
         data: {

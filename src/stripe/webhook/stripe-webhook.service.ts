@@ -7,7 +7,6 @@ import { DatabaseException } from "../../common/exceptions/database.exception";
 import { ExternalServiceException } from "../../common/exceptions/external-service.exception";
 
 const STALE_CLAIM_MS = 10 * 60_000;
-
 function isUniqueViolation(error: unknown): boolean {
   return (error as { code?: string })?.code === "P2002";
 }
