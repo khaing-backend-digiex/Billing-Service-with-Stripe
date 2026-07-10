@@ -13,6 +13,7 @@ import { JwtAuthGuard } from "./common/guards/jwt-auth.guard";
 import { PricingModule } from "./pricing/pricing.module";
 import { CronModule } from "./cron/cron.module";
 import { ProvisioningModule } from "./provisioning/provisioning.module";
+import { PaymentAdapterModule } from "./stripe/adapter/adapter.module";
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { ProvisioningModule } from "./provisioning/provisioning.module";
       isGlobal: true,
     }),
     ScheduleModule.forRoot(),
+    PaymentAdapterModule,
     DatabaseModule,
     UsersModule,
     AuthModule,

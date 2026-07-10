@@ -49,7 +49,7 @@ export class PaymentsService {
     const paymentIntent = await this.stripeService.createPaymentIntent(userId, amount, currency, description, customerId);
     return {
       paymentIntentId: paymentIntent.id,
-      clientSecret: paymentIntent.client_secret,
+      clientSecret: paymentIntent.clientSecret,
       amount: paymentIntent.amount,
       currency: paymentIntent.currency,
     };

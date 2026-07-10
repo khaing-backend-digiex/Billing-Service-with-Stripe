@@ -16,11 +16,9 @@ export interface IPaymentAdapter {
     deleteCustomer(customerId: string): Promise<void>;
     getCustomer(customerId: string): Promise<StripeCustomer | StripeDeletedCustomer>;
     customerExists(customerId: string): Promise<boolean>;
-    getFreePriceId(): Promise<string | null>;
-    ensureFreeSubscription(customerId: string): Promise<StripeSubscription | null>;
-    findActiveSubscription(customerId: string): Promise<StripeSubscription | null>;
+    findActiveSubscription(customerId: string, freePriceId?: string | null): Promise<StripeSubscription | null>;
     getLatestPaidInvoice(subscriptionId: string): Promise<StripeInvoice | null>;
-    subscribeToFreePlan(customerId: string): Promise<StripeSubscription | null>;
+    createSubscription(customerId: string, priceId: string): Promise<StripeSubscription>;
     hasDefaultPaymentMethod(customerId: string): Promise<boolean>;
     createCheckoutSession(
         userId: number,
@@ -32,11 +30,11 @@ export interface IPaymentAdapter {
         cancelUrl?: string,
     ): Promise<StripeCheckoutSession>;
     createPaymentIntent(
-        userId: number,
         amount: number,
         currency?: string,
         description?: string,
         customerId?: string,
+        metadata?: Record<string, string>,
     ): Promise<StripePaymentIntent>;
     createBillingPortalSession(
         customerId: string,
@@ -48,4 +46,17 @@ export interface IPaymentAdapter {
     ): StripeEvent;
     cancelSubscriptionAtPeriodEnd(subscriptionId: string): Promise<void>;
     cancelSubscriptionNow(subscriptionId: string): Promise<void>;
+    createProduct(name: string): Promise<string>;
+    createRecurringPrice(
+        productId: string,
+        amount: number,
+        currency: string,
+        interval: string,
+        intervalCount: number,
+    ): Promise<string>;
+    createOneTimePrice(
+        productId: string,
+        amount: number,
+        currency: string,
+    ): Promise<string>;
 }

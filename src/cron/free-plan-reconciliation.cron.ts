@@ -2,7 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { Cron, CronExpression } from "@nestjs/schedule";
 import { User } from "@prisma/client";
 import { StripeService } from "../stripe/stripe.service";
-import { StripeSubscription } from "../stripe/adapter/payment-adapter.interface";
+import { PaymentSubscription } from "../payments/types/payment.types";
 import { UsersService } from "../users/users.service";
 import { SubscriptionSyncService } from "../stripe/sync/subscription-sync.service";
 import { PaidInvoiceSyncService } from "../stripe/sync/paid-invoice-sync.service";
@@ -26,7 +26,7 @@ export class FreePlanReconciliationCron {
     private readonly usersService: UsersService,
     private readonly subscriptionSync: SubscriptionSyncService,
     private readonly paidInvoiceSync: PaidInvoiceSyncService,
-  ) {}
+  ) { }
 
   @Cron(CronExpression.EVERY_HOUR)
   async reconcile(): Promise<void> {
@@ -87,7 +87,7 @@ export class FreePlanReconciliationCron {
 
   private async healFromStripe(
     user: User,
-    activeSub: StripeSubscription,
+    activeSub: PaymentSubscription,
   ): Promise<ReconcileOutcome> {
     this.logger.warn(
       `User ${user.id}: active Stripe subscription ${activeSub.id} has no local row – healing from Stripe`,

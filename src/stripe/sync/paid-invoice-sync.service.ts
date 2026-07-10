@@ -13,6 +13,7 @@ import { PrismaService } from "../../database/prisma.service";
 import { PricingService } from "../../pricing/pricing.service";
 import { formatStripeAmountToDatabase } from "../utils/stripe-currency.util";
 import { addCalendarMonths } from "../../common/utils/date.util";
+import { PaymentInvoice } from "../../payments/types/payment.types";
 
 
 @Injectable()
@@ -25,7 +26,7 @@ export class PaidInvoiceSyncService {
   ) {}
 
   async applyPaidInvoice(
-    stripeInvoice: Stripe.Invoice,
+    stripeInvoice: PaymentInvoice,
     stripeSubscriptionId: string,
   ): Promise<void> {
     const subscription = await this.prisma.subscription.findFirst({
@@ -46,13 +47,13 @@ export class PaidInvoiceSyncService {
         subscriptionId: subscription.id,
         provider: PaymentProvider.STRIPE,
         providerInvoiceId: stripeInvoice.id,
-        amount: formatStripeAmountToDatabase(stripeInvoice.amount_due, stripeInvoice.currency),
+        amount: formatStripeAmountToDatabase(stripeInvoice.amountDue, stripeInvoice.currency),
         currency: stripeInvoice.currency,
-        billingReason: stripeInvoice.billing_reason ?? null,
+        billingReason: stripeInvoice.billingReason ?? null,
         status: InvoiceStatus.OPEN,
-        dueAt: stripeInvoice.due_date
-          ? new Date(stripeInvoice.due_date * 1000)
-          : new Date(stripeInvoice.period_end * 1000),
+        dueAt: stripeInvoice.dueDate
+          ? new Date(stripeInvoice.dueDate * 1000)
+          : new Date(stripeInvoice.periodEnd * 1000),
       },
     });
 
@@ -62,12 +63,13 @@ export class PaidInvoiceSyncService {
     }
 
     const lineToUse =
-      stripeInvoice.lines?.data?.find((line) => line.type === "subscription") ??
-      stripeInvoice.lines?.data?.[0];
+      stripeInvoice.lines?.find((line) => line.type === "subscription") ??
+      stripeInvoice.lines?.[0];
 
+ 
     // Line price là nguồn chính; line lạ (proration…) thiếu price → dùng pricing
     // option hiện tại của subscription để không bỏ lỡ lần cấp credit.
-    let priceId = lineToUse?.price?.id;
+    let priceId = lineToUse?.priceId;
     if (!priceId) {
       const current = await this.prisma.pricingOption.findUnique({
         where: { id: subscription.pricingOptionId },
@@ -88,21 +90,18 @@ export class PaidInvoiceSyncService {
     }
 
     const plan = pricingOption.plan;
-    const periodStart = new Date(stripeInvoice.period_start * 1000);
-    const periodEnd = new Date(stripeInvoice.period_end * 1000);
+    const periodStart = new Date(stripeInvoice.periodStart * 1000);
+    const periodEnd = new Date(stripeInvoice.periodEnd * 1000);
     const resetMonths = Math.max(1, Math.round(plan.resetIntervalDay / 30));
     const nextCreditResetAt = addCalendarMonths(periodStart, resetMonths);
 
-    const isInitial = stripeInvoice.billing_reason === "subscription_create";
+    const isInitial = stripeInvoice.billingReason === "subscription_create";
     const eventType = isInitial ? SubscriptionEventType.CREATED : SubscriptionEventType.RENEWED;
     const description = isInitial
       ? `Credits granted – ${plan.name} (initial)`
       : `Credits granted – ${plan.name} (renewal)`;
 
-    const paymentIntentId =
-      typeof stripeInvoice.payment_intent === "string"
-        ? stripeInvoice.payment_intent
-        : (stripeInvoice.payment_intent as any)?.id ?? null;
+    const paymentIntentId = stripeInvoice.paymentIntentId ?? null;
 
     await this.prisma.$transaction(async (tx) => {
       
@@ -110,7 +109,7 @@ export class PaidInvoiceSyncService {
         where: { id: invoice.id, status: { not: InvoiceStatus.PAID } },
         data: {
           status: InvoiceStatus.PAID,
-          billingReason: stripeInvoice.billing_reason ?? null,
+          billingReason: stripeInvoice.billingReason ?? null,
           paidAt: new Date(),
         },
       });
@@ -128,16 +127,16 @@ export class PaidInvoiceSyncService {
             invoiceId: invoice.id,
             provider: PaymentProvider.STRIPE,
             providerPaymentId: paymentIntentId,
-            amount: formatStripeAmountToDatabase(stripeInvoice.amount_paid, stripeInvoice.currency),
-            currency: stripeInvoice.currency,
-            status: PaymentStatus.SUCCEEDED,
-            paidAt: new Date(),
-          },
-          update: { status: PaymentStatus.SUCCEEDED, paidAt: new Date() },
-        });
-      }
+          amount: formatStripeAmountToDatabase(stripeInvoice.amountPaid, stripeInvoice.currency),
+          currency: stripeInvoice.currency,
+          status: PaymentStatus.SUCCEEDED,
+          paidAt: new Date(),
+        },
+        update: { status: PaymentStatus.SUCCEEDED, paidAt: new Date() },
+      });
+    }
 
-      await tx.subscription.update({
+    await tx.subscription.update({
         where: { id: subscription.id },
         data: {
           status: SubscriptionStatus.ACTIVE,
@@ -170,7 +169,7 @@ export class PaidInvoiceSyncService {
           metadata: {
             stripeInvoiceId: stripeInvoice.id,
             creditsGranted: plan.renewalCredits,
-            billingReason: stripeInvoice.billing_reason,
+            billingReason: stripeInvoice.billingReason,
             periodStart: periodStart.toISOString(),
             periodEnd: periodEnd.toISOString(),
           },
@@ -178,7 +177,7 @@ export class PaidInvoiceSyncService {
       });
 
       this.logger.log(
-        `Credits granted: subscription=${subscription.id} +${plan.renewalCredits} (${plan.name}, ${stripeInvoice.billing_reason})`,
+        `Credits granted: subscription=${subscription.id} +${plan.renewalCredits} (${plan.name}, ${stripeInvoice.billingReason})`,
       );
     });
   }

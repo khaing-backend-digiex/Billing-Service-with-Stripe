@@ -11,6 +11,7 @@ import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { FreePlanDowngradeService } from "../free-plan-downgrade.service";
 import { SubscriptionSyncService } from "../../sync/subscription-sync.service";
+import { Subscription } from "@prisma/client";
 
 const EVENT_TYPE = "customer.subscription.updated";
 
@@ -23,6 +24,8 @@ const CANCELLATION_REASON = {
   PAYMENT_FAILED: "payment_failed",
 } as const;
 
+import { StripeAdapter } from "../../adapter/stripe.adapter";
+
 @Injectable()
 export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
   private readonly logger = new Logger(CustomerSubscriptionUpdatedStrategy.name);
@@ -31,6 +34,7 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
     private readonly prisma: PrismaService,
     private readonly freePlanDowngrade: FreePlanDowngradeService,
     private readonly subscriptionSyncService: SubscriptionSyncService,
+    private readonly stripeAdapter: StripeAdapter,
   ) { }
 
   canHandle(eventType: string): boolean {
@@ -61,12 +65,15 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
 
   private async syncSubscription(stripeSubscription: Stripe.Subscription): Promise<void> {
     const existing = await this.prisma.subscription.findFirst({
-      where: { providerSubscriptionId: stripeSubscription.id },
+      where: { providerSubscriptionId: stripeSubscription.id ,
+        status: SubscriptionStatus?.ACTIVE
+      },
     });
 
     const previousStatus = existing?.status;
 
-    const subscription = await this.subscriptionSyncService.syncFromStripe(stripeSubscription);
+    const paymentSubscription = this.stripeAdapter.mapSubscription(stripeSubscription);
+    const subscription = await this.subscriptionSyncService.syncFromStripe(paymentSubscription);
 
     if (!subscription) {
       this.logger.warn(`Cannot sync subscription ${stripeSubscription.id}`);

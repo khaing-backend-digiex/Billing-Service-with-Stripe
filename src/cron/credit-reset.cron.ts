@@ -51,6 +51,7 @@ export class CreditResetCronService {
         subscription.nextCreditResetAt,
         resetMonths,
       );
+
       while (newNextReset <= now) {
         newNextReset = addCalendarMonths(newNextReset, resetMonths);
       }
@@ -111,16 +112,16 @@ export class CreditResetCronService {
 
         if (didReset) {
           this.logger.log(
-            `✅ Reset credits for subscription ${subscription.id}: +${plan.renewalCredits} credits, next reset: ${newNextReset.toISOString()}`,
+            `Reset credits for subscription ${subscription.id}: +${plan.renewalCredits} credits, next reset: ${newNextReset.toISOString()}`,
           );
         }
       } catch (error) {
         this.logger.error(
-          `❌ Failed to reset credits for subscription ${subscription.id}: ${error}`,
+          `Failed to reset credits for subscription ${subscription.id}: ${error}`,
         );
       }
     }
 
-    this.logger.log(`⏰ Credit reset cron finished.`);
+    this.logger.log(`Credit reset cron finished.`);
   }
 }

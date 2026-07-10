@@ -1,16 +1,17 @@
 import { Injectable, Inject, Logger } from "@nestjs/common";
+import { IPaymentAdapter } from "../payments/types/payment-adapter.interface";
 import {
-  IPaymentAdapter,
-  StripeSubscription,
-  StripeInvoice,
-  StripeCheckoutSession,
-  StripeCustomer,
-  StripeDeletedCustomer,
-  StripePaymentIntent,
-  StripeBillingPortalSession,
-  StripeEvent,
-} from "./adapter/payment-adapter.interface";
+  PaymentCustomer,
+  PaymentSubscription,
+  PaymentInvoice,
+  CheckoutSession,
+  PaymentIntentResult,
+  BillingPortalSession,
+  WebhookEvent,
+} from "../payments/types/payment.types";
 import { PrismaService } from "../database/prisma.service";
+import { PaymentStatus, PaymentProvider, SubscriptionStatus } from "@prisma/client";
+import { PLAN_CODES } from "../common/constants/plan.constants";
 
 type StripeCustomerOwner = {
   id: number;
@@ -27,9 +28,7 @@ export class StripeService {
     @Inject("PAYMENT_ADAPTER")
     private readonly paymentAdapter: IPaymentAdapter,
     private readonly prisma: PrismaService,
-  ) { }
-
-  // ── Customer management ──────────────────────────────────────────
+  ) {}
 
   async ensureCustomerId(user: StripeCustomerOwner): Promise<string> {
     if (user.providerCustomerId) {
@@ -101,14 +100,12 @@ export class StripeService {
     }
   }
 
-  // ── Adapter pass-through ─────────────────────────────────────────
-
   async createCustomer(
     userId: number,
     email: string,
     name?: string,
-  ): Promise<StripeCustomer> {
-    return this.paymentAdapter.createCustomer(userId, email, name);
+  ): Promise<PaymentCustomer> {
+    return this.paymentAdapter.createCustomer(email, name, { userId: String(userId) });
   }
 
   async deleteCustomer(customerId: string): Promise<void> {
@@ -117,7 +114,7 @@ export class StripeService {
 
   async getCustomer(
     customerId: string,
-  ): Promise<StripeCustomer | StripeDeletedCustomer> {
+  ): Promise<PaymentCustomer | null> {
     return this.paymentAdapter.getCustomer(customerId);
   }
 
@@ -126,31 +123,53 @@ export class StripeService {
   }
 
   async getFreePriceId(): Promise<string | null> {
-    return this.paymentAdapter.getFreePriceId();
+    const freePlan = await this.prisma.plan.findUnique({
+      where: { code: PLAN_CODES.FREE },
+      include: { pricingOptions: true },
+    });
+    return freePlan?.pricingOptions[0]?.providerPriceId ?? null;
   }
 
   async ensureFreeSubscription(
     customerId: string,
-  ): Promise<StripeSubscription | null> {
-    return this.paymentAdapter.ensureFreeSubscription(customerId);
+  ): Promise<PaymentSubscription | null> {
+    const freePriceId = await this.getFreePriceId();
+    if (!freePriceId) return null;
+
+    const existingSubs = await this.paymentAdapter.listSubscriptions(customerId);
+    const hasActive = existingSubs.some(s =>
+      s.status === SubscriptionStatus.ACTIVE || s.status === SubscriptionStatus.TRIALING || s.status === SubscriptionStatus.PAST_DUE
+    );
+    if (hasActive) return null;
+
+    return this.paymentAdapter.createSubscription(customerId, freePriceId);
   }
 
   async findActiveSubscription(
     customerId: string,
-  ): Promise<StripeSubscription | null> {
-    return this.paymentAdapter.findActiveSubscription(customerId);
+  ): Promise<PaymentSubscription | null> {
+    const subs = await this.paymentAdapter.listSubscriptions(customerId);
+    const live = subs.filter(s => s.status === SubscriptionStatus.ACTIVE || s.status === SubscriptionStatus.TRIALING || s.status === SubscriptionStatus.PAST_DUE);
+    if (live.length === 0) return null;
+    if (live.length === 1) return live[0];
+
+    const freePriceId = await this.getFreePriceId();
+    const sorted = [...live].sort((a, b) => b.created - a.created);
+    return sorted.find(s => freePriceId == null || s.items[0]?.priceId !== freePriceId) ?? sorted[0];
   }
 
   async getLatestPaidInvoice(
     subscriptionId: string,
-  ): Promise<StripeInvoice | null> {
+  ): Promise<PaymentInvoice | null> {
     return this.paymentAdapter.getLatestPaidInvoice(subscriptionId);
   }
 
   async subscribeToFreePlan(
     customerId: string,
-  ): Promise<StripeSubscription | null> {
-    return this.paymentAdapter.subscribeToFreePlan(customerId);
+  ): Promise<PaymentSubscription | null> {
+    const freePriceId = await this.getFreePriceId();
+    if (!freePriceId) return null;
+    return this.paymentAdapter.createSubscription(customerId, freePriceId);
   }
 
   async hasDefaultPaymentMethod(customerId: string): Promise<boolean> {
@@ -165,16 +184,15 @@ export class StripeService {
     extraMetadata?: Record<string, string>,
     successUrl?: string,
     cancelUrl?: string,
-  ): Promise<StripeCheckoutSession> {
-    return this.paymentAdapter.createCheckoutSession(
-      userId,
+  ): Promise<CheckoutSession> {
+    return this.paymentAdapter.createCheckoutSession({
+      customerId,
       priceId,
       mode,
-      customerId,
-      extraMetadata,
+      metadata: { userId: String(userId), ...extraMetadata },
       successUrl,
       cancelUrl,
-    );
+    });
   }
 
   async createPaymentIntent(
@@ -183,27 +201,40 @@ export class StripeService {
     currency: string = "usd",
     description?: string,
     customerId?: string,
-  ): Promise<StripePaymentIntent> {
-    return this.paymentAdapter.createPaymentIntent(
-      userId,
+  ): Promise<PaymentIntentResult> {
+    const intent = await this.paymentAdapter.createPaymentIntent({
       amount,
       currency,
       description,
       customerId,
-    );
+      metadata: { userId: String(userId) },
+    });
+
+    await this.prisma.payment.create({
+      data: {
+        providerPaymentId: intent.id,
+        amount,
+        currency,
+        status: PaymentStatus.PENDING,
+        userId,
+        provider: PaymentProvider.STRIPE,
+      },
+    });
+
+    return intent;
   }
 
   async createBillingPortalSession(
     customerId: string,
     returnUrl?: string,
-  ): Promise<StripeBillingPortalSession> {
+  ): Promise<BillingPortalSession> {
     return this.paymentAdapter.createBillingPortalSession(
       customerId,
       returnUrl,
     );
   }
 
-  constructWebhookEvent(rawBody: Buffer, signature: string): StripeEvent {
+  constructWebhookEvent(rawBody: Buffer, signature: string): WebhookEvent {
     return this.paymentAdapter.constructWebhookEvent(rawBody, signature);
   }
 
@@ -215,4 +246,3 @@ export class StripeService {
     return this.paymentAdapter.cancelSubscriptionNow(subscriptionId);
   }
 }
-

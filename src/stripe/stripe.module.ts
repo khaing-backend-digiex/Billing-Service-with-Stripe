@@ -24,6 +24,7 @@ import { StripeAdapter } from "./adapter/stripe.adapter";
       provide: "PAYMENT_ADAPTER",
       useClass: StripeAdapter,
     },
+    StripeAdapter,
     StripeService,
     StripeWebhookService,
     FreePlanDowngradeService,

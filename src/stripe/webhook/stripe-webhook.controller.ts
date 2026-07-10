@@ -40,14 +40,14 @@ export class StripeWebhookController {
     }
 
     try {
-      const event = this.stripeService.constructWebhookEvent(
+      const webhookEvent = this.stripeService.constructWebhookEvent(
         rawBody,
         signature,
       );
 
-      this.logger.log(`📩 Received Stripe event: ${event.type} (${event.id})`);
+      this.logger.log(`📩 Received Stripe event: ${webhookEvent.type} (${webhookEvent.id})`);
 
-      await this.webhookService.handleEvent(event);
+      await this.webhookService.handleEvent(webhookEvent.data as any);
 
       return { received: true };
     } catch (error) {
