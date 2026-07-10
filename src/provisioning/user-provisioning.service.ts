@@ -4,6 +4,7 @@ import {
   Logger,
   OnApplicationBootstrap,
 } from "@nestjs/common";
+import * as bcrypt from "bcrypt";
 import { PrismaService } from "../database/prisma.service";
 import { StripeService } from "../stripe/stripe.service";
 import { UsersService } from "../users/users.service";
@@ -41,8 +42,10 @@ export class UserProvisioningService implements OnApplicationBootstrap {
         this.logger.log("Admin already exists");
         return;
       }
+      const hashedPassword = await bcrypt.hash("[DEFAULT_PASSWORD]", 10);
       const newAdmin = await this.provisionUser({
         email: "[EMAIL_ADDRESS]",
+        password: hashedPassword,
         name: "Admin",
         roles: ["admin"],
       });
@@ -54,9 +57,10 @@ export class UserProvisioningService implements OnApplicationBootstrap {
     }
   }
 
-  async createUser(email: string, name?: string): Promise<PublicUser> {
+  async createUser(email: string, password: string, name?: string): Promise<PublicUser> {
     const newUser = await this.provisionUser({
       email,
+      password,
       name,
     });
     return toPublicUser(newUser);
@@ -64,6 +68,7 @@ export class UserProvisioningService implements OnApplicationBootstrap {
 
   private async provisionUser(data: {
     email: string;
+    password: string;
     name?: string;
     roles?: string[];
   }): Promise<User> {
@@ -126,6 +131,4 @@ export class UserProvisioningService implements OnApplicationBootstrap {
       );
     }
   }
-
-  
 }
