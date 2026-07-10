@@ -5,6 +5,7 @@ import { PaymentProvider, SubscriptionStatus } from "@prisma/client";
 import { PrismaService } from "@/database/prisma.service";
 import { PricingService } from "@/pricing/pricing.service";
 import { PaidInvoiceSyncService } from "../../sync/paid-invoice-sync.service";
+import { StripeService } from "../../stripe.service";
 
 @Injectable()
 export class InvoicePaidStrategy implements WebhookStrategy {
@@ -14,6 +15,7 @@ export class InvoicePaidStrategy implements WebhookStrategy {
     private readonly prisma: PrismaService,
     private readonly pricingService: PricingService,
     private readonly paidInvoiceSync: PaidInvoiceSyncService,
+    private readonly stripeService: StripeService,
   ) { }
 
   private readonly invoicePaid = "invoice.paid";
@@ -22,28 +24,35 @@ export class InvoicePaidStrategy implements WebhookStrategy {
   }
 
   async handle(event: Stripe.Event): Promise<void> {
-    const stripeInvoice = event.data.object as Stripe.Invoice;
-    this.logger.log(`invoice.paid: ${stripeInvoice.id}`);
+    const paidInvoice = this.stripeService.mapRawInvoice(event.data.object);
+    this.logger.log(`invoice.paid: ${paidInvoice.id}`);
 
-    const lineToUse = stripeInvoice.lines?.data?.find(line => line.type === 'subscription') || stripeInvoice.lines?.data?.[0];
-    const stripeSubscriptionId = lineToUse?.subscription ?? (lineToUse as any)?.parent?.subscription_item_details?.subscription ?? null;
+    const lineToUse =
+      paidInvoice.lines.find(line => line.type === "subscription") ?? paidInvoice.lines[0];
+    const stripeSubscriptionId = paidInvoice.subscriptionId ?? lineToUse?.subscriptionId ?? null;
 
     if (!stripeSubscriptionId) {
-      this.logger.error(`Invoice ${stripeInvoice.id} has no linked subscription, skipping`);
+      this.logger.error(`Invoice ${paidInvoice.id} has no linked subscription, skipping`);
+      return;
+    }
+
+    // Prisma bỏ qua filter undefined → phải chặn sớm, nếu không sẽ khớp nhầm user bất kỳ.
+    if (!paidInvoice.customerId) {
+      this.logger.error(`Invoice ${paidInvoice.id} has no customer, skipping`);
       return;
     }
 
     const user = await this.prisma.user.findFirst({
-      where: { providerCustomerId: stripeInvoice.customer as string },
+      where: { providerCustomerId: paidInvoice.customerId },
       select: { id: true },
     });
 
     if (!user) {
-      this.logger.error(`No user found for Stripe customer ${stripeInvoice.customer}`);
+      this.logger.error(`No user found for Stripe customer ${paidInvoice.customerId}`);
       return;
     }
 
-    const priceId = (lineToUse as any)?.pricing?.price_details?.price ?? lineToUse?.price?.id;
+    const priceId = lineToUse?.priceId;
 
     if (!priceId) {
       this.logger.error(`No price ID found in invoice lines.`);
@@ -56,8 +65,8 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       return;
     }
 
-    const periodStart = new Date(stripeInvoice.period_start * 1000);
-    const periodEnd = new Date(stripeInvoice.period_end * 1000);
+    const periodStart = new Date(paidInvoice.periodStart * 1000);
+    const periodEnd = new Date(paidInvoice.periodEnd * 1000);
 
     const subscription = await this.prisma.subscription.upsert({
       where: { userId: user.id },
@@ -75,6 +84,6 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       update: {},
     });
 
-    await this.paidInvoiceSync.applyPaidInvoice(stripeInvoice, subscription.id);
+    await this.paidInvoiceSync.applyPaidInvoice(paidInvoice, subscription.id);
   }
 }

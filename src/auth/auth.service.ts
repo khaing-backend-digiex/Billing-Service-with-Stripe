@@ -4,6 +4,7 @@ import {
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import { UsersService } from "../users/users.service";
+import { UserProvisioningService } from "../provisioning/user-provisioning.service";
 import { LoginDto } from "./dto/login.dto";
 import { RegisterDto } from "./dto/register.dto";
 
@@ -11,6 +12,7 @@ import { RegisterDto } from "./dto/register.dto";
 export class AuthService {
   constructor(
     private readonly usersService: UsersService,
+    private readonly userProvisioningService: UserProvisioningService,
     private readonly jwtService: JwtService,
   ) { }
 
@@ -46,7 +48,7 @@ export class AuthService {
       throw new BadRequestException("Email already exists.");
     }
 
-    const user = await this.usersService.createUser(email, name);
+    const user = await this.userProvisioningService.createUser(email, name);
 
     return {
       name: user.name,

@@ -14,16 +14,22 @@ import { CustomerSubscriptionDeletedStrategy } from "../src/stripe/webhook/strat
 import { PaymentIntentSucceededStrategy } from "../src/stripe/webhook/strategies/payment-intent-succeeded.strategy";
 import { PaidInvoiceSyncService } from "../src/stripe/sync/paid-invoice-sync.service";
 import { SubscriptionSyncService } from "../src/stripe/sync/subscription-sync.service";
+import { StripeAdapter } from "../src/stripe/adapter/stripe.adapter";
 import { TestContext, invoicePayload, rand, stripeEvent, subscriptionPayload } from "./helpers/context";
 
 describe("Webhook strategies (real DB, Stripe mocked)", () => {
   const ctx = new TestContext();
+
+  // Adapter thật nhưng không gọi API: chỉ dùng các hàm map raw payload → domain type.
+  const adapter = new StripeAdapter({ get: () => "sk_test_dummy" } as any);
 
   // Mọi call ra Stripe API đều mock — chỉ DB là thật.
   const stripeServiceMock = {
     cancelSubscriptionNow: jest.fn().mockResolvedValue(undefined),
     getFreePriceId: jest.fn().mockResolvedValue(null),
     ensureFreeSubscription: jest.fn().mockResolvedValue(null),
+    mapRawInvoice: (raw: unknown) => adapter.mapRawInvoice(raw),
+    mapRawSubscription: (raw: unknown) => adapter.mapRawSubscription(raw),
   };
   const freePlanDowngradeMock = { downgradeToFree: jest.fn().mockResolvedValue(undefined) };
   // PricingService.findByProviderPriceId chỉ query DB → stub chạy query thật
@@ -52,7 +58,12 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
     const paidInvoiceSync = () =>
       new PaidInvoiceSyncService(ctx.prisma, pricingServiceStub as any);
     const strategy = () =>
-      new InvoicePaidStrategy(ctx.prisma, pricingServiceStub as any, paidInvoiceSync());
+      new InvoicePaidStrategy(
+        ctx.prisma,
+        pricingServiceStub as any,
+        paidInvoiceSync(),
+        stripeServiceMock as any,
+      );
 
     const paidPayload = (user: User, stripeSubId: string | null) =>
       invoicePayload(stripeSubId, ctx.basicOption.providerPriceId!, {
@@ -154,7 +165,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       const payload = paidPayload(user, sub.providerSubscriptionId!);
 
       // Đường cron: reconcile gọi thẳng sync service với local subscription id.
-      await paidInvoiceSync().applyPaidInvoice(payload as any, sub.id);
+      await paidInvoiceSync().applyPaidInvoice(adapter.mapRawInvoice(payload), sub.id);
 
       // User tiêu bớt credit trước khi webhook chậm chân tới nơi.
       await ctx.prisma.subscription.update({
@@ -238,6 +249,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
           pricingServiceStub as any,
           stripeServiceMock as any,
         ),
+        stripeServiceMock as any,
       );
 
     it("PAST_DUE → active syncs status and logs PAYMENT_RECOVERED", async () => {

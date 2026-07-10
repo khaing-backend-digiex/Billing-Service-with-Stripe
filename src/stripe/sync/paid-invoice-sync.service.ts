@@ -1,5 +1,4 @@
 import { Injectable, Logger } from "@nestjs/common";
-import Stripe from "stripe";
 import {
   CreditTransactionType,
   ReferenceType,
@@ -11,6 +10,7 @@ import {
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
 import { PricingService } from "../../pricing/pricing.service";
+import { PaymentInvoice } from "../../payments/types/payment.types";
 import { formatStripeAmountToDatabase } from "../utils/stripe-currency.util";
 import { addCalendarMonths } from "../../common/utils/date.util";
 import { PLAN_CODES } from "../../common/constants/plan.constants";
@@ -25,7 +25,7 @@ export class PaidInvoiceSyncService {
   ) {}
 
   async applyPaidInvoice(
-    stripeInvoice: Stripe.Invoice,
+    paidInvoice: PaymentInvoice,
     subscriptionId: string,
   ): Promise<void> {
     const subscription = await this.prisma.subscription.findUnique({
@@ -34,27 +34,27 @@ export class PaidInvoiceSyncService {
 
     if (!subscription) {
       throw new Error(
-        `No local subscription ${subscriptionId} for invoice ${stripeInvoice.id}`,
+        `No local subscription ${subscriptionId} for invoice ${paidInvoice.id}`,
       );
     }
 
     const invoice = await this.prisma.invoice.upsert({
-      where: { providerInvoiceId: stripeInvoice.id },
+      where: { providerInvoiceId: paidInvoice.id },
       update: {},
       create: {
         subscriptionId: subscription.id,
         provider: PaymentProvider.STRIPE,
-        providerInvoiceId: stripeInvoice.id,
+        providerInvoiceId: paidInvoice.id,
         amount: formatStripeAmountToDatabase(
-          stripeInvoice.amount_due,
-          stripeInvoice.currency,
+          paidInvoice.amountDue,
+          paidInvoice.currency,
         ),
-        currency: stripeInvoice.currency,
-        billingReason: stripeInvoice.billing_reason ?? null,
+        currency: paidInvoice.currency,
+        billingReason: paidInvoice.billingReason ?? null,
         status: InvoiceStatus.OPEN,
-        dueAt: stripeInvoice.due_date
-          ? new Date(stripeInvoice.due_date * 1000)
-          : new Date(stripeInvoice.period_end * 1000),
+        dueAt: paidInvoice.dueDate
+          ? new Date(paidInvoice.dueDate * 1000)
+          : new Date(paidInvoice.periodEnd * 1000),
       },
     });
 
@@ -64,11 +64,10 @@ export class PaidInvoiceSyncService {
     }
 
     const lineToUse =
-      stripeInvoice.lines?.data?.find((line) => line.type === "subscription") ??
-      stripeInvoice.lines?.data?.[0];
+      paidInvoice.lines.find((line) => line.type === "subscription") ??
+      paidInvoice.lines[0];
 
-    let priceId: string | undefined =
-      (lineToUse as any)?.pricing?.price_details?.price ?? lineToUse?.price?.id;
+    let priceId: string | undefined = lineToUse?.priceId ?? undefined;
     if (!priceId) {
       const current = await this.prisma.pricingOption.findUnique({
         where: { id: subscription.pricingOptionId },
@@ -79,7 +78,7 @@ export class PaidInvoiceSyncService {
 
     if (!priceId) {
       this.logger.error(
-        `No price ID for invoice ${stripeInvoice.id} and no fallback available`,
+        `No price ID for invoice ${paidInvoice.id} and no fallback available`,
       );
       return;
     }
@@ -92,12 +91,12 @@ export class PaidInvoiceSyncService {
     }
 
     const plan = pricingOption.plan;
-    const periodStart = new Date(stripeInvoice.period_start * 1000);
-    const periodEnd = new Date(stripeInvoice.period_end * 1000);
+    const periodStart = new Date(paidInvoice.periodStart * 1000);
+    const periodEnd = new Date(paidInvoice.periodEnd * 1000);
     const resetMonths = Math.max(1, Math.round(plan.resetIntervalDay / 30));
     const nextCreditResetAt = addCalendarMonths(periodStart, resetMonths);
 
-    const isInitial = stripeInvoice.billing_reason === "subscription_create";
+    const isInitial = paidInvoice.billingReason === "subscription_create";
     const eventType = isInitial
       ? SubscriptionEventType.CREATED
       : SubscriptionEventType.RENEWED;
@@ -105,17 +104,14 @@ export class PaidInvoiceSyncService {
       ? `Credits granted – ${plan.name} (initial)`
       : `Credits granted – ${plan.name} (renewal)`;
 
-    const paymentIntentId =
-      typeof stripeInvoice.payment_intent === "string"
-        ? stripeInvoice.payment_intent
-        : ((stripeInvoice.payment_intent as any)?.id ?? null);
+    const paymentIntentId = paidInvoice.paymentIntentId ?? null;
 
     await this.prisma.$transaction(async (tx) => {
       const claimed = await tx.invoice.updateMany({
         where: { id: invoice.id, status: { not: InvoiceStatus.PAID } },
         data: {
           status: InvoiceStatus.PAID,
-          billingReason: stripeInvoice.billing_reason ?? null,
+          billingReason: paidInvoice.billingReason ?? null,
           paidAt: new Date(),
         },
       });
@@ -136,10 +132,10 @@ export class PaidInvoiceSyncService {
             provider: PaymentProvider.STRIPE,
             providerPaymentId: paymentIntentId,
             amount: formatStripeAmountToDatabase(
-              stripeInvoice.amount_paid,
-              stripeInvoice.currency,
+              paidInvoice.amountPaid,
+              paidInvoice.currency,
             ),
-            currency: stripeInvoice.currency,
+            currency: paidInvoice.currency,
             status: PaymentStatus.SUCCEEDED,
             paidAt: new Date(),
           },
@@ -189,9 +185,9 @@ export class PaidInvoiceSyncService {
           subscriptionId: subscription.id,
           type: eventType,
           metadata: {
-            stripeInvoiceId: stripeInvoice.id,
+            stripeInvoiceId: paidInvoice.id,
             creditsGranted: plan.renewalCredits,
-            billingReason: stripeInvoice.billing_reason,
+            billingReason: paidInvoice.billingReason ?? null,
             periodStart: periodStart.toISOString(),
             periodEnd: periodEnd.toISOString(),
           },
@@ -199,7 +195,7 @@ export class PaidInvoiceSyncService {
       });
 
       this.logger.log(
-        `Credits granted: subscription=${subscription.id} +${plan.renewalCredits} (${plan.name}, ${stripeInvoice.billing_reason})`,
+        `Credits granted: subscription=${subscription.id} +${plan.renewalCredits} (${plan.name}, ${paidInvoice.billingReason})`,
       );
     });
   }

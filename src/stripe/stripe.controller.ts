@@ -6,6 +6,7 @@ import {
   HttpStatus,
   UseGuards,
   BadRequestException,
+  Header,
 } from "@nestjs/common";
 import {
   ApiTags,
@@ -26,6 +27,7 @@ import { SubscriptionStatus } from "@prisma/client";
 import { PLAN_CODES } from "../common/constants/plan.constants";
 import { Roles } from "../common/decorators/roles.decorator";
 import { Role } from "../common/constants/roles.enum";
+import { Public } from "../common/decorators/public.decorator";
 
 @ApiTags("Stripe")
 @ApiBearerAuth("JWT-auth")
@@ -36,7 +38,7 @@ export class StripeController {
     private readonly stripeService: StripeService,
     private readonly usersService: UsersService,
     private readonly prisma: PrismaService,
-  ) {}
+  ) { }
 
   @Post("customers")
   @Roles(Role.ADMIN)
@@ -51,7 +53,7 @@ export class StripeController {
       throw new BadRequestException("User already has a Stripe customer account");
     }
 
-    const customerId = await this.usersService.ensureStripeCustomerId({
+    const customerId = await this.stripeService.ensureCustomerId({
       id: user.id,
       email: dto.email || user.email,
       name: dto.name || user.name || undefined,
@@ -77,8 +79,8 @@ export class StripeController {
     });
 
     if (currentSubscription && currentSubscription.pricingOption) {
-      const isCancelledOrExpired = 
-        currentSubscription.status === SubscriptionStatus.CANCELLED || 
+      const isCancelledOrExpired =
+        currentSubscription.status === SubscriptionStatus.CANCELLED ||
         currentSubscription.status === SubscriptionStatus.EXPIRED;
 
       if (!isCancelledOrExpired) {
@@ -101,7 +103,7 @@ export class StripeController {
     let providerCustomerId = user.providerCustomerId;
 
     if (!providerCustomerId) {
-      providerCustomerId = await this.usersService.ensureStripeCustomerId(user);
+      providerCustomerId = await this.stripeService.ensureCustomerId(user);
     }
 
     const session = await this.stripeService.createCheckoutSession(
@@ -129,9 +131,9 @@ export class StripeController {
       include: { pricingOption: { include: { plan: true } } },
     });
 
-    const isPaidPlanActive = 
-      currentSubscription && 
-      currentSubscription.status === SubscriptionStatus.ACTIVE && 
+    const isPaidPlanActive =
+      currentSubscription &&
+      currentSubscription.status === SubscriptionStatus.ACTIVE &&
       currentSubscription.pricingOption?.plan?.code !== PLAN_CODES.FREE;
 
     if (!isPaidPlanActive) {
@@ -177,7 +179,7 @@ export class StripeController {
 
     return new ApiResponse(HttpStatus.CREATED, "Payment intent created", {
       paymentIntentId: paymentIntent.id,
-      clientSecret: paymentIntent.client_secret,
+      clientSecret: paymentIntent.clientSecret,
     });
   }
 

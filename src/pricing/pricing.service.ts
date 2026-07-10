@@ -1,19 +1,24 @@
-import { Injectable, InternalServerErrorException } from "@nestjs/common";
+import { Injectable, InternalServerErrorException, Inject } from "@nestjs/common";
 import { PrismaService } from "../database/prisma.service";
-import Stripe from "stripe";
 import { ConfigService } from "@nestjs/config";
 import { formatDatabaseAmountToStripe } from "../stripe/utils/stripe-currency.util";
+import { IPaymentAdapter } from "../payments/types/payment-adapter.interface";
+
+const INTERVAL = {
+  DAY: "day",
+  WEEK: "week",
+  MONTH: "month",
+  YEAR: "year",
+} as const;
 
 @Injectable()
 export class PricingService {
-  private readonly stripe: Stripe;
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
-  ) {
-    this.stripe = new Stripe(this.configService.get<string>("STRIPE_SECRET_KEY") || "");
-  }
+    @Inject("PAYMENT_ADAPTER")
+    private readonly adapter: IPaymentAdapter,
+  ) {}
 
   async createPlan(data: { code: string; name: string; renewalCredits: number; resetIntervalDay: number }) {
     return this.prisma.plan.create({ data });
@@ -35,35 +40,30 @@ export class PricingService {
       const billingCycle = await this.prisma.billingCycle.findUnique({ where: { id: data.billingCycleId } });
       if (!billingCycle) throw new Error("Billing cycle not found");
 
-      let interval: Stripe.PriceCreateParams.Recurring.Interval = "day";
+      let interval: 'day' | 'week' | 'month' | 'year' = INTERVAL.DAY;
       let intervalCount = billingCycle.durationDay;
 
       if (billingCycle.durationDay === 365 || billingCycle.durationDay === 366) {
-        interval = "year";
+        interval = INTERVAL.YEAR;
         intervalCount = 1;
       } else if (billingCycle.durationDay % 30 === 0) {
-        interval = "month";
+        interval = INTERVAL.MONTH;
         intervalCount = billingCycle.durationDay / 30;
       } else if (billingCycle.durationDay % 7 === 0) {
-        interval = "week";
+        interval = INTERVAL.WEEK;
         intervalCount = billingCycle.durationDay / 7;
       }
 
-      const product = await this.stripe.products.create({
-        name: `${plan.name} - ${billingCycle.name}`,
-      });
+      const productId = await this.adapter.createProduct(`${plan.name} - ${billingCycle.name}`);
 
-      const price = await this.stripe.prices.create({
-        product: product.id,
-        unit_amount: formatDatabaseAmountToStripe(data.price, data.currency),
-        currency: data.currency,
-        recurring: { 
-          interval: interval,
-          interval_count: intervalCount
-        }, 
-      });
+      const priceId = await this.adapter.createRecurringPrice(
+        productId,
+        formatDatabaseAmountToStripe(data.price, data.currency),
+        data.currency,
+        { interval, intervalCount }
+      );
 
-      return this.prisma.pricingOption.create({
+      return await this.prisma.pricingOption.create({
         data: {
           planId: data.planId,
           billingCycleId: data.billingCycleId,
@@ -71,7 +71,7 @@ export class PricingService {
           price: data.price,
           currency: data.currency,
           provider: "STRIPE",
-          providerPriceId: price.id,
+          providerPriceId: priceId,
         },
       });
     } catch (error) {
@@ -89,17 +89,15 @@ export class PricingService {
 
   async createAddonPackage(data: { code: string; name: string; credits: number; price: number; currency: string }) {
     try {
-      const product = await this.stripe.products.create({
-        name: data.name,
-      });
+      const productId = await this.adapter.createProduct(data.name);
 
-      const price = await this.stripe.prices.create({
-        product: product.id,
-        unit_amount: formatDatabaseAmountToStripe(data.price, data.currency),
-        currency: data.currency,
-      });
+      const priceId = await this.adapter.createOneTimePrice(
+        productId,
+        formatDatabaseAmountToStripe(data.price, data.currency),
+        data.currency
+      );
 
-      return this.prisma.addonPackage.create({
+      return await this.prisma.addonPackage.create({
         data: {
           code: data.code,
           name: data.name,
@@ -107,7 +105,7 @@ export class PricingService {
           price: data.price,
           currency: data.currency,
           provider: "STRIPE",
-          providerPriceId: price.id,
+          providerPriceId: priceId,
         },
       });
     } catch (error) {

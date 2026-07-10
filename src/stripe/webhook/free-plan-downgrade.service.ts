@@ -62,12 +62,12 @@ export class FreePlanDowngradeService {
       include: { plan: true },
     });
 
-    const freeItem = freeSub.items.data[0] as any;
-    const periodStart = freeItem?.current_period_start
-      ? new Date(freeItem.current_period_start * 1000)
+    const freeItem = freeSub.items[0];
+    const periodStart = freeItem?.currentPeriodStart
+      ? new Date(freeItem.currentPeriodStart * 1000)
       : new Date();
-    const periodEnd = freeItem?.current_period_end
-      ? new Date(freeItem.current_period_end * 1000)
+    const periodEnd = freeItem?.currentPeriodEnd
+      ? new Date(freeItem.currentPeriodEnd * 1000)
       : addCalendarMonths(periodStart, 1);
 
    
