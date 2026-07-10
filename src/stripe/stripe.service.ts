@@ -245,4 +245,8 @@ export class StripeService {
   async cancelSubscriptionNow(subscriptionId: string): Promise<void> {
     return this.paymentAdapter.cancelSubscriptionNow(subscriptionId);
   }
+
+  mapRawSubscription(rawSubscription: unknown): PaymentSubscription {
+    return this.paymentAdapter.mapRawSubscription(rawSubscription);
+  }
 }

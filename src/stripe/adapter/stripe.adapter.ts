@@ -268,25 +268,29 @@ export class StripeAdapter implements IPaymentAdapter {
     };
   }
 
-  public mapSubscription(StripeSubscription: Stripe.Subscription): PaymentSubscription {
-    const status = STRIPE_STATUS_MAP[StripeSubscription.status] || SubscriptionStatus.PAST_DUE;
+  mapRawSubscription(rawSubscription: unknown): PaymentSubscription {
+    return this.mapSubscription(rawSubscription as Stripe.Subscription);
+  }
+
+  private mapSubscription(stripeSubscription: Stripe.Subscription): PaymentSubscription {
+    const status = STRIPE_STATUS_MAP[stripeSubscription.status] || SubscriptionStatus.PAST_DUE;
     return {
-      id: StripeSubscription.id,
-      customerId: typeof StripeSubscription.customer === 'string' ? StripeSubscription.customer : StripeSubscription.customer.id,
+      id: stripeSubscription.id,
+      customerId: typeof stripeSubscription.customer === 'string' ? stripeSubscription.customer : stripeSubscription.customer.id,
       status: status,
-      items: StripeSubscription.items.data.map(item => ({
+      items: stripeSubscription.items.data.map(item => ({
         priceId: typeof item.price === 'string' ? item.price : item.price.id,
         currentPeriodStart: (item as any).current_period_start,
         currentPeriodEnd: (item as any).current_period_end,
       })),
-      currentPeriodStart: (StripeSubscription.items.data[0] as any)?.current_period_start ?? StripeSubscription.created,
-      currentPeriodEnd: (StripeSubscription.items.data[0] as any)?.current_period_end ?? StripeSubscription.created,
-      cancelAtPeriodEnd: StripeSubscription.cancel_at_period_end,
-      cancelAt: StripeSubscription.cancel_at,
-      trialStart: StripeSubscription.trial_start,
-      trialEnd: StripeSubscription.trial_end,
-      cancellationReason: StripeSubscription.cancellation_details?.reason ?? null,
-      created: StripeSubscription.created,
+      currentPeriodStart: (stripeSubscription.items.data[0] as any)?.current_period_start ?? stripeSubscription.created,
+      currentPeriodEnd: (stripeSubscription.items.data[0] as any)?.current_period_end ?? stripeSubscription.created,
+      cancelAtPeriodEnd: stripeSubscription.cancel_at_period_end,
+      cancelAt: stripeSubscription.cancel_at,
+      trialStart: stripeSubscription.trial_start,
+      trialEnd: stripeSubscription.trial_end,
+      cancellationReason: stripeSubscription.cancellation_details?.reason ?? null,
+      created: stripeSubscription.created,
     };
   }
 

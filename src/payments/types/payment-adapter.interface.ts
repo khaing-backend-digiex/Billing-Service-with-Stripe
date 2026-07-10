@@ -29,7 +29,8 @@ export interface IPaymentAdapter {
   createBillingPortalSession(customerId: string, returnUrl?: string): Promise<BillingPortalSession>;
   hasDefaultPaymentMethod(customerId: string): Promise<boolean>;
 
- constructWebhookEvent(rawBody: Buffer, signature: string): WebhookEvent;
+  constructWebhookEvent(rawBody: Buffer, signature: string): WebhookEvent;
+  mapRawSubscription(rawSubscription: unknown): PaymentSubscription;
 
   createProduct(name: string): Promise<string>;  // returns productId
   createRecurringPrice(productId: string, amount: number, currency: string, recurring: RecurringInterval): Promise<string>;  // returns priceId
