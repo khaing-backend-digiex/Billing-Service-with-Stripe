@@ -1,8 +1,10 @@
 import {
   BadRequestException,
   Injectable,
+  UnauthorizedException,
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
+import * as bcrypt from "bcrypt";
 import { UsersService } from "../users/users.service";
 import { UserProvisioningService } from "../provisioning/user-provisioning.service";
 import { LoginDto } from "./dto/login.dto";
@@ -20,7 +22,16 @@ export class AuthService {
     const user = await this.usersService.findByEmail(loginDto.email);
 
     if (!user) {
-      throw new BadRequestException("User not found.");
+      throw new UnauthorizedException("Invalid email or password.");
+    }
+
+    const isPasswordValid = await bcrypt.compare(
+      loginDto.password,
+      user.password,
+    );
+
+    if (!isPasswordValid) {
+      throw new UnauthorizedException("Invalid email or password.");
     }
 
     const payload = {
@@ -40,7 +51,7 @@ export class AuthService {
   }
 
   async register(registerDto: RegisterDto) {
-    const { email, name } = registerDto;
+    const { email, name, password } = registerDto;
 
     const existingUser = await this.usersService.findByEmail(email);
 
@@ -48,7 +59,13 @@ export class AuthService {
       throw new BadRequestException("Email already exists.");
     }
 
-    const user = await this.userProvisioningService.createUser(email, name);
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const user = await this.userProvisioningService.createUser(
+      email,
+      hashedPassword,
+      name,
+    );
 
     return {
       name: user.name,
