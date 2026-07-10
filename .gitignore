@@ -34,3 +34,12 @@ test-renewal.ts
 
 # Local-only integration test (dùng DB/Stripe thật, không commit)
 test/users.rollback.integration.spec.ts
+
+# Agent
+.agents/
+skills.json
+skills-lock.json
+implementation_plan.md
+code_review.md
+task.md
+walkthrough.md

@@ -1,7 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
 import { WebhookStrategy } from "./webhook-strategy.interface";
-import { PaymentProvider, SubscriptionStatus } from "@prisma/client";
+import { PaymentProvider, SubscriptionStatus, SubscriptionEventType, InvoiceStatus, CreditTransactionType, ReferenceType } from "@prisma/client";
 import { PrismaService } from "@/database/prisma.service";
 import { PricingService } from "@/pricing/pricing.service";
 import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
@@ -29,7 +29,7 @@ export class InvoicePaidStrategy implements WebhookStrategy {
     const rawInvoice = event.data.object;
     const paymentInvoice = this.stripeService.mapRawInvoice(rawInvoice);
     this.logger.log(`invoice.paid: ${paymentInvoice.id}`);
-    
+
     const lineToUse = paymentInvoice.lines?.find(line => line.type === 'subscription') || paymentInvoice.lines?.[0];
     let stripeSubscriptionId = paymentInvoice.subscriptionId ?? lineToUse?.subscriptionId ?? null;
 
@@ -42,7 +42,7 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       where: { providerCustomerId: paymentInvoice.customerId },
       select: { id: true },
     });
-    
+
     if (!userId) {
       this.logger.error(`No user found for Stripe customer ${paymentInvoice.customerId}`);
       return;
@@ -112,7 +112,7 @@ export class InvoicePaidStrategy implements WebhookStrategy {
         },
         update: {},
       });
-      
+
       await tx.creditTransaction.create({
         data: {
           userId: subscription.userId,

@@ -298,10 +298,6 @@ export class StripeAdapter implements IPaymentAdapter {
     };
   }
 
-  mapRawInvoice(rawInvoice: unknown): PaymentInvoice {
-    return this.mapInvoice(rawInvoice as Stripe.Invoice);
-  }
-
   private mapInvoice(i: Stripe.Invoice): PaymentInvoice {
     return {
       id: i.id,
@@ -323,7 +319,6 @@ export class StripeAdapter implements IPaymentAdapter {
       paymentIntentId: typeof i.payment_intent === 'string' ? i.payment_intent : (i.payment_intent as any)?.id,
       lines: i.lines.data.map(l => ({
         type: l.type as string,
-        // Stripe 2025+ dời price xuống pricing.price_details; line.price là schema cũ.
         priceId:
           (l as any).pricing?.price_details?.price ??
           (typeof l.price === 'string' ? l.price : l.price?.id) ??
