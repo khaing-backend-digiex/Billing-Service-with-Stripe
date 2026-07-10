@@ -249,4 +249,8 @@ export class StripeService {
   mapRawSubscription(rawSubscription: unknown): PaymentSubscription {
     return this.paymentAdapter.mapRawSubscription(rawSubscription);
   }
+
+  mapRawInvoice(rawInvoice: unknown): PaymentInvoice {
+    return this.paymentAdapter.mapRawInvoice(rawInvoice);
+  }
 }

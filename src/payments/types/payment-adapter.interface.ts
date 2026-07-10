@@ -31,6 +31,7 @@ export interface IPaymentAdapter {
 
   constructWebhookEvent(rawBody: Buffer, signature: string): WebhookEvent;
   mapRawSubscription(rawSubscription: unknown): PaymentSubscription;
+  mapRawInvoice(rawInvoice: unknown): PaymentInvoice;
 
   createProduct(name: string): Promise<string>;  // returns productId
   createRecurringPrice(productId: string, amount: number, currency: string, recurring: RecurringInterval): Promise<string>;  // returns priceId

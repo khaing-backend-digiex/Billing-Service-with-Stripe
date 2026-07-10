@@ -272,6 +272,10 @@ export class StripeAdapter implements IPaymentAdapter {
     return this.mapSubscription(rawSubscription as Stripe.Subscription);
   }
 
+  mapRawInvoice(rawInvoice: unknown): PaymentInvoice {
+    return this.mapInvoice(rawInvoice as Stripe.Invoice);
+  }
+
   private mapSubscription(stripeSubscription: Stripe.Subscription): PaymentSubscription {
     const status = STRIPE_STATUS_MAP[stripeSubscription.status] || SubscriptionStatus.PAST_DUE;
     return {

@@ -8,6 +8,8 @@ import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
 import { addCalendarMonths } from "../../../common/utils/date.util";
 import { PLAN_CODES } from "../../../common/constants/plan.constants";
 
+import { StripeService } from "../../stripe.service";
+
 @Injectable()
 export class InvoicePaidStrategy implements WebhookStrategy {
   private readonly logger = new Logger(InvoicePaidStrategy.name);
@@ -15,6 +17,7 @@ export class InvoicePaidStrategy implements WebhookStrategy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly pricingService: PricingService,
+    private readonly stripeService: StripeService,
   ) { }
 
   private readonly invoicePaid = "invoice.paid";
@@ -24,28 +27,29 @@ export class InvoicePaidStrategy implements WebhookStrategy {
 
   
   async handle(event: Stripe.Event): Promise<void> {
-    const stripeInvoice = event.data.object as Stripe.Invoice;
-    this.logger.log(`invoice.paid: ${stripeInvoice.id}`);
+    const rawInvoice = event.data.object;
+    const paymentInvoice = this.stripeService.mapRawInvoice(rawInvoice);
+    this.logger.log(`invoice.paid: ${paymentInvoice.id}`);
     
-    const lineToUse = stripeInvoice.lines?.data?.find(line => line.type === 'subscription') || stripeInvoice.lines?.data?.[0];
-    let stripeSubscriptionId = lineToUse?.subscription ?? (lineToUse as any)?.parent?.subscription_item_details?.subscription ?? null;
+    const lineToUse = paymentInvoice.lines?.find(line => line.type === 'subscription') || paymentInvoice.lines?.[0];
+    let stripeSubscriptionId = paymentInvoice.subscriptionId ?? lineToUse?.subscriptionId ?? null;
 
     if (!stripeSubscriptionId) {
-      this.logger.error(`Invoice ${stripeInvoice.id} has no linked subscription, skipping`);
+      this.logger.error(`Invoice ${paymentInvoice.id} has no linked subscription, skipping`);
       return;
     }
 
     const userId = await this.prisma.user.findFirst({
-      where: { providerCustomerId: stripeInvoice.customer as string },
+      where: { providerCustomerId: paymentInvoice.customerId },
       select: { id: true },
     });
     
     if (!userId) {
-      this.logger.error(`No user found for Stripe customer ${stripeInvoice.customer}`);
+      this.logger.error(`No user found for Stripe customer ${paymentInvoice.customerId}`);
       return;
     }
 
-    let priceId = (lineToUse as any)?.pricing?.price_details?.price;
+    let priceId = lineToUse?.priceId;
 
     if (!priceId) {
       this.logger.error(`No price ID found in invoice lines.`);
@@ -59,12 +63,12 @@ export class InvoicePaidStrategy implements WebhookStrategy {
     }
 
     const plan = pricingOption.plan;
-    const periodStart = new Date(stripeInvoice.period_start * 1000);
-    const periodEnd = new Date(stripeInvoice.period_end * 1000);
+    const periodStart = new Date(paymentInvoice.periodStart * 1000);
+    const periodEnd = new Date(paymentInvoice.periodEnd * 1000);
     const resetMonths = Math.max(1, Math.round(plan.resetIntervalDay / 30));
     const nextCreditResetAt = addCalendarMonths(periodStart, resetMonths);
 
-    const isInitial = stripeInvoice.billing_reason === "subscription_create";
+    const isInitial = paymentInvoice.billingReason === "subscription_create";
     const eventType = isInitial ? SubscriptionEventType.CREATED : SubscriptionEventType.RENEWED;
     const description = isInitial
       ? `Credits granted ${plan.name} (initial)`
@@ -97,15 +101,15 @@ export class InvoicePaidStrategy implements WebhookStrategy {
         `Subscription ${subscription.id} updated: status=ACTIVE, currentPeriodStart=${periodStart.toISOString()}, currentPeriodEnd=${periodEnd.toISOString()}, subscriptionCreditsRemaining=${plan.renewalCredits}, nextCreditResetAt=${nextCreditResetAt.toISOString()}`,
       );
       const invoice = await tx.invoice.upsert({
-        where: { providerInvoiceId: stripeInvoice.id },
+        where: { providerInvoiceId: paymentInvoice.id },
         create: {
           subscriptionId: subscription.id,
           provider: PaymentProvider.STRIPE,
-          providerInvoiceId: stripeInvoice.id,
-          amount: formatStripeAmountToDatabase(stripeInvoice.amount_due, stripeInvoice.currency),
-          currency: stripeInvoice.currency,
+          providerInvoiceId: paymentInvoice.id,
+          amount: formatStripeAmountToDatabase(paymentInvoice.amountDue, paymentInvoice.currency),
+          currency: paymentInvoice.currency,
           status: InvoiceStatus.PAID,
-          dueAt: stripeInvoice.due_date ? new Date(stripeInvoice.due_date * 1000) : new Date(stripeInvoice.period_end * 1000),
+          dueAt: paymentInvoice.dueDate ? new Date(paymentInvoice.dueDate * 1000) : new Date(paymentInvoice.periodEnd * 1000),
         },
         update: {},
       });
@@ -138,9 +142,9 @@ export class InvoicePaidStrategy implements WebhookStrategy {
           subscriptionId: subscription.id,
           type: eventType,
           metadata: {
-            stripeInvoiceId: stripeInvoice.id,
+            stripeInvoiceId: paymentInvoice.id,
             creditsGranted: plan.renewalCredits,
-            billingReason: stripeInvoice.billing_reason,
+            billingReason: paymentInvoice.billingReason,
             periodStart: periodStart.toISOString(),
             periodEnd: periodEnd.toISOString(),
           },
@@ -148,7 +152,7 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       });
 
       this.logger.log(
-        `Credits granted: subscription=${subscription.id} +${plan.renewalCredits} (${plan.name}, ${stripeInvoice.billing_reason})`,
+        `Credits granted: subscription=${subscription.id} +${plan.renewalCredits} (${plan.name}, ${paymentInvoice.billingReason})`,
       );
     })
   }
