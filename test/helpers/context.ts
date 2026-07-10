@@ -148,7 +148,10 @@ export function stripeEvent(type: string, object: unknown): Stripe.Event {
   } as unknown as Stripe.Event;
 }
 
-/** Payload tối thiểu của Stripe.Invoice mà các strategy đọc tới. */
+/**
+ * Payload tối thiểu của Stripe.Invoice mà các strategy đọc tới.
+ * Lưu ý: strategy lấy subscription id từ *line*, không phải field top-level.
+ */
 export function invoicePayload(
   stripeSubscriptionId: string | null,
   priceId: string,
@@ -157,6 +160,7 @@ export function invoicePayload(
   const now = Math.floor(Date.now() / 1000);
   return {
     id: `in_test_${rand()}`,
+    customer: null as string | null,
     subscription: stripeSubscriptionId,
     status: "open",
     amount_due: 1000,
@@ -169,12 +173,23 @@ export function invoicePayload(
     period_start: now,
     period_end: now + 30 * 86_400,
     payment_intent: `pi_test_${rand()}`,
-    lines: { data: [{ type: "subscription", price: { id: priceId } }] },
+    lines: {
+      data: [
+        {
+          type: "subscription",
+          subscription: stripeSubscriptionId,
+          price: { id: priceId },
+        },
+      ],
+    },
     ...overrides,
   };
 }
 
-/** Payload tối thiểu của Stripe.Subscription mà các strategy đọc tới. */
+/**
+ * Payload tối thiểu của Stripe.Subscription mà các strategy đọc tới.
+ * Lưu ý: chu kỳ nằm trong items.data[0], không phải top-level.
+ */
 export function subscriptionPayload(
   customerId: string,
   priceId: string,
@@ -185,13 +200,20 @@ export function subscriptionPayload(
     id: `sub_test_${rand()}`,
     customer: customerId,
     status: "active",
-    items: { data: [{ price: { id: priceId } }] },
-    current_period_start: now,
-    current_period_end: now + 30 * 86_400,
+    items: {
+      data: [
+        {
+          price: { id: priceId },
+          current_period_start: now,
+          current_period_end: now + 30 * 86_400,
+        },
+      ],
+    },
     trial_start: null,
     trial_end: null,
     cancel_at: null,
     canceled_at: null,
+    cancel_at_period_end: false,
     cancellation_details: null,
     ...overrides,
   };

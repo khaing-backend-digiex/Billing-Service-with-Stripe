@@ -1,7 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
 import { WebhookStrategy } from "./webhook-strategy.interface";
-import {PaymentProvider, InvoiceStatus, SubscriptionStatus, CreditTransactionType, ReferenceType, SubscriptionEventType } from "@prisma/client";
+import { PaymentProvider, SubscriptionStatus } from "@prisma/client";
 import { PrismaService } from "@/database/prisma.service";
 import { PricingService } from "@/pricing/pricing.service";
 import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
@@ -25,7 +25,6 @@ export class InvoicePaidStrategy implements WebhookStrategy {
     return eventType === this.invoicePaid;
   }
 
-  
   async handle(event: Stripe.Event): Promise<void> {
     const rawInvoice = event.data.object;
     const paymentInvoice = this.stripeService.mapRawInvoice(rawInvoice);

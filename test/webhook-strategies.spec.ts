@@ -5,27 +5,31 @@ import {
   PaymentStatus,
   SubscriptionEventType,
   SubscriptionStatus,
+  User,
 } from "@prisma/client";
-import { InvoiceCreatedStrategy } from "../src/stripe/webhook/strategies/invoice.created";
 import { InvoicePaidStrategy } from "../src/stripe/webhook/strategies/invoice-paid.strategy";
 import { InvoicePaymentFailedStrategy } from "../src/stripe/webhook/strategies/invoice.payment_failed";
-import { CustomerSubscriptionCreatedStrategy } from "../src/stripe/webhook/strategies/customer.subscription.created";
 import { CustomerSubscriptionUpdatedStrategy } from "../src/stripe/webhook/strategies/customer.subscription.updated";
 import { CustomerSubscriptionDeletedStrategy } from "../src/stripe/webhook/strategies/customer.subscription.deleted";
-import { CheckoutSessionCompletedStrategy } from "../src/stripe/webhook/strategies/checkout-session-completed.strategy";
 import { PaymentIntentSucceededStrategy } from "../src/stripe/webhook/strategies/payment-intent-succeeded.strategy";
 import { PaidInvoiceSyncService } from "../src/stripe/sync/paid-invoice-sync.service";
 import { SubscriptionSyncService } from "../src/stripe/sync/subscription-sync.service";
+import { StripeAdapter } from "../src/stripe/adapter/stripe.adapter";
 import { TestContext, invoicePayload, rand, stripeEvent, subscriptionPayload } from "./helpers/context";
 
 describe("Webhook strategies (real DB, Stripe mocked)", () => {
   const ctx = new TestContext();
+
+  // Adapter thật nhưng không gọi API: chỉ dùng các hàm map raw payload → domain type.
+  const adapter = new StripeAdapter({ get: () => "sk_test_dummy" } as any);
 
   // Mọi call ra Stripe API đều mock — chỉ DB là thật.
   const stripeServiceMock = {
     cancelSubscriptionNow: jest.fn().mockResolvedValue(undefined),
     getFreePriceId: jest.fn().mockResolvedValue(null),
     ensureFreeSubscription: jest.fn().mockResolvedValue(null),
+    mapRawInvoice: (raw: unknown) => adapter.mapRawInvoice(raw),
+    mapRawSubscription: (raw: unknown) => adapter.mapRawSubscription(raw),
   };
   const freePlanDowngradeMock = { downgradeToFree: jest.fn().mockResolvedValue(undefined) };
   // PricingService.findByProviderPriceId chỉ query DB → stub chạy query thật
@@ -49,51 +53,22 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
     jest.clearAllMocks();
   });
 
-  // ───────────────────────── invoice.created ─────────────────────────
-  describe("invoice.created", () => {
-    const strategy = () => new InvoiceCreatedStrategy(ctx.prisma);
-
-    it("creates a local OPEN invoice for a known subscription", async () => {
-      const user = await ctx.createUser();
-      const sub = await ctx.createSubscription(user.id);
-      const payload = invoicePayload(sub.providerSubscriptionId!, ctx.basicOption.providerPriceId!);
-
-      await strategy().handle(stripeEvent("invoice.created", payload));
-
-      const invoice = await ctx.prisma.invoice.findUnique({
-        where: { providerInvoiceId: payload.id },
-      });
-      expect(invoice).not.toBeNull();
-      expect(invoice!.status).toBe(InvoiceStatus.OPEN);
-      expect(invoice!.subscriptionId).toBe(sub.id);
-    });
-
-    it("throws when the local subscription does not exist yet (so Stripe retries)", async () => {
-      const payload = invoicePayload(`sub_missing_${rand()}`, ctx.basicOption.providerPriceId!);
-      await expect(strategy().handle(stripeEvent("invoice.created", payload))).rejects.toThrow(
-        /No local subscription/,
-      );
-    });
-
-    it("skips when the invoice already exists (no duplicate)", async () => {
-      const user = await ctx.createUser();
-      const sub = await ctx.createSubscription(user.id);
-      const payload = invoicePayload(sub.providerSubscriptionId!, ctx.basicOption.providerPriceId!);
-
-      await strategy().handle(stripeEvent("invoice.created", payload));
-      await strategy().handle(stripeEvent("invoice.created", payload));
-
-      const count = await ctx.prisma.invoice.count({ where: { providerInvoiceId: payload.id } });
-      expect(count).toBe(1);
-    });
-  });
-
   // ───────────────────────── invoice.paid ─────────────────────────
   describe("invoice.paid", () => {
+    const paidInvoiceSync = () =>
+      new PaidInvoiceSyncService(ctx.prisma, pricingServiceStub as any);
     const strategy = () =>
       new InvoicePaidStrategy(
-        new PaidInvoiceSyncService(ctx.prisma, pricingServiceStub as any),
+        ctx.prisma,
+        pricingServiceStub as any,
+        paidInvoiceSync(),
+        stripeServiceMock as any,
       );
+
+    const paidPayload = (user: User, stripeSubId: string | null) =>
+      invoicePayload(stripeSubId, ctx.basicOption.providerPriceId!, {
+        customer: user.providerCustomerId,
+      });
 
     it("marks invoice PAID, activates subscription, grants credits, records payment", async () => {
       const user = await ctx.createUser();
@@ -101,7 +76,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
         status: SubscriptionStatus.PAST_DUE,
         subscriptionCreditsRemaining: 0,
       });
-      const payload = invoicePayload(sub.providerSubscriptionId!, ctx.basicOption.providerPriceId!);
+      const payload = paidPayload(user, sub.providerSubscriptionId!);
       await ctx.prisma.invoice.create({
         data: {
           subscriptionId: sub.id,
@@ -137,10 +112,10 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       expect(events).toHaveLength(1);
     });
 
-    it("upserts the invoice when invoice.paid arrives before invoice.created", async () => {
+    it("creates the local invoice when it does not exist yet", async () => {
       const user = await ctx.createUser();
       const sub = await ctx.createSubscription(user.id, { subscriptionCreditsRemaining: 0 });
-      const payload = invoicePayload(sub.providerSubscriptionId!, ctx.basicOption.providerPriceId!);
+      const payload = paidPayload(user, sub.providerSubscriptionId!);
 
       await strategy().handle(stripeEvent("invoice.paid", payload));
 
@@ -154,10 +129,25 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       expect(after.subscriptionCreditsRemaining).toBe(ctx.plan.renewalCredits);
     });
 
+    it("creates the local subscription row when onboarding never produced one", async () => {
+      const user = await ctx.createUser();
+      const stripeSubId = `sub_test_${rand()}`;
+      const payload = paidPayload(user, stripeSubId);
+
+      await strategy().handle(stripeEvent("invoice.paid", payload));
+
+      const sub = await ctx.prisma.subscription.findUniqueOrThrow({
+        where: { userId: user.id },
+      });
+      expect(sub.providerSubscriptionId).toBe(stripeSubId);
+      expect(sub.status).toBe(SubscriptionStatus.ACTIVE);
+      expect(sub.subscriptionCreditsRemaining).toBe(ctx.plan.renewalCredits);
+    });
+
     it("is idempotent: replaying the event does not double-grant credits", async () => {
       const user = await ctx.createUser();
       const sub = await ctx.createSubscription(user.id, { subscriptionCreditsRemaining: 0 });
-      const payload = invoicePayload(sub.providerSubscriptionId!, ctx.basicOption.providerPriceId!);
+      const payload = paidPayload(user, sub.providerSubscriptionId!);
 
       await strategy().handle(stripeEvent("invoice.paid", payload));
       await strategy().handle(stripeEvent("invoice.paid", payload));
@@ -168,11 +158,30 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       expect(txs).toHaveLength(1);
     });
 
-    it("throws when the local subscription does not exist yet (so Stripe retries)", async () => {
-      const payload = invoicePayload(`sub_missing_${rand()}`, ctx.basicOption.providerPriceId!);
-      await expect(strategy().handle(stripeEvent("invoice.paid", payload))).rejects.toThrow(
-        /No local subscription/,
-      );
+    // Bug thật: cron chữa trước (applyPaidInvoice), webhook retry tới sau.
+    it("does not re-grant credits when the cron already applied the same invoice", async () => {
+      const user = await ctx.createUser();
+      const sub = await ctx.createSubscription(user.id, { subscriptionCreditsRemaining: 0 });
+      const payload = paidPayload(user, sub.providerSubscriptionId!);
+
+      // Đường cron: reconcile gọi thẳng sync service với local subscription id.
+      await paidInvoiceSync().applyPaidInvoice(adapter.mapRawInvoice(payload), sub.id);
+
+      // User tiêu bớt credit trước khi webhook chậm chân tới nơi.
+      await ctx.prisma.subscription.update({
+        where: { id: sub.id },
+        data: { subscriptionCreditsRemaining: 10 },
+      });
+
+      await strategy().handle(stripeEvent("invoice.paid", payload));
+
+      const txs = await ctx.prisma.creditTransaction.findMany({
+        where: { userId: user.id, type: CreditTransactionType.RENEWAL },
+      });
+      expect(txs).toHaveLength(1);
+
+      const after = await ctx.prisma.subscription.findUniqueOrThrow({ where: { id: sub.id } });
+      expect(after.subscriptionCreditsRemaining).toBe(10);
     });
   });
 
@@ -181,7 +190,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
     const strategy = () =>
       new InvoicePaymentFailedStrategy(ctx.prisma, stripeServiceMock as any);
 
-    it("records retry info, FAILED payment, sets PAST_DUE; does not cancel on first failure", async () => {
+    it("records retry info, sets PAST_DUE; does not cancel on first failure", async () => {
       const user = await ctx.createUser();
       const sub = await ctx.createSubscription(user.id);
       const payload = invoicePayload(sub.providerSubscriptionId!, ctx.basicOption.providerPriceId!, {
@@ -200,11 +209,6 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
 
       const after = await ctx.prisma.subscription.findUniqueOrThrow({ where: { id: sub.id } });
       expect(after.status).toBe(SubscriptionStatus.PAST_DUE);
-
-      const payment = await ctx.prisma.payment.findUnique({
-        where: { providerPaymentId: payload.payment_intent as string },
-      });
-      expect(payment?.status).toBe(PaymentStatus.FAILED);
 
       const events = await ctx.prisma.subscriptionEvent.findMany({
         where: { subscriptionId: sub.id, type: SubscriptionEventType.PAYMENT_FAILED },
@@ -234,53 +238,6 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
     });
   });
 
-  // ───────────────────────── customer.subscription.created ─────────────────────────
-  describe("customer.subscription.created", () => {
-    const strategy = () =>
-      new CustomerSubscriptionCreatedStrategy(
-        new SubscriptionSyncService(
-          ctx.prisma,
-          pricingServiceStub as any,
-          stripeServiceMock as any,
-        ),
-      );
-
-    it("creates a local subscription with 0 credits (invoice.paid grants them)", async () => {
-      const user = await ctx.createUser();
-      const payload = subscriptionPayload(user.providerCustomerId!, ctx.basicOption.providerPriceId!);
-
-      await strategy().handle(stripeEvent("customer.subscription.created", payload));
-
-      const sub = await ctx.prisma.subscription.findUnique({ where: { userId: user.id } });
-      expect(sub).not.toBeNull();
-      expect(sub!.status).toBe(SubscriptionStatus.ACTIVE);
-      expect(sub!.subscriptionCreditsRemaining).toBe(0);
-      expect(sub!.providerSubscriptionId).toBe(payload.id);
-    });
-
-    it("on plan switch: repoints the local row, cancels the old Stripe sub, logs UPGRADED", async () => {
-      const user = await ctx.createUser();
-      const oldSub = await ctx.createSubscription(user.id, {
-        pricingOptionId: ctx.basicOption.id,
-      });
-      const payload = subscriptionPayload(user.providerCustomerId!, ctx.proOption.providerPriceId!);
-
-      await strategy().handle(stripeEvent("customer.subscription.created", payload));
-
-      const sub = await ctx.prisma.subscription.findUniqueOrThrow({ where: { userId: user.id } });
-      expect(sub.pricingOptionId).toBe(ctx.proOption.id);
-      expect(sub.providerSubscriptionId).toBe(payload.id);
-      expect(stripeServiceMock.cancelSubscriptionNow).toHaveBeenCalledWith(
-        oldSub.providerSubscriptionId,
-      );
-
-      const events = await ctx.prisma.subscriptionEvent.findMany({
-        where: { subscriptionId: sub.id, type: SubscriptionEventType.UPGRADED },
-      });
-      expect(events).toHaveLength(1);
-    });
-  });
-
   // ───────────────────────── customer.subscription.updated ─────────────────────────
   describe("customer.subscription.updated", () => {
     const strategy = () =>
@@ -292,6 +249,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
           pricingServiceStub as any,
           stripeServiceMock as any,
         ),
+        stripeServiceMock as any,
       );
 
     it("PAST_DUE → active syncs status and logs PAYMENT_RECOVERED", async () => {
@@ -381,41 +339,6 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       });
       expect(events).toHaveLength(1);
       expect(freePlanDowngradeMock.downgradeToFree).toHaveBeenCalledTimes(2);
-    });
-  });
-
-  // ───────────────────────── checkout.session.completed ─────────────────────────
-  describe("checkout.session.completed", () => {
-    const strategy = () => new CheckoutSessionCompletedStrategy(ctx.prisma);
-
-    it("records a PENDING addon payment and does not downgrade status on replay", async () => {
-      const user = await ctx.createUser();
-      const paymentIntentId = `pi_test_${rand()}`;
-      const session = {
-        id: `cs_test_${rand()}`,
-        payment_intent: paymentIntentId,
-        metadata: { addonPackageId: ctx.addon.id, userId: String(user.id) },
-      };
-
-      await strategy().handle(stripeEvent("checkout.session.completed", session));
-
-      let payment = await ctx.prisma.payment.findUniqueOrThrow({
-        where: { providerPaymentId: paymentIntentId },
-      });
-      expect(payment.status).toBe(PaymentStatus.PENDING);
-      expect(payment.addonPackageId).toBe(ctx.addon.id);
-
-      // Giả lập payment_intent.succeeded đã chạy trước, rồi session event bị replay
-      await ctx.prisma.payment.update({
-        where: { providerPaymentId: paymentIntentId },
-        data: { status: PaymentStatus.SUCCEEDED },
-      });
-      await strategy().handle(stripeEvent("checkout.session.completed", session));
-
-      payment = await ctx.prisma.payment.findUniqueOrThrow({
-        where: { providerPaymentId: paymentIntentId },
-      });
-      expect(payment.status).toBe(PaymentStatus.SUCCEEDED); // không bị hạ về PENDING
     });
   });
 

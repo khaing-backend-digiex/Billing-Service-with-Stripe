@@ -298,11 +298,18 @@ export class StripeAdapter implements IPaymentAdapter {
     };
   }
 
+  mapRawInvoice(rawInvoice: unknown): PaymentInvoice {
+    return this.mapInvoice(rawInvoice as Stripe.Invoice);
+  }
+
   private mapInvoice(i: Stripe.Invoice): PaymentInvoice {
     return {
       id: i.id,
       customerId: typeof i.customer === 'string' ? i.customer : (i.customer as any)?.id,
-      subscriptionId: typeof i.subscription === 'string' ? i.subscription : (i.subscription as any)?.id,
+      subscriptionId:
+        (typeof i.subscription === 'string' ? i.subscription : (i.subscription as any)?.id) ??
+        (i as any).parent?.subscription_details?.subscription ??
+        null,
       amountDue: i.amount_due,
       amountPaid: i.amount_paid,
       currency: i.currency,
@@ -316,8 +323,15 @@ export class StripeAdapter implements IPaymentAdapter {
       paymentIntentId: typeof i.payment_intent === 'string' ? i.payment_intent : (i.payment_intent as any)?.id,
       lines: i.lines.data.map(l => ({
         type: l.type as string,
-        priceId: typeof l.price === 'string' ? l.price : l.price?.id,
-        subscriptionId: typeof l.subscription === 'string' ? l.subscription : (l.subscription as any)?.id,
+        // Stripe 2025+ dời price xuống pricing.price_details; line.price là schema cũ.
+        priceId:
+          (l as any).pricing?.price_details?.price ??
+          (typeof l.price === 'string' ? l.price : l.price?.id) ??
+          null,
+        subscriptionId:
+          (typeof l.subscription === 'string' ? l.subscription : (l.subscription as any)?.id) ??
+          (l as any).parent?.subscription_item_details?.subscription ??
+          null,
       })),
     };
   }
