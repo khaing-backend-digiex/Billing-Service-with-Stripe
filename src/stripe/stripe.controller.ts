@@ -6,17 +6,15 @@ import {
   HttpStatus,
   UseGuards,
   BadRequestException,
-  Header,
 } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
   ApiBearerAuth,
-  ApiResponse as SwaggerResponse,
 } from "@nestjs/swagger";
 import { StripeService } from "./stripe.service";
-import { CreateSubscriptionCheckoutDto, CreateAddonCheckoutDto } from "../payments/dto/create-checkout.dto";
-import { CreatePaymentIntentDto } from "../payments/dto/create-payment-intent.dto";
+import { PaymentMethodSyncService } from "./sync/payment-method-sync.service";
+import { PurchaseSubscriptionDto, PurchaseAddonDto } from "../payments/dto/purchase.dto";
 import { CreateCustomerDto } from "../payments/dto/create-customer.dto";
 import { ApiResponse } from "../common/dto/api-response.dto";
 import { GetUser } from "../common/decorators/get-user.decorator";
@@ -27,7 +25,17 @@ import { SubscriptionStatus } from "@prisma/client";
 import { PLAN_CODES } from "../common/constants/plan.constants";
 import { Roles } from "../common/decorators/roles.decorator";
 import { Role } from "../common/constants/roles.enum";
-import { Public } from "../common/decorators/public.decorator";
+
+/**
+ * Sub chưa từng thanh toán được lần nào (INCOMPLETE) hoặc đã kết thúc thì KHÔNG tính là
+ * "đang có gói trả phí" – nếu tính, user bị thẻ từ chối một lần sẽ không thể thử lại.
+ */
+const BLOCKING_STATUSES: SubscriptionStatus[] = [
+  SubscriptionStatus.ACTIVE,
+  SubscriptionStatus.TRIALING,
+  SubscriptionStatus.PAST_DUE,
+  SubscriptionStatus.PAUSED,
+];
 
 @ApiTags("Stripe")
 @ApiBearerAuth("JWT-auth")
@@ -36,6 +44,7 @@ import { Public } from "../common/decorators/public.decorator";
 export class StripeController {
   constructor(
     private readonly stripeService: StripeService,
+    private readonly paymentMethodSync: PaymentMethodSyncService,
     private readonly usersService: UsersService,
     private readonly prisma: PrismaService,
   ) { }
@@ -66,11 +75,18 @@ export class StripeController {
     });
   }
 
-  @Post("checkout/subscription")
-  @ApiOperation({ summary: "Create a Stripe checkout session for a subscription" })
-  async createSubscriptionCheckout(
+  /**
+   * Mua gói bằng thẻ đã lưu. Không redirect, không Checkout.
+   *
+   * Credit vẫn do `invoice.paid` cấp như trước – controller này không ghi DB gì cả.
+   * Nếu ngân hàng đòi 3DS, trả về `clientSecret` để client xác thực ngay tại chỗ
+   * (lúc mua thì user đang on-session, nên đây là thời điểm dễ nhất để xong 3DS).
+   */
+  @Post("purchase/subscription")
+  @ApiOperation({ summary: "Buy a subscription with the saved default card" })
+  async purchaseSubscription(
     @GetUser("id") userId: number,
-    @Body() dto: CreateSubscriptionCheckoutDto,
+    @Body() dto: PurchaseSubscriptionDto,
   ) {
     const user = await this.usersService.findById(userId);
     const currentSubscription = await this.prisma.subscription.findUnique({
@@ -78,20 +94,13 @@ export class StripeController {
       include: { pricingOption: true },
     });
 
-    if (currentSubscription && currentSubscription.pricingOption) {
-      const isCancelledOrExpired =
-        currentSubscription.status === SubscriptionStatus.CANCELLED ||
-        currentSubscription.status === SubscriptionStatus.EXPIRED;
-
-      if (!isCancelledOrExpired) {
-        const price = Number(currentSubscription.pricingOption.price);
-        if (price > 0) {
-          throw new BadRequestException("Cannot create a new subscription checkout session while an active paid subscription exists. Please cancel your current subscription first.");
-        }
+    if (currentSubscription?.pricingOption && BLOCKING_STATUSES.includes(currentSubscription.status)) {
+      const price = Number(currentSubscription.pricingOption.price);
+      if (price > 0) {
+        throw new BadRequestException("Cannot buy a new subscription while an active paid subscription exists. Please cancel your current subscription first.");
       }
     }
 
-    // Validate that the pricingOptionId belongs to a valid Subscription Pricing Option
     const pricingOption = await this.prisma.pricingOption.findUnique({
       where: { id: dto.pricingOptionId },
     });
@@ -100,29 +109,34 @@ export class StripeController {
       throw new BadRequestException("Pricing option not found or it does not have a valid Stripe Price ID");
     }
 
-    let providerCustomerId = user.providerCustomerId;
+    const customerId = await this.stripeService.ensureValidCustomerId(user);
+    const paymentMethod = await this.paymentMethodSync.getDefaultOrThrow(userId, customerId);
 
-    if (!providerCustomerId) {
-      providerCustomerId = await this.stripeService.ensureCustomerId(user);
-    }
-
-    const session = await this.stripeService.createCheckoutSession(
+    const result = await this.stripeService.createOffSessionSubscription(
       userId,
       pricingOption.providerPriceId,
-      "subscription",
-      providerCustomerId,
+      customerId,
+      paymentMethod.providerPaymentMethodId,
     );
 
-    return new ApiResponse(HttpStatus.CREATED, "Subscription checkout session created", {
-      url: session.url,
+    return new ApiResponse(HttpStatus.CREATED, "Subscription purchase started", {
+      subscriptionId: result.subscription.id,
+      status: result.status,
+      clientSecret: result.clientSecret,
     });
   }
 
-  @Post("checkout/addon")
-  @ApiOperation({ summary: "Create a Stripe checkout session for an addon" })
-  async createAddonCheckout(
+  /**
+   * Mua addon bằng thẻ đã lưu — thu tiền ngay, một lời gọi, không rời trang.
+   *
+   * `metadata` mang userId + addonPackageId nên `PaymentIntentSucceededStrategy` cấp credit
+   * y như luồng Checkout cũ, không phải sửa gì bên đó.
+   */
+  @Post("purchase/addon")
+  @ApiOperation({ summary: "Buy an addon with the saved default card" })
+  async purchaseAddon(
     @GetUser("id") userId: number,
-    @Body() dto: CreateAddonCheckoutDto,
+    @Body() dto: PurchaseAddonDto,
   ) {
     const user = await this.usersService.findById(userId);
 
@@ -144,47 +158,29 @@ export class StripeController {
       where: { id: dto.addonPackageId },
     });
 
-    if (!addon || !addon.providerPriceId) {
-      throw new BadRequestException("Addon package not found or it does not have a valid Stripe Price ID");
+    if (!addon) {
+      throw new BadRequestException("Addon package not found");
     }
 
-    const session = await this.stripeService.createCheckoutSession(
+    const customerId = await this.stripeService.ensureValidCustomerId(user);
+    const paymentMethod = await this.paymentMethodSync.getDefaultOrThrow(userId, customerId);
+
+    const result = await this.stripeService.createAddonPayment(
       userId,
-      addon.providerPriceId,
-      "payment",
-      user.providerCustomerId || undefined,
-      { addonPackageId: addon.id }
+      addon,
+      customerId,
+      paymentMethod.providerPaymentMethodId,
     );
 
-    return new ApiResponse(HttpStatus.CREATED, "Addon checkout session created", {
-      url: session.url,
-    });
-  }
-
-  @Post("payment-intent")
-  @ApiOperation({ summary: "Create a payment intent" })
-  async createPaymentIntent(
-    @GetUser("id") userId: number,
-    @Body() dto: CreatePaymentIntentDto,
-  ) {
-    const user = await this.usersService.findById(userId);
-
-    const paymentIntent = await this.stripeService.createPaymentIntent(
-      userId,
-      dto.amount,
-      dto.currency,
-      dto.description,
-      user.providerCustomerId || undefined,
-    );
-
-    return new ApiResponse(HttpStatus.CREATED, "Payment intent created", {
-      paymentIntentId: paymentIntent.id,
-      clientSecret: paymentIntent.clientSecret,
+    return new ApiResponse(HttpStatus.CREATED, "Addon purchase started", {
+      paymentIntentId: result.paymentIntentId,
+      status: result.status,
+      clientSecret: result.clientSecret,
     });
   }
 
   @Post("billing-portal")
-  @ApiOperation({ summary: "Create a billing portal session" })
+  @ApiOperation({ summary: "Create a billing portal session (invoice history only – cards are managed in-app)" })
   async createBillingPortal(@GetUser("id") userId: number) {
     const user = await this.usersService.findById(userId);
 

@@ -23,9 +23,11 @@ export class TestContext {
   readonly prisma = new PrismaService();
 
   plan!: Plan;
+  freePlan!: Plan;
   billingCycle!: BillingCycle;
   basicOption!: PricingOption;
   proOption!: PricingOption;
+  freeOption!: PricingOption;
   addon!: AddonPackage;
 
   private readonly userIds: number[] = [];
@@ -64,6 +66,27 @@ export class TestContext {
         providerPriceId: `price_test_pro_${this.runId}`,
       },
     });
+    // Gói free dùng cho ca downgrade. Không cần code = "FREE" thật, vì
+    // StripeService.getFreePriceId() được mock trong test.
+    this.freePlan = await this.prisma.plan.create({
+      data: {
+        code: `TEST_FREE_${this.runId}`,
+        name: `Test Free Plan ${this.runId}`,
+        renewalCredits: 50,
+        resetIntervalDay: 30,
+      },
+    });
+    this.freeOption = await this.prisma.pricingOption.create({
+      data: {
+        planId: this.freePlan.id,
+        billingCycleId: this.billingCycle.id,
+        name: `Test Free ${this.runId}`,
+        price: 0,
+        currency: "usd",
+        provider: PaymentProvider.STRIPE,
+        providerPriceId: `price_test_free_${this.runId}`,
+      },
+    });
     this.addon = await this.prisma.addonPackage.create({
       data: {
         code: `TEST_ADDON_${this.runId}`,
@@ -88,6 +111,25 @@ export class TestContext {
     });
     this.userIds.push(user.id);
     return user;
+  }
+
+  async createPaymentMethod(
+    userId: number,
+    overrides: Partial<Prisma.PaymentMethodUncheckedCreateInput> = {},
+  ) {
+    return this.prisma.paymentMethod.create({
+      data: {
+        userId,
+        provider: PaymentProvider.STRIPE,
+        providerPaymentMethodId: `pm_test_${rand()}`,
+        brand: "visa",
+        last4: "4242",
+        expMonth: 12,
+        expYear: new Date().getFullYear() + 2,
+        fingerprint: `fp_test_${rand()}`,
+        ...overrides,
+      },
+    });
   }
 
   async createSubscription(
@@ -125,6 +167,7 @@ export class TestContext {
         await prisma.invoice.deleteMany({ where: { subscriptionId: { in: subIds } } });
         await prisma.subscription.deleteMany({ where: { id: { in: subIds } } });
         await prisma.creditWallet.deleteMany({ where: { userId: { in: userIds } } });
+        await prisma.paymentMethod.deleteMany({ where: { userId: { in: userIds } } });
         await prisma.user.deleteMany({ where: { id: { in: userIds } } });
       }
       await prisma.webhookEvent.deleteMany({ where: { id: { contains: this.runId } } });
@@ -179,9 +222,48 @@ export function invoicePayload(
           type: "subscription",
           subscription: stripeSubscriptionId,
           price: { id: priceId },
+          // mapInvoice đọc chu kỳ từ line, không phải top-level.
+          period: { start: now, end: now + 30 * 86_400 },
         },
       ],
     },
+    ...overrides,
+  };
+}
+
+/**
+ * Payload tối thiểu của Stripe.PaymentMethod.
+ * Lưu ý: `payment_method.detached` gửi về customer = null.
+ */
+export function paymentMethodPayload(
+  customerId: string | null,
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    id: `pm_test_${rand()}`,
+    object: "payment_method",
+    type: "card",
+    customer: customerId,
+    card: {
+      brand: "visa",
+      last4: "4242",
+      exp_month: 12,
+      exp_year: new Date().getFullYear() + 2,
+      fingerprint: `fp_test_${rand()}`,
+    },
+    ...overrides,
+  };
+}
+
+export function paymentIntentPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    id: `pi_test_${rand()}`,
+    object: "payment_intent",
+    amount: 1000,
+    amount_received: 1000,
+    currency: "usd",
+    metadata: {},
+    last_payment_error: { message: "Your card was declined." },
     ...overrides,
   };
 }

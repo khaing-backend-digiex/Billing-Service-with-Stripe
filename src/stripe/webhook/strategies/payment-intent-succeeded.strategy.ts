@@ -8,13 +8,16 @@ import {
 } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
-import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
+import { PaymentService } from "../../payment.service";
 
 @Injectable()
 export class PaymentIntentSucceededStrategy implements WebhookStrategy {
   private readonly logger = new Logger(PaymentIntentSucceededStrategy.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly paymentService: PaymentService,
+  ) {}
 
   private readonly paymentIntentSucceeded = "payment_intent.succeeded";
   canHandle(eventType: string): boolean {
@@ -43,10 +46,7 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
       return;
     }
 
-    const existing = await this.prisma.payment.findUnique({
-      where: { providerPaymentId: paymentIntent.id },
-    });
-    if (existing && existing.status === PaymentStatus.SUCCEEDED) {
+    if (await this.paymentService.isSucceeded(paymentIntent.id)) {
       this.logger.log(
         `Payment for intent ${paymentIntent.id} already SUCCEEDED – skipping`,
       );
@@ -64,23 +64,16 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      const payment = await tx.payment.upsert({
-        where: { providerPaymentId: paymentIntent.id },
-        create: {
+      const payment = await this.paymentService.recordSucceeded(
+        {
           userId,
-          addonPackageId,
-          provider: PaymentProvider.STRIPE,
           providerPaymentId: paymentIntent.id,
-          amount: formatStripeAmountToDatabase(
-            paymentIntent.amount_received,
-            paymentIntent.currency,
-          ),
+          providerAmount: paymentIntent.amount_received,
           currency: paymentIntent.currency,
-          status: PaymentStatus.SUCCEEDED,
-          paidAt: new Date(),
+          addonPackageId,
         },
-        update: { status: PaymentStatus.SUCCEEDED, paidAt: new Date() },
-      });
+        tx,
+      );
 
       await tx.creditWallet.upsert({
         where: { userId },

@@ -14,47 +14,6 @@ export class PaymentsService {
     return { customerId: customer.id };
   }
 
-  async createCheckoutSession(
-    userId: number,
-    priceId: string,
-    mode: "payment" | "subscription" = "payment",
-    customerId?: string,
-    provider?: PaymentProvider,
-    extraMetadata?: Record<string, string>,
-  ) {
-    if (provider && provider !== PaymentProvider.STRIPE) {
-      throw new BadRequestException(`Payment provider ${provider} is not supported.`);
-    }
-    const session = await this.stripeService.createCheckoutSession(
-      userId,
-      priceId,
-      mode,
-      customerId,
-      extraMetadata,
-    );
-    return { sessionId: session.id, url: session.url };
-  }
-
-  async createPaymentIntent(
-    userId: number,
-    amount: number,
-    currency: string = "usd",
-    description?: string,
-    customerId?: string,
-    provider?: PaymentProvider
-  ) {
-    if (provider && provider !== PaymentProvider.STRIPE) {
-      throw new BadRequestException(`Payment provider ${provider} is not supported.`);
-    }
-    const paymentIntent = await this.stripeService.createPaymentIntent(userId, amount, currency, description, customerId);
-    return {
-      paymentIntentId: paymentIntent.id,
-      clientSecret: paymentIntent.clientSecret,
-      amount: paymentIntent.amount,
-      currency: paymentIntent.currency,
-    };
-  }
-
   async createBillingPortalSession(customerId: string, returnUrl?: string, provider?: PaymentProvider) {
     if (provider && provider !== PaymentProvider.STRIPE) {
       throw new BadRequestException(`Payment provider ${provider} is not supported.`);

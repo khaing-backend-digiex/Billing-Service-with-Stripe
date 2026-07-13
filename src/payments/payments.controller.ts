@@ -15,8 +15,6 @@ import {
 } from "@nestjs/swagger";
 import { PaymentProvider } from "@prisma/client";
 import { PaymentsService } from "./payments.service";
-import { CreateCheckoutDto } from "../payments/dto/create-checkout.dto";
-import { CreatePaymentIntentDto } from "./dto/create-payment-intent.dto";
 import { CreateCustomerDto } from "./dto/create-customer.dto";
 import { CancelSubscriptionDto } from "./dto/cancel-subscription.dto";
 import { ApiResponse } from "../common/dto/api-response.dto";
@@ -56,63 +54,6 @@ export class PaymentsController {
     );
 
     return new ApiResponse(HttpStatus.CREATED, "Customer created successfully", customer);
-  }
-
-  @Post("checkout")
-  async createCheckout(
-    @GetUser("id") userId: number,
-    @Body() dto: CreateCheckoutDto & { provider?: PaymentProvider },
-  ) {
-    const user = await this.usersService.findById(userId);
-    const provider = dto.provider || PaymentProvider.STRIPE;
-    const mode = dto.mode || "payment";
-
-    // One-time payment (mode=payment) → có thể là mua Add-on. Nếu priceId khớp một
-    // AddonPackage thì gắn addonPackageId vào metadata để payment_intent.succeeded
-    // cấp credit. Metadata sẽ được đẩy xuống PaymentIntent trong StripeService.
-    let extraMetadata: Record<string, string> | undefined;
-    if (mode === "payment") {
-      const addon = await this.prisma.addonPackage.findFirst({
-        where: { providerPriceId: dto.priceId },
-      });
-      if (!addon) {
-        throw new BadRequestException("Addon package not found for the given priceId");
-      }
-      extraMetadata = { addonPackageId: addon.id };
-    }
-
-    const session = await this.paymentsService.createCheckoutSession(
-      userId,
-      dto.priceId,
-      mode,
-      provider === PaymentProvider.STRIPE ? user.providerCustomerId || undefined : undefined,
-      provider,
-      extraMetadata,
-    );
-
-    return new ApiResponse(HttpStatus.CREATED, "Checkout session created successfully", session);
-  }
-
-  @Post("payment-intent")
-  @ApiOperation({ summary: "Create a payment intent" })
-  @SwaggerResponse({ status: 201, description: "Payment intent created" })
-  async createPaymentIntent(
-    @GetUser("id") userId: number,
-    @Body() dto: CreatePaymentIntentDto & { provider?: PaymentProvider },
-  ) {
-    const user = await this.usersService.findById(userId);
-    const provider = dto.provider || PaymentProvider.STRIPE;
-
-    const paymentIntent = await this.paymentsService.createPaymentIntent(
-      userId,
-      dto.amount,
-      dto.currency,
-      dto.description,
-      provider === PaymentProvider.STRIPE ? user.providerCustomerId || undefined : undefined,
-      provider,
-    );
-
-    return new ApiResponse(HttpStatus.CREATED, "Payment intent created successfully", paymentIntent);
   }
 
   @Post("billing-portal")

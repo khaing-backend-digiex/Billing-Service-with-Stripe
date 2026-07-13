@@ -146,12 +146,20 @@ model Payment {
 model PaymentMethod {
   id                      String          @id @default(cuid())
   provider                PaymentProvider
-  providerPaymentMethodId String
-  isDefault               Boolean
+  providerPaymentMethodId String          @unique
+  isDefault               Boolean         @default(false)
+  brand                   String?
+  last4                   String?
+  expMonth                Int?
+  expYear                 Int?
+  fingerprint             String?
   metadata                Json?
   createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
   userId                  Int
   user                    User            @relation(fields: [userId], references: [id])
+
+  @@index([userId])
 }
 
 model CreditTransaction {
@@ -234,6 +242,7 @@ enum SubscriptionStatus {
   EXPIRED
   TRIALING
   PAUSED
+  INCOMPLETE
 }
 
 enum InvoiceStatus {
@@ -278,4 +287,5 @@ enum SubscriptionEventType {
   RESUMED
   PAYMENT_FAILED
   PAYMENT_RECOVERED
+  PAYMENT_ACTION_REQUIRED
 }

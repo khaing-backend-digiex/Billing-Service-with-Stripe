@@ -10,6 +10,8 @@ import {
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
 import { PricingService } from "../../pricing/pricing.service";
+import { InvoiceService } from "../invoice.service";
+import { PaymentService } from "../payment.service";
 import { PaymentInvoice } from "../../payments/types/payment.types";
 import { formatStripeAmountToDatabase } from "../utils/stripe-currency.util";
 import { addCalendarMonths } from "../../common/utils/date.util";
@@ -22,6 +24,8 @@ export class PaidInvoiceSyncService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly pricingService: PricingService,
+    private readonly invoiceService: InvoiceService,
+    private readonly paymentService: PaymentService,
   ) {}
 
   async applyPaidInvoice(
@@ -38,25 +42,10 @@ export class PaidInvoiceSyncService {
       );
     }
 
-    const invoice = await this.prisma.invoice.upsert({
-      where: { providerInvoiceId: paidInvoice.id },
-      update: {},
-      create: {
-        subscriptionId: subscription.id,
-        provider: PaymentProvider.STRIPE,
-        providerInvoiceId: paidInvoice.id,
-        amount: formatStripeAmountToDatabase(
-          paidInvoice.amountDue,
-          paidInvoice.currency,
-        ),
-        currency: paidInvoice.currency,
-        billingReason: paidInvoice.billingReason ?? null,
-        status: InvoiceStatus.OPEN,
-        dueAt: paidInvoice.dueDate
-          ? new Date(paidInvoice.dueDate * 1000)
-          : new Date(paidInvoice.periodEnd * 1000),
-      },
-    });
+    const invoice = await this.invoiceService.ensureLocal(
+      paidInvoice,
+      subscription.id,
+    );
 
     if (invoice.status === InvoiceStatus.PAID) {
       this.logger.log(`Invoice ${invoice.id} already PAID – skipping`);
@@ -96,27 +85,43 @@ export class PaidInvoiceSyncService {
     const resetMonths = Math.max(1, Math.round(plan.resetIntervalDay / 30));
     const nextCreditResetAt = addCalendarMonths(periodStart, resetMonths);
 
-    const isInitial = paidInvoice.billingReason === "subscription_create";
-    const eventType = isInitial
-      ? SubscriptionEventType.CREATED
-      : SubscriptionEventType.RENEWED;
-    const description = isInitial
-      ? `Credits granted – ${plan.name} (initial)`
-      : `Credits granted – ${plan.name} (renewal)`;
+    // Con trỏ tới subscription trên Stripe.
+    //
+    // Trước đây `invoice.paid` KHÔNG bao giờ đổi field này: nhánh update của upsert bên
+    // InvoicePaidStrategy để trống (đúng – nó nằm ngoài chốt claim), còn ở đây thì không
+    // ai set. Nên khi user nâng cấp từ Free, hàng local vẫn trỏ vào sub Free cũ cho tới khi
+    // `customer.subscription.updated` về. Bấm huỷ gói trong cửa sổ đó = huỷ nhầm sub Free,
+    // còn sub trả phí tiếp tục thu tiền.
+    //
+    // Đặt ở đây, TRONG transaction đã claim, nên replay không ghi lại lần hai.
+    const stripeSubscriptionId =
+      paidInvoice.subscriptionId ?? lineToUse?.subscriptionId ?? null;
 
+    // Chỉ trỏ tới nếu hoá đơn này không thuộc kỳ CŨ hơn kỳ đang chạy: một `invoice.paid`
+    // của kỳ trước về muộn không được kéo con trỏ ngược lại.
+    const isStale = periodStart < subscription.currentPeriodStart;
+    const shouldRepoint =
+      stripeSubscriptionId !== null &&
+      stripeSubscriptionId !== subscription.providerSubscriptionId &&
+      !isStale;
+
+    if (stripeSubscriptionId !== null && !shouldRepoint && isStale) {
+      this.logger.warn(
+        `Invoice ${paidInvoice.id} belongs to an older period – keeping providerSubscriptionId ${subscription.providerSubscriptionId}`,
+      );
+    }
+
+    const isInitial = paidInvoice.billingReason === "subscription_create";
     const paymentIntentId = paidInvoice.paymentIntentId ?? null;
 
     await this.prisma.$transaction(async (tx) => {
-      const claimed = await tx.invoice.updateMany({
-        where: { id: invoice.id, status: { not: InvoiceStatus.PAID } },
-        data: {
-          status: InvoiceStatus.PAID,
-          billingReason: paidInvoice.billingReason ?? null,
-          paidAt: new Date(),
-        },
-      });
+      const claimed = await this.invoiceService.claimAsPaid(
+        tx,
+        invoice.id,
+        paidInvoice.billingReason ?? null,
+      );
 
-      if (claimed.count === 0) {
+      if (!claimed) {
         this.logger.log(
           `Invoice ${invoice.id} already PAID (concurrent delivery) – skipping`,
         );
@@ -124,23 +129,16 @@ export class PaidInvoiceSyncService {
       }
 
       if (paymentIntentId) {
-        await tx.payment.upsert({
-          where: { providerPaymentId: paymentIntentId },
-          create: {
+        await this.paymentService.recordSucceeded(
+          {
             userId: subscription.userId,
-            invoiceId: invoice.id,
-            provider: PaymentProvider.STRIPE,
             providerPaymentId: paymentIntentId,
-            amount: formatStripeAmountToDatabase(
-              paidInvoice.amountPaid,
-              paidInvoice.currency,
-            ),
+            providerAmount: paidInvoice.amountPaid,
             currency: paidInvoice.currency,
-            status: PaymentStatus.SUCCEEDED,
-            paidAt: new Date(),
+            invoiceId: invoice.id,
           },
-          update: { status: PaymentStatus.SUCCEEDED, paidAt: new Date() },
-        });
+          tx,
+        );
       }
 
       await tx.subscription.update({
@@ -152,11 +150,41 @@ export class PaidInvoiceSyncService {
           currentPeriodEnd: periodEnd,
           subscriptionCreditsRemaining: plan.renewalCredits,
           nextCreditResetAt,
+          ...(shouldRepoint
+            ? { providerSubscriptionId: stripeSubscriptionId }
+            : {}),
         },
       });
+
+      if (shouldRepoint) {
+        this.logger.log(
+          `Subscription ${subscription.id} repointed: ${subscription.providerSubscriptionId} → ${stripeSubscriptionId}`,
+        );
+      }
       this.logger.log(
         `Subscription ${subscription.id} updated: status=ACTIVE, currentPeriodStart=${periodStart.toISOString()}, currentPeriodEnd=${periodEnd.toISOString()}, subscriptionCreditsRemaining=${plan.renewalCredits}, nextCreditResetAt=${nextCreditResetAt.toISOString()}`,
       );
+
+      // `billing_reason` một mình KHÔNG đủ để kết luận đây là subscription mới.
+      // Stripe gắn `subscription_create` cho hoá đơn đầu của MỌI sub mới trên Stripe – kể cả
+      // sub free sinh ra lúc downgrade. Trước đây một lần downgrade ghi ra cả DOWNGRADED lẫn
+      // CREATED cho cùng một subscription local.
+      //
+      // Mốc đúng là dữ liệu, không phải nhãn của Stripe: subscription LOCAL này đã từng có
+      // hoá đơn nào được trả chưa? Chưa → đây thật sự là lần đầu.
+      const hasPriorPaid = await this.invoiceService.hasPriorPaidInvoice(
+        tx,
+        subscription.id,
+        invoice.id,
+      );
+      const isFirstSettlement = isInitial && !hasPriorPaid;
+
+      const eventType = isFirstSettlement
+        ? SubscriptionEventType.CREATED
+        : SubscriptionEventType.RENEWED;
+      const description = isFirstSettlement
+        ? `Credits granted – ${plan.name} (initial)`
+        : `Credits granted – ${plan.name} (renewal)`;
 
       await tx.creditTransaction.create({
         data: {

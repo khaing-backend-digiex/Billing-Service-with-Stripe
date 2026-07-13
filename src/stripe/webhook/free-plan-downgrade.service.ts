@@ -5,8 +5,6 @@ import {
   PricingOption,
   SubscriptionEventType,
   SubscriptionStatus,
-  CreditTransactionType,
-  ReferenceType,
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
 import { StripeService } from "../stripe.service";
@@ -29,16 +27,22 @@ export class FreePlanDowngradeService {
     reason: string,
   ): Promise<void> {
     const freePriceId = await this.stripeService.getFreePriceId();
-    if (!freePriceId) return; 
+    if (!freePriceId) return;
     if (subscription.pricingOption.providerPriceId === freePriceId) {
-      this.logger.log(`Subscription ${subscription.id} is already the free plan – no downgrade`);
+      this.logger.log(
+        `Subscription ${subscription.id} is already the free plan – no downgrade`,
+      );
       return;
     }
 
     const customerId =
-      typeof stripeSub.customer === "string" ? stripeSub.customer : stripeSub.customer?.id;
+      typeof stripeSub.customer === "string"
+        ? stripeSub.customer
+        : stripeSub.customer?.id;
     if (!customerId) {
-      this.logger.error(`No customer on Stripe subscription ${stripeSub.id} – cannot downgrade`);
+      this.logger.error(
+        `No customer on Stripe subscription ${stripeSub.id} – cannot downgrade`,
+      );
       return;
     }
 
@@ -52,7 +56,6 @@ export class FreePlanDowngradeService {
       );
       return;
     }
-
 
     const freeSub = await this.stripeService.ensureFreeSubscription(customerId);
     if (!freeSub) return;
@@ -70,31 +73,13 @@ export class FreePlanDowngradeService {
       ? new Date(freeItem.currentPeriodEnd * 1000)
       : addCalendarMonths(periodStart, 1);
 
-   
     await this.prisma.$transaction(async (tx) => {
-   
-      const current = await tx.subscription.findUnique({
-        where: { id: subscription.id },
-        select: { subscriptionCreditsRemaining: true },
-      });
-      const remaining = current?.subscriptionCreditsRemaining ?? 0;
-
-      if (remaining > 0) {
-        await tx.creditTransaction.create({
-          data: {
-            userId: subscription.userId,
-            type: CreditTransactionType.EXPIRATION,
-            amount: -remaining,
-            description: `Credits forfeited – downgraded to free (${reason})`,
-            referenceType: ReferenceType.SUBSCRIPTION,
-            referenceId: subscription.id,
-          },
-        });
-      }
-
       if (freePricingOption) {
         const freePlan = freePricingOption.plan;
-        const resetMonths = Math.max(1, Math.round(freePlan.resetIntervalDay / 30));
+        const resetMonths = Math.max(
+          1,
+          Math.round(freePlan.resetIntervalDay / 30),
+        );
 
         await tx.subscription.update({
           where: { id: subscription.id },
@@ -104,20 +89,8 @@ export class FreePlanDowngradeService {
             providerSubscriptionId: freeSub.id,
             currentPeriodStart: periodStart,
             currentPeriodEnd: periodEnd,
-            subscriptionCreditsRemaining: freePlan.renewalCredits,
             nextCreditResetAt: addCalendarMonths(periodStart, resetMonths),
             cancelledAt: null,
-          },
-        });
-
-        await tx.creditTransaction.create({
-          data: {
-            userId: subscription.userId,
-            type: CreditTransactionType.RENEWAL,
-            amount: freePlan.renewalCredits,
-            description: `Credits granted – ${freePlan.name} (downgrade)`,
-            referenceType: ReferenceType.SUBSCRIPTION,
-            referenceId: subscription.id,
           },
         });
       }
@@ -132,14 +105,13 @@ export class FreePlanDowngradeService {
             stripeSubscriptionId: stripeSub.id,
             newStripeSubscriptionId: freeSub.id,
             reason,
-            creditsGranted: freePricingOption?.plan.renewalCredits ?? 0,
           },
         },
       });
     });
 
     this.logger.log(
-      `User ${subscription.userId} downgraded to free plan (new stripe sub: ${freeSub.id}, reason: ${reason}, credits: ${freePricingOption?.plan.renewalCredits ?? 0})`,
+      `User ${subscription.userId} downgraded to free plan (new stripe sub: ${freeSub.id}, reason: ${reason}) – credits will be granted by invoice.paid`,
     );
   }
 }

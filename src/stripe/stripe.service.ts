@@ -4,14 +4,18 @@ import {
   PaymentCustomer,
   PaymentSubscription,
   PaymentInvoice,
-  CheckoutSession,
-  PaymentIntentResult,
+  PaymentMethodDetails,
+  SetupIntentResult,
+  OffSessionPaymentResult,
+  OffSessionSubscriptionResult,
   BillingPortalSession,
   WebhookEvent,
 } from "../payments/types/payment.types";
 import { PrismaService } from "../database/prisma.service";
-import { PaymentStatus, PaymentProvider, SubscriptionStatus } from "@prisma/client";
+import { AddonPackage, SubscriptionStatus } from "@prisma/client";
 import { PLAN_CODES } from "../common/constants/plan.constants";
+import { STRIPE_METADATA_KEY } from "../common/constants/stripe.constants";
+import { formatDatabaseAmountToStripe } from "./utils/stripe-currency.util";
 
 type StripeCustomerOwner = {
   id: number;
@@ -172,56 +176,65 @@ export class StripeService {
     return this.paymentAdapter.createSubscription(customerId, freePriceId);
   }
 
-  async hasDefaultPaymentMethod(customerId: string): Promise<boolean> {
-    return this.paymentAdapter.hasDefaultPaymentMethod(customerId);
-  }
-
-  async createCheckoutSession(
+  async createOffSessionSubscription(
     userId: number,
     priceId: string,
-    mode: "payment" | "subscription" = "payment",
-    customerId?: string,
-    extraMetadata?: Record<string, string>,
-    successUrl?: string,
-    cancelUrl?: string,
-  ): Promise<CheckoutSession> {
-    return this.paymentAdapter.createCheckoutSession({
+    customerId: string,
+    paymentMethodId: string,
+  ): Promise<OffSessionSubscriptionResult> {
+    return this.paymentAdapter.createOffSessionSubscription({
       customerId,
       priceId,
-      mode,
-      metadata: { userId: String(userId), ...extraMetadata },
-      successUrl,
-      cancelUrl,
+      paymentMethodId,
+      metadata: { [STRIPE_METADATA_KEY.USER_ID]: String(userId) },
     });
   }
 
-  async createPaymentIntent(
+  async createAddonPayment(
     userId: number,
-    amount: number,
-    currency: string = "usd",
-    description?: string,
-    customerId?: string,
-  ): Promise<PaymentIntentResult> {
-    const intent = await this.paymentAdapter.createPaymentIntent({
-      amount,
-      currency,
-      description,
+    addon: AddonPackage,
+    customerId: string,
+    paymentMethodId: string,
+  ): Promise<OffSessionPaymentResult> {
+    return this.paymentAdapter.createOffSessionPayment({
       customerId,
-      metadata: { userId: String(userId) },
-    });
-
-    await this.prisma.payment.create({
-      data: {
-        providerPaymentId: intent.id,
-        amount,
-        currency,
-        status: PaymentStatus.PENDING,
-        userId,
-        provider: PaymentProvider.STRIPE,
+      paymentMethodId,
+      amount: formatDatabaseAmountToStripe(Number(addon.price), addon.currency),
+      currency: addon.currency,
+      description: `Addon: ${addon.name}`,
+      metadata: {
+        [STRIPE_METADATA_KEY.USER_ID]: String(userId),
+        [STRIPE_METADATA_KEY.ADDON_PACKAGE_ID]: addon.id,
       },
     });
+  }
 
-    return intent;
+  async createSetupIntent(customerId: string): Promise<SetupIntentResult> {
+    return this.paymentAdapter.createSetupIntent(customerId);
+  }
+
+  async getPaymentMethod(paymentMethodId: string): Promise<PaymentMethodDetails | null> {
+    return this.paymentAdapter.getPaymentMethod(paymentMethodId);
+  }
+
+  async listPaymentMethods(customerId: string): Promise<PaymentMethodDetails[]> {
+    return this.paymentAdapter.listPaymentMethods(customerId);
+  }
+
+  async detachPaymentMethod(paymentMethodId: string): Promise<void> {
+    return this.paymentAdapter.detachPaymentMethod(paymentMethodId);
+  }
+
+  async setDefaultPaymentMethod(customerId: string, paymentMethodId: string): Promise<void> {
+    return this.paymentAdapter.setDefaultPaymentMethod(customerId, paymentMethodId);
+  }
+
+  async getDefaultPaymentMethodId(customerId: string): Promise<string | null> {
+    return this.paymentAdapter.getDefaultPaymentMethodId(customerId);
+  }
+
+  mapRawPaymentMethod(rawPaymentMethod: unknown): PaymentMethodDetails {
+    return this.paymentAdapter.mapRawPaymentMethod(rawPaymentMethod);
   }
 
   async createBillingPortalSession(
