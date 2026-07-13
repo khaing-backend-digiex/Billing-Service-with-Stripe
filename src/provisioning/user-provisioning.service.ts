@@ -107,7 +107,7 @@ export class UserProvisioningService implements OnApplicationBootstrap {
     }
   }
 
-  private async rollbackProvisionedUser(userId: number): Promise<void> {
+  private async rollbackProvisionedUser(userId: string): Promise<void> {
     try {
       const user = await this.prisma.user.findUnique({
         where: { id: userId },

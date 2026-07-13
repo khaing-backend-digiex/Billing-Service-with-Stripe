@@ -189,7 +189,7 @@ export class CreditService {
 
   // ──────────────── QUERY ────────────────
 
-  async getBalance(userId: number): Promise<CreditBalance> {
+  async getBalance(userId: string): Promise<CreditBalance> {
     const balances = await this.repo.getBalances(userId);
 
     return {
@@ -202,7 +202,7 @@ export class CreditService {
     };
   }
 
-  async getUserPackageStatus(userId: number): Promise<UserPackageStatus> {
+  async getUserPackageStatus(userId: string): Promise<UserPackageStatus> {
     const subscription = await this.prisma.subscription.findUnique({
       where: { userId },
       include: {

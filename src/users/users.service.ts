@@ -51,7 +51,7 @@ export class UsersService {
     });
   }
 
-  async findById(id: number): Promise<User> {
+  async findById(id: string): Promise<User> {
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) {
       throw new NotFoundException("User not found");
@@ -70,7 +70,7 @@ export class UsersService {
   }
 
   async updateStripeCustomerId(
-    userId: number,
+    userId: string,
     stripeCustomerId: string,
   ): Promise<User> {
     return this.prisma.user.update({
@@ -79,7 +79,7 @@ export class UsersService {
     });
   }
 
-  async deleteUser(id: number): Promise<void> {
+  async deleteUser(id: string): Promise<void> {
     await this.prisma.user.delete({ where: { id } });
   }
 }

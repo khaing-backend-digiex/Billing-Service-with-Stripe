@@ -38,14 +38,7 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
       );
       return;
     }
-
-    const userId = parseInt(userIdStr, 10);
-    if (Number.isNaN(userId)) {
-      this.logger.error(
-        `Invalid userId "${userIdStr}" in intent ${paymentIntent.id} metadata`,
-      );
-      return;
-    }
+    const userId = userIdStr;
 
     const existing = await this.prisma.payment.findUnique({
       where: { providerPaymentId: paymentIntent.id },
@@ -99,7 +92,7 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
     });
 
     this.logger.log(
-      `✅ Addon credited: +${addon.credits} to user ${userId} (addon ${addon.code}, intent ${paymentIntent.id})`,
+      `Addon credited: +${addon.credits} to user ${userId} (addon ${addon.code}, intent ${paymentIntent.id})`,
     );
   }
 }

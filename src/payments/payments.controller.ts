@@ -38,7 +38,7 @@ export class PaymentsController {
 
   @Post("customers")
   async createCustomer(
-    @GetUser("id") userId: number,
+    @GetUser("id") userId: string,
     @Body() dto: CreateCustomerDto & { provider?: PaymentProvider },
   ) {
     const user = await this.usersService.findById(userId);
@@ -60,16 +60,13 @@ export class PaymentsController {
 
   @Post("checkout")
   async createCheckout(
-    @GetUser("id") userId: number,
+    @GetUser("id") userId: string,
     @Body() dto: CreateCheckoutDto & { provider?: PaymentProvider },
   ) {
     const user = await this.usersService.findById(userId);
     const provider = dto.provider || PaymentProvider.STRIPE;
     const mode = dto.mode || "payment";
 
-    // One-time payment (mode=payment) → có thể là mua Add-on. Nếu priceId khớp một
-    // AddonPackage thì gắn addonPackageId vào metadata để payment_intent.succeeded
-    // cấp credit. Metadata sẽ được đẩy xuống PaymentIntent trong StripeService.
     let extraMetadata: Record<string, string> | undefined;
     if (mode === "payment") {
       const addon = await this.prisma.addonPackage.findFirst({
@@ -97,7 +94,7 @@ export class PaymentsController {
   @ApiOperation({ summary: "Create a payment intent" })
   @SwaggerResponse({ status: 201, description: "Payment intent created" })
   async createPaymentIntent(
-    @GetUser("id") userId: number,
+    @GetUser("id") userId: string,
     @Body() dto: CreatePaymentIntentDto & { provider?: PaymentProvider },
   ) {
     const user = await this.usersService.findById(userId);
@@ -122,7 +119,7 @@ export class PaymentsController {
     description: "Billing portal session created",
   })
   async createBillingPortal(
-    @GetUser("id") userId: number,
+    @GetUser("id") userId: string,
     @Body() dto: { provider?: PaymentProvider },
   ) {
     const user = await this.usersService.findById(userId);
@@ -149,7 +146,7 @@ export class PaymentsController {
     description: "Subscription will cancel at period end",
   })
   async cancelSubscription(
-    @GetUser("id") userId: number,
+    @GetUser("id") userId: string,
     @Body() dto: CancelSubscriptionDto & { provider?: PaymentProvider },
   ) {
     const user = await this.usersService.findById(userId);

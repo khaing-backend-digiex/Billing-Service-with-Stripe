@@ -43,7 +43,7 @@ export class UsersController {
   @ApiOperation({ summary: "Get user by ID" })
   @SwaggerResponse({ status: 200, description: "Return user data" })
   async findOne(@Param("id") id: string) {
-    const user = await this.usersService.findById(+id);
+    const user = await this.usersService.findById(id);
     return new ApiResponse(HttpStatus.OK, "User fetched successfully", user);
   }
 
@@ -52,7 +52,7 @@ export class UsersController {
   @ApiOperation({ summary: "Delete user (Admin only)" })
   @SwaggerResponse({ status: 200, description: "User deleted" })
   async remove(@Param("id") id: string) {
-    await this.usersService.deleteUser(+id);
+    await this.usersService.deleteUser(id);
     return new ApiResponse(HttpStatus.OK, "User deleted successfully", null);
   }
 }
