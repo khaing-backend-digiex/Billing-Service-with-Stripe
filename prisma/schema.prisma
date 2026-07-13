@@ -15,9 +15,9 @@ model User {
   updatedAt          DateTime            @updatedAt
   dateOfBirth        DateTime?
   name               String?
-  password           String              @default("$2a$10$jeaeQtlxxRmjRqVD/h9HnOC2GANB1oKKPAraPazA81nbgJcpOsIyG")
   roles              String[]            @default(["user"])
-  id                 Int                 @id @default(autoincrement())
+  id                 String              @id @default(uuid())
+  password           String              @default("$2a$10$jeaeQtlxxRmjRqVD/h9HnOC2GANB1oKKPAraPazA81nbgJcpOsIyG")
   creditTransactions CreditTransaction[]
   creditWallet       CreditWallet?
   payments           Payment[]
@@ -76,7 +76,7 @@ model Subscription {
   cancelledAt                  DateTime?
   createdAt                    DateTime            @default(now())
   updatedAt                    DateTime            @updatedAt
-  userId                       Int                 @unique
+  userId                       String              @unique
   trialEnd                     DateTime?
   trialStart                   DateTime?
   invoices                     Invoice[]
@@ -88,7 +88,7 @@ model Subscription {
 model CreditWallet {
   addonCredits Int      @default(0)
   updatedAt    DateTime @updatedAt
-  userId       Int      @id
+  userId       String   @id
   is_active    Boolean  @default(false)
   user         User     @relation(fields: [userId], references: [id])
 }
@@ -137,7 +137,7 @@ model Payment {
   status            PaymentStatus
   paidAt            DateTime?
   createdAt         DateTime        @default(now())
-  userId            Int
+  userId            String
   addonPackage      AddonPackage?   @relation(fields: [addonPackageId], references: [id])
   invoice           Invoice?        @relation(fields: [invoiceId], references: [id])
   user              User            @relation(fields: [userId], references: [id])
@@ -146,25 +146,33 @@ model Payment {
 model PaymentMethod {
   id                      String          @id @default(cuid())
   provider                PaymentProvider
-  providerPaymentMethodId String
-  isDefault               Boolean
+  providerPaymentMethodId String          @unique
+  isDefault               Boolean         @default(false)
   metadata                Json?
   createdAt               DateTime        @default(now())
-  userId                  Int
+  userId                  String
+  brand                   String?
+  expMonth                Int?
+  expYear                 Int?
+  fingerprint             String?
+  last4                   String?
+  updatedAt               DateTime        @default(now())
   user                    User            @relation(fields: [userId], references: [id])
+
+  @@index([userId])
 }
 
 model CreditTransaction {
-  id            String                @id @default(cuid())
-  type          CreditTransactionType
-  amount        Int
-  description   String?
-  referenceType ReferenceType?
-  referenceId   String?
+  id             String                @id @default(cuid())
+  type           CreditTransactionType
+  amount         Int
+  description    String?
+  referenceType  ReferenceType?
+  referenceId    String?
+  createdAt      DateTime              @default(now())
+  userId         String
   idempotencyKey String?               @unique
-  createdAt     DateTime              @default(now())
-  userId        Int
-  user          User                  @relation(fields: [userId], references: [id])
+  user           User                  @relation(fields: [userId], references: [id])
 }
 
 model SubscriptionEvent {
@@ -184,21 +192,14 @@ model WebhookEvent {
   id           String             @id
   provider     PaymentProvider
   eventType    String
-  objectId     String?
-  objectType   String?
-  status       WebhookEventStatus @default(RECEIVED)
-  attempts     Int                @default(1)
-  errorMessage String?
   payload      Json
   processedAt  DateTime?
   createdAt    DateTime           @default(now())
-}
-
-enum WebhookEventStatus {
-  RECEIVED
-  SUCCESS
-  FAILED
-  UNHANDLED
+  attempts     Int                @default(1)
+  errorMessage String?
+  objectId     String?
+  objectType   String?
+  status       WebhookEventStatus @default(RECEIVED)
 }
 
 model CleanupTask {
@@ -212,6 +213,13 @@ model CleanupTask {
   updatedAt DateTime          @updatedAt
 
   @@unique([type, target])
+}
+
+enum WebhookEventStatus {
+  RECEIVED
+  SUCCESS
+  FAILED
+  UNHANDLED
 }
 
 enum PaymentProvider {
@@ -235,6 +243,7 @@ enum SubscriptionStatus {
   EXPIRED
   TRIALING
   PAUSED
+  INCOMPLETE
 }
 
 enum InvoiceStatus {
@@ -279,4 +288,5 @@ enum SubscriptionEventType {
   RESUMED
   PAYMENT_FAILED
   PAYMENT_RECOVERED
+  PAYMENT_ACTION_REQUIRED
 }
