@@ -1,14 +1,11 @@
 import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
-import {
-  PaymentProvider,
-  PaymentStatus,
-  CreditTransactionType,
-  ReferenceType,
-} from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { PaymentService } from "../../payment.service";
+import { CreditService } from "../../../credits/credit.service";
+import { creditKey } from "../../../credits/credit.types";
+import { STRIPE_METADATA_KEY } from "../../../common/constants/stripe.constants";
 
 @Injectable()
 export class PaymentIntentSucceededStrategy implements WebhookStrategy {
@@ -17,6 +14,7 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly paymentService: PaymentService,
+    private readonly creditService: CreditService,
   ) {}
 
   private readonly paymentIntentSucceeded = "payment_intent.succeeded";
@@ -28,8 +26,8 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
     const paymentIntent = event.data.object as Stripe.PaymentIntent;
     this.logger.log(`payment_intent.succeeded: ${paymentIntent.id}`);
 
-    const addonPackageId = paymentIntent.metadata?.addonPackageId;
-    const userIdStr = paymentIntent.metadata?.userId;
+    const addonPackageId = paymentIntent.metadata?.[STRIPE_METADATA_KEY.ADDON_PACKAGE_ID];
+    const userIdStr = paymentIntent.metadata?.[STRIPE_METADATA_KEY.USER_ID];
 
     if (!addonPackageId || !userIdStr) {
       this.logger.log(
@@ -75,22 +73,16 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
         tx,
       );
 
-      await tx.creditWallet.upsert({
-        where: { userId },
-        update: { addonCredits: { increment: addon.credits } },
-        create: { userId, addonCredits: addon.credits, is_active: true },
-      });
-
-      await tx.creditTransaction.create({
-        data: {
+      await this.creditService.grantAddonCredits(
+        {
           userId,
-          type: CreditTransactionType.ADDON_PURCHASE,
           amount: addon.credits,
           description: `Purchased Addon: ${addon.name}`,
-          referenceType: ReferenceType.ADDON_PURCHASE,
           referenceId: payment.id,
+          idempotencyKey: creditKey.addonPurchase(paymentIntent.id),
         },
-      });
+        tx,
+      );
     });
 
     this.logger.log(

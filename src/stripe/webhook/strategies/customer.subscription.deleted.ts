@@ -9,6 +9,8 @@ import {
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { FreePlanDowngradeService } from "../free-plan-downgrade.service";
+import { CreditService } from "../../../credits/credit.service";
+import { creditKey } from "../../../credits/credit.types";
 
 @Injectable()
 export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
@@ -17,6 +19,7 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly freePlanDowngrade: FreePlanDowngradeService,
+    private readonly creditService: CreditService,
   ) {}
 
   private readonly customerSubcriptionDeleted = "customer.subscription.deleted"
@@ -40,38 +43,38 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
 
     
     if (subscription.status !== SubscriptionStatus.CANCELLED) {
-      await this.prisma.$transaction([
-        this.prisma.subscription.update({
+      await this.prisma.$transaction(async (tx) => {
+        await tx.subscription.update({
           where: { id: subscription.id },
           data: {
             status: SubscriptionStatus.CANCELLED,
             cancelledAt: new Date(),
-            subscriptionCreditsRemaining: 0,
           },
-        }),
-        this.prisma.subscriptionEvent.create({
+        });
+
+        await tx.subscriptionEvent.create({
           data: {
             subscriptionId: subscription.id,
             type: SubscriptionEventType.CANCELLED,
             metadata: { stripeSubscriptionId: sub.id },
           },
-        }),
-     
-        ...(subscription.subscriptionCreditsRemaining > 0
-          ? [
-              this.prisma.creditTransaction.create({
-                data: {
-                  userId: subscription.userId,
-                  type: CreditTransactionType.EXPIRATION,
-                  amount: -subscription.subscriptionCreditsRemaining,
-                  description: "Credits forfeited – subscription cancelled",
-                  referenceType: ReferenceType.SUBSCRIPTION,
-                  referenceId: subscription.id,
-                },
-              }),
-            ]
-          : []),
-      ]);
+        });
+
+        await this.creditService.revokeSubscriptionCredits(
+          {
+            userId: subscription.userId,
+            description: "Credits forfeited – subscription cancelled",
+            referenceId: subscription.id,
+            idempotencyKey: creditKey.subscriptionRevoke(subscription.id, sub.id),
+          },
+          tx,
+        );
+
+        await tx.creditWallet.updateMany({
+          where: { userId: subscription.userId },
+          data: { is_active: false },
+        });
+      });
 
       this.logger.log(`Subscription ${subscription.id} cancelled`);
     } else {

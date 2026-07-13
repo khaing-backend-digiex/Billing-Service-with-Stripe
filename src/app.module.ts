@@ -15,6 +15,7 @@ import { PricingModule } from "./pricing/pricing.module";
 import { CronModule } from "./cron/cron.module";
 import { ProvisioningModule } from "./provisioning/provisioning.module";
 import { PaymentAdapterModule } from "./stripe/adapter/adapter.module";
+import { CreditsModule } from "./credits/credits.module";
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { PaymentAdapterModule } from "./stripe/adapter/adapter.module";
     PricingModule,
     CronModule,
     ProvisioningModule,
+    CreditsModule,
   ],
   controllers: [HealthController],
   providers: [

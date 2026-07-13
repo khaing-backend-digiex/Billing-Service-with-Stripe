@@ -1,21 +1,19 @@
+
 import { Injectable, Logger } from "@nestjs/common";
 import {
-  CreditTransactionType,
-  ReferenceType,
-  SubscriptionEventType,
-  PaymentProvider,
-  SubscriptionStatus,
   InvoiceStatus,
-  PaymentStatus,
+  SubscriptionEventType,
+  SubscriptionStatus,
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
 import { PricingService } from "../../pricing/pricing.service";
 import { InvoiceService } from "../invoice.service";
 import { PaymentService } from "../payment.service";
 import { PaymentInvoice } from "../../payments/types/payment.types";
-import { formatStripeAmountToDatabase } from "../utils/stripe-currency.util";
 import { addCalendarMonths } from "../../common/utils/date.util";
 import { PLAN_CODES } from "../../common/constants/plan.constants";
+import { CreditService } from "../../credits/credit.service";
+import { creditKey } from "../../credits/credit.types";
 
 @Injectable()
 export class PaidInvoiceSyncService {
@@ -26,6 +24,7 @@ export class PaidInvoiceSyncService {
     private readonly pricingService: PricingService,
     private readonly invoiceService: InvoiceService,
     private readonly paymentService: PaymentService,
+    private readonly creditService: CreditService,
   ) {}
 
   async applyPaidInvoice(
@@ -148,7 +147,6 @@ export class PaidInvoiceSyncService {
           pricingOptionId: pricingOption.id,
           currentPeriodStart: periodStart,
           currentPeriodEnd: periodEnd,
-          subscriptionCreditsRemaining: plan.renewalCredits,
           nextCreditResetAt,
           ...(shouldRepoint
             ? { providerSubscriptionId: stripeSubscriptionId }
@@ -162,7 +160,7 @@ export class PaidInvoiceSyncService {
         );
       }
       this.logger.log(
-        `Subscription ${subscription.id} updated: status=ACTIVE, currentPeriodStart=${periodStart.toISOString()}, currentPeriodEnd=${periodEnd.toISOString()}, subscriptionCreditsRemaining=${plan.renewalCredits}, nextCreditResetAt=${nextCreditResetAt.toISOString()}`,
+        `Subscription ${subscription.id} updated: status=ACTIVE, currentPeriodStart=${periodStart.toISOString()}, currentPeriodEnd=${periodEnd.toISOString()}, nextCreditResetAt=${nextCreditResetAt.toISOString()}`,
       );
 
       // `billing_reason` một mình KHÔNG đủ để kết luận đây là subscription mới.
@@ -182,20 +180,23 @@ export class PaidInvoiceSyncService {
       const eventType = isFirstSettlement
         ? SubscriptionEventType.CREATED
         : SubscriptionEventType.RENEWED;
-      const description = isFirstSettlement
-        ? `Credits granted – ${plan.name} (initial)`
-        : `Credits granted – ${plan.name} (renewal)`;
 
-      await tx.creditTransaction.create({
-        data: {
+      // Sang kỳ = đốt phần dư rồi cấp mới. Khoá theo KỲ BILLING, nên `invoice.paid` gửi lại
+      // hay cron chạm cùng kỳ đều no-op. `referenceId` luôn là subscription.id với bucket
+      // SUBSCRIPTION, để đọc ngược sổ được mà không cần biết ai đã ghi.
+      await this.creditService.resetSubscriptionAllowance(
+        {
           userId: subscription.userId,
-          type: CreditTransactionType.RENEWAL,
           amount: plan.renewalCredits,
-          description,
-          referenceType: ReferenceType.SUBSCRIPTION,
+          grantDescription: isFirstSettlement
+            ? `Credits granted – ${plan.name} (initial)`
+            : `Credits granted – ${plan.name} (renewal)`,
+          revokeDescription: `Unused credits expired before renewal – ${plan.name}`,
           referenceId: subscription.id,
+          idempotencyKey: creditKey.subscriptionPeriod(subscription.id, periodStart),
         },
-      });
+        tx,
+      );
 
       const walletUpdate = await tx.creditWallet.updateMany({
         where: { userId: subscription.userId },

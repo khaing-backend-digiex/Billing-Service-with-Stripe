@@ -8,12 +8,17 @@ import {
 } from "@prisma/client";
 import { PrismaService } from "../database/prisma.service";
 import { addCalendarMonths } from "../common/utils/date.util";
+import { CreditService } from "../credits/credit.service";
+import { creditKey } from "../credits/credit.types";
 
 @Injectable()
 export class CreditResetCronService {
   private readonly logger = new Logger(CreditResetCronService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly creditService: CreditService,
+  ) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
   async handleCreditReset(): Promise<void> {
@@ -72,7 +77,6 @@ export class CreditResetCronService {
               nextCreditResetAt: subscription.nextCreditResetAt,
             },
             data: {
-              subscriptionCreditsRemaining: plan.renewalCredits,
               nextCreditResetAt: newNextReset,
             },
           });
@@ -84,16 +88,25 @@ export class CreditResetCronService {
             return false;
           }
 
-          await tx.creditTransaction.create({
-            data: {
+          // Cùng một thuật toán "sang kỳ" với invoice.paid, chỉ khác mốc chống trùng.
+          //
+          // Khoá phải neo vào `nextCreditResetAt` (mốc reset ĐANG xử lý), không phải thời
+          // điểm chạy: khoá theo `Date.now()` thì mỗi lần cron chạy sinh một khoá mới, tức
+          // là không chống trùng được gì cả.
+          await this.creditService.resetSubscriptionAllowance(
+            {
               userId: subscription.userId,
-              type: CreditTransactionType.RENEWAL,
               amount: plan.renewalCredits,
-              description: `Credits reset – ${plan.name} (monthly cycle)`,
-              referenceType: ReferenceType.SUBSCRIPTION,
+              grantDescription: `Credits reset – ${plan.name} (monthly cycle)`,
+              revokeDescription: `Unused credits expired before monthly reset – ${plan.name}`,
               referenceId: subscription.id,
+              idempotencyKey: creditKey.subscriptionReset(
+                subscription.id,
+                subscription.nextCreditResetAt,
+              ),
             },
-          });
+            tx,
+          );
 
           await tx.subscriptionEvent.create({
             data: {

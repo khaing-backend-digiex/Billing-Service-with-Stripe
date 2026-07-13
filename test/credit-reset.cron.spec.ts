@@ -1,5 +1,7 @@
 import { CreditTransactionType, SubscriptionEventType } from "@prisma/client";
 import { CreditResetCronService } from "../src/cron/credit-reset.cron";
+import { CreditService } from "../src/credits/credit.service";
+import { CreditRepository } from "../src/credits/credit.repository";
 import { TestContext } from "./helpers/context";
 
 describe("CreditResetCronService (real DB)", () => {
@@ -8,7 +10,9 @@ describe("CreditResetCronService (real DB)", () => {
 
   beforeAll(async () => {
     await ctx.seed();
-    cron = new CreditResetCronService(ctx.prisma);
+    const creditRepo = new CreditRepository(ctx.prisma);
+    const creditService = new CreditService(ctx.prisma, creditRepo);
+    cron = new CreditResetCronService(ctx.prisma, creditService);
   });
 
   afterAll(async () => {

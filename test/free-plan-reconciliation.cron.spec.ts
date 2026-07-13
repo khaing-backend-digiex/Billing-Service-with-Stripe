@@ -8,6 +8,8 @@ import { PaidInvoiceSyncService } from "../src/stripe/sync/paid-invoice-sync.ser
 import { InvoiceService } from "../src/stripe/invoice.service";
 import { PaymentService } from "../src/stripe/payment.service";
 import { StripeAdapter } from "../src/stripe/adapter/stripe.adapter";
+import { CreditService } from "../src/credits/credit.service";
+import { CreditRepository } from "../src/credits/credit.repository";
 import { TestContext, invoicePayload, rand } from "./helpers/context";
 
 describe("FreePlanReconciliationCron – missing settlement (real DB, Stripe mocked)", () => {
@@ -37,6 +39,9 @@ describe("FreePlanReconciliationCron – missing settlement (real DB, Stripe moc
   const usersMock = { findIncompleteOnboardingUsers: jest.fn(async () => []) };
   const subscriptionSyncMock = { syncFromStripe: jest.fn() };
 
+  // CreditService thật, chạy trên DB thật – đây chính là thứ test muốn kiểm.
+  const creditService = new CreditService(ctx.prisma, new CreditRepository(ctx.prisma));
+
   const cron = () =>
     new FreePlanReconciliationCron(
       stripeMock as any,
@@ -47,6 +52,7 @@ describe("FreePlanReconciliationCron – missing settlement (real DB, Stripe moc
         pricingServiceStub as any,
         new InvoiceService(ctx.prisma),
         new PaymentService(ctx.prisma),
+        creditService,
       ),
       ctx.prisma,
     );

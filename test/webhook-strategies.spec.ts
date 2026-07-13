@@ -7,6 +7,8 @@ import {
   SubscriptionStatus,
   User,
 } from "@prisma/client";
+import { CreditService } from "../src/credits/credit.service";
+import { CreditRepository } from "../src/credits/credit.repository";
 import { InvoicePaidStrategy } from "../src/stripe/webhook/strategies/invoice-paid.strategy";
 import { InvoicePaymentFailedStrategy } from "../src/stripe/webhook/strategies/invoice.payment_failed";
 import { CustomerSubscriptionUpdatedStrategy } from "../src/stripe/webhook/strategies/customer.subscription.updated";
@@ -56,6 +58,9 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
     jest.clearAllMocks();
   });
 
+  const creditRepo = new CreditRepository(ctx.prisma);
+  const creditService = new CreditService(ctx.prisma, creditRepo);
+
   // ───────────────────────── invoice.paid ─────────────────────────
   describe("invoice.paid", () => {
     const paidInvoiceSync = () =>
@@ -64,6 +69,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
         pricingServiceStub as any,
         new InvoiceService(ctx.prisma),
         new PaymentService(ctx.prisma),
+        creditService,
       );
     const strategy = () =>
       new InvoicePaidStrategy(
@@ -334,6 +340,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
           stripeServiceMock as any,
         ),
         stripeServiceMock as any,
+        creditService,
       );
 
     it("PAST_DUE → active syncs status and logs PAYMENT_RECOVERED", async () => {
@@ -382,7 +389,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
   // ───────────────────────── customer.subscription.deleted ─────────────────────────
   describe("customer.subscription.deleted", () => {
     const strategy = () =>
-      new CustomerSubscriptionDeletedStrategy(ctx.prisma, freePlanDowngradeMock as any);
+      new CustomerSubscriptionDeletedStrategy(ctx.prisma, freePlanDowngradeMock as any, creditService);
 
     it("cancels the local subscription, forfeits credits, triggers downgrade", async () => {
       const user = await ctx.createUser();
@@ -440,6 +447,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
           pricingServiceStub as any,
           new InvoiceService(ctx.prisma),
           new PaymentService(ctx.prisma),
+          creditService,
         ),
         stripeServiceMock as any,
       );
@@ -491,6 +499,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       const deleted = new CustomerSubscriptionDeletedStrategy(
         ctx.prisma,
         new FreePlanDowngradeService(ctx.prisma, stripeMock as any),
+        creditService,
       );
 
       await deleted.handle(
@@ -565,7 +574,11 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
   // ───────────────────────── payment_intent.succeeded ─────────────────────────
   describe("payment_intent.succeeded", () => {
     const strategy = () =>
-      new PaymentIntentSucceededStrategy(ctx.prisma, new PaymentService(ctx.prisma));
+      new PaymentIntentSucceededStrategy(
+        ctx.prisma,
+        new PaymentService(ctx.prisma),
+        creditService,
+      );
 
     it("credits the addon wallet exactly once, even on replay", async () => {
       const user = await ctx.createUser();

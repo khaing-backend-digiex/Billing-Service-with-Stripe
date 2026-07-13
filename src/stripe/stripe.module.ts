@@ -21,10 +21,11 @@ import { PaidInvoiceSyncService } from "./sync/paid-invoice-sync.service";
 import { InvoiceService } from "./invoice.service";
 import { PaymentService } from "./payment.service";
 import { PaymentMethodSyncService } from "./sync/payment-method-sync.service";
+import { CreditsModule } from "../credits/credits.module";
 
 
 @Module({
-  imports: [UsersModule, PricingModule],
+  imports: [UsersModule, PricingModule, CreditsModule],
   controllers: [StripeController, StripeWebhookController],
   providers: [
 
