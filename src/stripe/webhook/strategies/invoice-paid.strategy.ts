@@ -29,7 +29,10 @@ export class InvoicePaidStrategy implements WebhookStrategy {
     this.logger.log(`invoice.paid: ${paidInvoice.id}`);
     this.logger.debug(`invoice.paid: ${JSON.stringify(paidInvoice)}`);
     const lineToUse =
-      paidInvoice.lines.find(line => line.type === "subscription") ?? paidInvoice.lines[0];
+      paidInvoice.lines.find(line => line.type === "subscription" && !line.isProration) ??
+      paidInvoice.lines.find(line => !line.isProration && line.subscriptionId) ??
+      paidInvoice.lines.find(line => line.type === "subscription") ?? 
+      paidInvoice.lines[0];
     const stripeSubscriptionId = paidInvoice.subscriptionId ?? lineToUse?.subscriptionId ?? null;
 
     if (!stripeSubscriptionId) {
@@ -37,7 +40,6 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       return;
     }
 
-    // Prisma bỏ qua filter undefined → phải chặn sớm, nếu không sẽ khớp nhầm user bất kỳ.
     if (!paidInvoice.customerId) {
       this.logger.error(`Invoice ${paidInvoice.id} has no customer, skipping`);
       return;

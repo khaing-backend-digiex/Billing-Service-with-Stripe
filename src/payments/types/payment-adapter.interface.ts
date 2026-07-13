@@ -36,4 +36,9 @@ export interface IPaymentAdapter {
   createProduct(name: string): Promise<string>;  // returns productId
   createRecurringPrice(productId: string, amount: number, currency: string, recurring: RecurringInterval): Promise<string>;  // returns priceId
   createOneTimePrice(productId: string, amount: number, currency: string): Promise<string>;  // returns priceId
+  upgradeSubscriptionTier(subscriptionId: string, newPriceId: string): Promise<PaymentSubscription>;
+  upgradeSubscriptionCycle(subscriptionId: string, newPriceId: string): Promise<PaymentSubscription>;
+  previewUpgradeSubscriptionTier(customerId: string, subscriptionId: string, newPriceId: string): Promise<any>;
+  previewUpgradeSubscriptionCycle(customerId: string, subscriptionId: string, newPriceId: string): Promise<any>;
+
 }

@@ -101,7 +101,7 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
     });
 
     this.logger.log(
-      `✅ Addon credited: +${addon.credits} to user ${userId} (addon ${addon.code}, intent ${paymentIntent.id})`,
+      `Addon credited: +${addon.credits} to user ${userId} (addon ${addon.code}, intent ${paymentIntent.id})`,
     );
   }
 }
