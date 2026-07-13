@@ -9,12 +9,16 @@ import {
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
+import { CreditService } from "../../../credits/credit.service";
 
 @Injectable()
 export class PaymentIntentSucceededStrategy implements WebhookStrategy {
   private readonly logger = new Logger(PaymentIntentSucceededStrategy.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly creditService: CreditService
+  ) {}
 
   private readonly paymentIntentSucceeded = "payment_intent.succeeded";
   canHandle(eventType: string): boolean {
@@ -82,22 +86,16 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
         update: { status: PaymentStatus.SUCCEEDED, paidAt: new Date() },
       });
 
-      await tx.creditWallet.upsert({
-        where: { userId },
-        update: { addonCredits: { increment: addon.credits } },
-        create: { userId, addonCredits: addon.credits, is_active: true },
-      });
-
-      await tx.creditTransaction.create({
-        data: {
+      await this.creditService.grantAddonCredits(
+        {
           userId,
-          type: CreditTransactionType.ADDON_PURCHASE,
           amount: addon.credits,
           description: `Purchased Addon: ${addon.name}`,
-          referenceType: ReferenceType.ADDON_PURCHASE,
           referenceId: payment.id,
+          idempotencyKey: `payment_intent:${paymentIntent.id}`,
         },
-      });
+        tx,
+      );
     });
 
     this.logger.log(

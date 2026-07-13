@@ -14,10 +14,11 @@ import { WebhookStrategyFactory } from "./webhook/strategies/webhook-strategy.fa
 import { FreePlanDowngradeService } from "./webhook/free-plan-downgrade.service";
 import { SubscriptionSyncService } from "./sync/subscription-sync.service";
 import { PaidInvoiceSyncService } from "./sync/paid-invoice-sync.service";
+import { CreditsModule } from "../credits/credits.module";
 
 
 @Module({
-  imports: [UsersModule, PricingModule],
+  imports: [UsersModule, PricingModule, CreditsModule],
   controllers: [StripeController, StripeWebhookController],
   providers: [
 
