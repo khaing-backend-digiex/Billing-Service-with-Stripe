@@ -179,6 +179,10 @@ export function invoicePayload(
           type: "subscription",
           subscription: stripeSubscriptionId,
           price: { id: priceId },
+          period: {
+            start: now,
+            end: now + 30 * 86_400,
+          },
         },
       ],
     },

@@ -2,7 +2,7 @@
 module.exports = {
   preset: "ts-jest",
   testEnvironment: "node",
-  roots: ["<rootDir>/test"],
+  roots: ["<rootDir>/src", "<rootDir>/test"],
   testMatch: ["**/*.spec.ts"],
   setupFiles: ["<rootDir>/test/setup.ts"],
   // src dùng cả alias "@/..." (tsconfig paths) lẫn import tuyệt đối "src/..." (baseUrl)

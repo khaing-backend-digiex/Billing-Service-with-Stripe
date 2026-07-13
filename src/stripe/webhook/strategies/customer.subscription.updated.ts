@@ -25,6 +25,7 @@ const CANCELLATION_REASON = {
 } as const;
 
 import { StripeService } from "../../stripe.service";
+import { CreditService } from "../../../credits/credit.service";
 
 @Injectable()
 export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
@@ -35,6 +36,7 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
     private readonly freePlanDowngrade: FreePlanDowngradeService,
     private readonly subscriptionSyncService: SubscriptionSyncService,
     private readonly stripeService: StripeService,
+    private readonly creditService: CreditService,
   ) { }
 
   canHandle(eventType: string): boolean {
@@ -125,16 +127,15 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
     }
 
     if (subscription.status !== SubscriptionStatus.EXPIRED) {
-      await this.prisma.$transaction([
-        this.prisma.subscription.update({
+      await this.prisma.$transaction(async (tx) => {
+        await tx.subscription.update({
           where: { id: subscription.id },
           data: {
             status: SubscriptionStatus.EXPIRED,
-            subscriptionCreditsRemaining: 0,
           },
-        }),
+        });
 
-        this.prisma.subscriptionEvent.create({
+        await tx.subscriptionEvent.create({
           data: {
             subscriptionId: subscription.id,
             type: SubscriptionEventType.EXPIRED,
@@ -144,23 +145,23 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
               reason: CANCELLATION_REASON.PAYMENT_FAILED,
             },
           },
-        }),
+        });
 
-        ...(subscription.subscriptionCreditsRemaining > 0
-          ? [
-            this.prisma.creditTransaction.create({
-              data: {
-                userId: subscription.userId,
-                type: CreditTransactionType.EXPIRATION,
-                amount: -subscription.subscriptionCreditsRemaining,
-                description: "Credits forfeited – subscription expired (payment failed)",
-                referenceType: ReferenceType.SUBSCRIPTION,
-                referenceId: subscription.id,
-              },
-            }),
-          ]
-          : []),
-      ]);
+        await this.creditService.revokeSubscriptionCredits(
+          {
+            userId: subscription.userId,
+            description: "Credits forfeited – subscription expired (payment failed)",
+            referenceId: subscription.id,
+            idempotencyKey: `expire_sub_${stripeSubscription.id}`,
+          },
+          tx,
+        );
+
+        await tx.creditWallet.updateMany({
+          where: { userId: subscription.userId },
+          data: { is_active: false },
+        });
+      });
 
       this.logger.log(
         `Subscription ${subscription.id} EXPIRED after exhausted payment retries (stripe status: ${stripeSubscription.status})`,

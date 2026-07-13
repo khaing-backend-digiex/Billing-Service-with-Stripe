@@ -161,6 +161,7 @@ model CreditTransaction {
   description   String?
   referenceType ReferenceType?
   referenceId   String?
+  idempotencyKey String?               @unique
   createdAt     DateTime              @default(now())
   userId        Int
   user          User                  @relation(fields: [userId], references: [id])
