@@ -31,7 +31,7 @@ export class CreditReconciliationCron {
     this.logger.log('Finished daily credit reconciliation check.');
   }
 
-  private async reconcileUser(userId: number) {
+  private async reconcileUser(userId: string) {
     // 1. Get current balances
     const sub = await this.prisma.subscription.findUnique({
       where: { userId },

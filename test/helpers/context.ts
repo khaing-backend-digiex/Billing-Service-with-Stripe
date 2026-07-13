@@ -13,11 +13,7 @@ import { PrismaService } from "../../src/database/prisma.service";
 
 export const rand = () => Math.random().toString(36).slice(2, 10);
 
-/**
- * Bộ đồ nghề cho integration test chạy trên DB thật:
- * - seed Plan/BillingCycle/PricingOption/AddonPackage với id chứa runId duy nhất
- * - track mọi user tạo ra để cleanup() xoá sạch theo đúng thứ tự FK
- */
+
 export class TestContext {
   readonly runId = `${Date.now().toString(36)}${rand()}`;
   readonly prisma = new PrismaService();
@@ -28,7 +24,7 @@ export class TestContext {
   proOption!: PricingOption;
   addon!: AddonPackage;
 
-  private readonly userIds: number[] = [];
+  private readonly userIds: string[] = [];
 
   async seed(): Promise<void> {
     this.plan = await this.prisma.plan.create({
@@ -91,7 +87,7 @@ export class TestContext {
   }
 
   async createSubscription(
-    userId: number,
+    userId: string,
     overrides: Partial<Prisma.SubscriptionUncheckedCreateInput> = {},
   ) {
     return this.prisma.subscription.create({
@@ -148,10 +144,6 @@ export function stripeEvent(type: string, object: unknown): Stripe.Event {
   } as unknown as Stripe.Event;
 }
 
-/**
- * Payload tối thiểu của Stripe.Invoice mà các strategy đọc tới.
- * Lưu ý: strategy lấy subscription id từ *line*, không phải field top-level.
- */
 export function invoicePayload(
   stripeSubscriptionId: string | null,
   priceId: string,

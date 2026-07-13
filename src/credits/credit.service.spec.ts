@@ -9,7 +9,7 @@ import { randomUUID } from 'crypto';
 describe('CreditService', () => {
   let service: CreditService;
   let prisma: PrismaService;
-  let testUserId: number;
+  let testUserId: string;
 
   beforeAll(async () => {
     const module: TestingModule = await Test.createTestingModule({

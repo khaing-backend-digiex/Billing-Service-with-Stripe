@@ -16,8 +16,8 @@ model User {
   dateOfBirth        DateTime?
   name               String?
   roles              String[]            @default(["user"])
-  id                 String              @id @default(uuid())
   password           String              @default("$2a$10$jeaeQtlxxRmjRqVD/h9HnOC2GANB1oKKPAraPazA81nbgJcpOsIyG")
+  id                 String              @id @default(uuid())
   creditTransactions CreditTransaction[]
   creditWallet       CreditWallet?
   payments           Payment[]
@@ -76,9 +76,9 @@ model Subscription {
   cancelledAt                  DateTime?
   createdAt                    DateTime            @default(now())
   updatedAt                    DateTime            @updatedAt
-  userId                       String              @unique
   trialEnd                     DateTime?
   trialStart                   DateTime?
+  userId                       String              @unique
   invoices                     Invoice[]
   pricingOption                PricingOption       @relation(fields: [pricingOptionId], references: [id])
   user                         User                @relation(fields: [userId], references: [id])
@@ -88,8 +88,8 @@ model Subscription {
 model CreditWallet {
   addonCredits Int      @default(0)
   updatedAt    DateTime @updatedAt
-  userId       String   @id
   is_active    Boolean  @default(false)
+  userId       String   @id
   user         User     @relation(fields: [userId], references: [id])
 }
 
@@ -150,13 +150,13 @@ model PaymentMethod {
   isDefault               Boolean         @default(false)
   metadata                Json?
   createdAt               DateTime        @default(now())
-  userId                  String
   brand                   String?
   expMonth                Int?
   expYear                 Int?
   fingerprint             String?
   last4                   String?
   updatedAt               DateTime        @default(now())
+  userId                  String
   user                    User            @relation(fields: [userId], references: [id])
 
   @@index([userId])
@@ -170,8 +170,8 @@ model CreditTransaction {
   referenceType  ReferenceType?
   referenceId    String?
   createdAt      DateTime              @default(now())
-  userId         String
   idempotencyKey String?               @unique
+  userId         String
   user           User                  @relation(fields: [userId], references: [id])
 }
 
