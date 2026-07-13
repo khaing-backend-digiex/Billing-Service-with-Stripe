@@ -1,4 +1,4 @@
-import { Injectable, Inject, Logger } from "@nestjs/common";
+import { Injectable, Inject, Logger, BadRequestException } from "@nestjs/common";
 import { IPaymentAdapter } from "../payments/types/payment-adapter.interface";
 import {
   PaymentCustomer,
@@ -265,5 +265,133 @@ export class StripeService {
 
   mapRawInvoice(rawInvoice: unknown): PaymentInvoice {
     return this.paymentAdapter.mapRawInvoice(rawInvoice);
+  }
+
+  async upgradeSubscriptionTier(userId: string, newPricingOptionId: string): Promise<PaymentSubscription> {
+    const currentSub = await this.prisma.subscription.findUnique({
+      where: { userId },
+    });
+
+    if (!currentSub || !currentSub.providerSubscriptionId) {
+      throw new BadRequestException("No active subscription found to upgrade");
+    }
+
+    const newPricingOption = await this.prisma.pricingOption.findUnique({
+      where: { id: newPricingOptionId },
+    });
+
+    if (!newPricingOption || !newPricingOption.providerPriceId) {
+      throw new BadRequestException("Invalid new pricing option");
+    }
+
+    const updatedStripeSub = await this.paymentAdapter.upgradeSubscriptionTier(
+      currentSub.providerSubscriptionId,
+      newPricingOption.providerPriceId
+    );
+
+    await this.prisma.subscription.update({
+      where: { id: currentSub.id },
+      data: {
+        pricingOptionId: newPricingOption.id,
+      }
+    });
+
+    return updatedStripeSub;
+  }
+
+  async upgradeSubscriptionCycle(userId: string, newPricingOptionId: string): Promise<PaymentSubscription> {
+    const currentSub = await this.prisma.subscription.findUnique({
+      where: { userId },
+    });
+
+    if (!currentSub || !currentSub.providerSubscriptionId) {
+      throw new BadRequestException("No active subscription found to upgrade");
+    }
+
+    const newPricingOption = await this.prisma.pricingOption.findUnique({
+      where: { id: newPricingOptionId },
+    });
+
+    if (!newPricingOption || !newPricingOption.providerPriceId) {
+      throw new BadRequestException("Invalid new pricing option");
+    }
+
+    const updatedStripeSub = await this.paymentAdapter.upgradeSubscriptionCycle(
+      currentSub.providerSubscriptionId,
+      newPricingOption.providerPriceId
+    );
+
+    await this.prisma.subscription.update({
+      where: { id: currentSub.id },
+      data: {
+        pricingOptionId: newPricingOption.id,
+      }
+    });
+
+    return updatedStripeSub;
+  }
+
+  async previewUpgradeSubscriptionTier(userId: string, newPricingOptionId: string): Promise<any> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user || !user.providerCustomerId) {
+      throw new BadRequestException("User does not have a Stripe customer account.");
+    }
+
+    const currentSub = await this.prisma.subscription.findUnique({
+      where: { userId },
+    });
+
+    if (!currentSub || !currentSub.providerSubscriptionId) {
+      throw new BadRequestException("No active subscription found to preview upgrade");
+    }
+
+    const newPricingOption = await this.prisma.pricingOption.findUnique({
+      where: { id: newPricingOptionId },
+    });
+
+    if (!newPricingOption || !newPricingOption.providerPriceId) {
+      throw new BadRequestException("Invalid new pricing option");
+    }
+
+    return await this.paymentAdapter.previewUpgradeSubscriptionTier(
+      user.providerCustomerId,
+      currentSub.providerSubscriptionId,
+      newPricingOption.providerPriceId
+    );
+  }
+
+  async previewUpgradeSubscriptionCycle(userId: string, newPricingOptionId: string): Promise<any> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user || !user.providerCustomerId) {
+      throw new BadRequestException("User does not have a Stripe customer account.");
+    }
+
+    const currentSub = await this.prisma.subscription.findUnique({
+      where: { userId },
+    });
+
+    if (!currentSub || !currentSub.providerSubscriptionId) {
+      throw new BadRequestException("No active subscription found to preview upgrade");
+    }
+
+    const newPricingOption = await this.prisma.pricingOption.findUnique({
+      where: { id: newPricingOptionId },
+    });
+
+    if (!newPricingOption || !newPricingOption.providerPriceId) {
+      throw new BadRequestException("Invalid new pricing option");
+    }
+
+    return await this.paymentAdapter.previewUpgradeSubscriptionCycle(
+      user.providerCustomerId,
+      currentSub.providerSubscriptionId,
+      newPricingOption.providerPriceId
+    );
   }
 }

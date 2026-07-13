@@ -158,10 +158,8 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
           tx,
         );
 
-        await tx.creditWallet.updateMany({
-          where: { userId: subscription.userId },
-          data: { is_active: false },
-        });
+        // Ví addon KHÔNG bị đụng tới: giữ nguyên số dư, chỉ tạm khoá vì gói hết hiệu lực.
+        // Xem `isAddonUsable`.
       });
 
       this.logger.log(

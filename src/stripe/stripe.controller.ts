@@ -26,10 +26,6 @@ import { PLAN_CODES } from "../common/constants/plan.constants";
 import { Roles } from "../common/decorators/roles.decorator";
 import { Role } from "../common/constants/roles.enum";
 
-/**
- * Sub chưa từng thanh toán được lần nào (INCOMPLETE) hoặc đã kết thúc thì KHÔNG tính là
- * "đang có gói trả phí" – nếu tính, user bị thẻ từ chối một lần sẽ không thể thử lại.
- */
 const BLOCKING_STATUSES: SubscriptionStatus[] = [
   SubscriptionStatus.ACTIVE,
   SubscriptionStatus.TRIALING,
@@ -75,14 +71,8 @@ export class StripeController {
     });
   }
 
-  /**
-   * Mua gói bằng thẻ đã lưu. Không redirect, không Checkout.
-   *
-   * Credit vẫn do `invoice.paid` cấp như trước – controller này không ghi DB gì cả.
-   * Nếu ngân hàng đòi 3DS, trả về `clientSecret` để client xác thực ngay tại chỗ
-   * (lúc mua thì user đang on-session, nên đây là thời điểm dễ nhất để xong 3DS).
-   */
-  @Post("purchase/subscription")
+  
+  @Post("checkout/subscription")
   @ApiOperation({ summary: "Buy a subscription with the saved default card" })
   async purchaseSubscription(
     @GetUser("id") userId: string,
@@ -126,13 +116,7 @@ export class StripeController {
     });
   }
 
-  /**
-   * Mua addon bằng thẻ đã lưu — thu tiền ngay, một lời gọi, không rời trang.
-   *
-   * `metadata` mang userId + addonPackageId nên `PaymentIntentSucceededStrategy` cấp credit
-   * y như luồng Checkout cũ, không phải sửa gì bên đó.
-   */
-  @Post("purchase/addon")
+  @Post("checkout/addon")
   @ApiOperation({ summary: "Buy an addon with the saved default card" })
   async purchaseAddon(
     @GetUser("id") userId: string,

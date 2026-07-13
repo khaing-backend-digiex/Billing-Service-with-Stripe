@@ -12,6 +12,7 @@ import { InvoiceService } from "../../invoice.service";
 import { StripeService } from "../../stripe.service";
 import { PaymentInvoice } from "../../../payments/types/payment.types";
 import { STRIPE_INVOICE_LINE_TYPE } from "../../../common/constants/stripe.constants";
+import { PLAN_CODES } from "../../../common/constants/plan.constants";
 
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_WINDOW_MS = 3 * 86_400_000;
@@ -90,7 +91,7 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
 
     if (!result?.subscription || !stripeSubscriptionId) return;
 
-    await this.cancelIfRetriesExhausted(
+    await this.downgradeToFreeIfRetriesExhausted(
       result.invoice,
       result.subscription,
       failedInvoice,
@@ -98,7 +99,7 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
     );
   }
 
-  private async cancelIfRetriesExhausted(
+  private async downgradeToFreeIfRetriesExhausted(
     invoice: Invoice,
     subscription: Subscription,
     failedInvoice: PaymentInvoice,
@@ -112,10 +113,39 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
 
     this.logger.warn(
       `Retries exhausted for subscription ${subscription.id} ` +
-        `(retries: ${retriesUsed}/${MAX_RETRY_ATTEMPTS}, window exceeded: ${windowExceeded}) – cancelling`,
+        `(retries: ${retriesUsed}/${MAX_RETRY_ATTEMPTS}, window exceeded: ${windowExceeded}) – downgrading to free`,
     );
 
-    await this.stripeService.cancelSubscriptionNow(stripeSubscriptionId);
+    const freePlan = await this.prisma.plan.findUnique({
+      where: { code: PLAN_CODES.FREE },
+      include: { pricingOptions: true },
+    });
+    const freePricingOption = freePlan?.pricingOptions?.[0];
+
+    if (!freePricingOption?.providerPriceId) {
+      await this.stripeService.cancelSubscriptionNow(stripeSubscriptionId);
+      await this.invoiceService.markUncollectible(invoice.id);
+      return;
+    }
+
+    try {
+      await this.stripeService.upgradeSubscriptionTier(
+        subscription.userId,
+        freePricingOption.id,
+      );
+
+      await this.prisma.subscription.update({
+        where: { id: subscription.id },
+        data: { status: SubscriptionStatus.ACTIVE },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to downgrade subscription ${subscription.id} to free`,
+        error,
+      );
+      await this.stripeService.cancelSubscriptionNow(stripeSubscriptionId);
+    }
+
     await this.invoiceService.markUncollectible(invoice.id);
   }
 }

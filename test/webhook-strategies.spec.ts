@@ -33,6 +33,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
     cancelSubscriptionNow: jest.fn().mockResolvedValue(undefined),
     getFreePriceId: jest.fn().mockResolvedValue(null),
     ensureFreeSubscription: jest.fn().mockResolvedValue(null),
+    upgradeSubscriptionTier: jest.fn().mockResolvedValue(undefined),
     mapRawInvoice: (raw: unknown) => adapter.mapRawInvoice(raw),
     mapRawSubscription: (raw: unknown) => adapter.mapRawSubscription(raw),
   };
@@ -307,7 +308,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       expect(stripeServiceMock.cancelSubscriptionNow).not.toHaveBeenCalled();
     });
 
-    it("cancels the Stripe subscription and marks invoice UNCOLLECTIBLE when retries are exhausted", async () => {
+    it("downgrades to the free plan and marks invoice UNCOLLECTIBLE when retries are exhausted", async () => {
       const user = await ctx.createUser();
       const sub = await ctx.createSubscription(user.id);
       const payload = invoicePayload(sub.providerSubscriptionId!, ctx.basicOption.providerPriceId!, {
@@ -317,9 +318,11 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
 
       await strategy().handle(stripeEvent("invoice.payment_failed", payload));
 
-      expect(stripeServiceMock.cancelSubscriptionNow).toHaveBeenCalledWith(
-        sub.providerSubscriptionId,
-      );
+      // Hết retry giờ HẠ VỀ FREE (đổi giá trên chính sub đó), không huỷ sub nữa.
+      // `cancelSubscriptionNow` chỉ còn là đường lui khi không có gói free hoặc khi hạ gói lỗi.
+      expect(stripeServiceMock.upgradeSubscriptionTier).toHaveBeenCalled();
+      expect(stripeServiceMock.cancelSubscriptionNow).not.toHaveBeenCalled();
+
       const invoice = await ctx.prisma.invoice.findUniqueOrThrow({
         where: { providerInvoiceId: payload.id },
       });

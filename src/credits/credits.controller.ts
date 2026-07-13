@@ -22,7 +22,7 @@ export class CreditsController {
       amount: dto.amount,
       referenceId: dto.referenceId ?? 'api-consume',
       description: dto.description ?? 'API Consume',
-      idempotencyKey: creditKey.consume(dto.idempotencyKey),
+      idempotencyKey: creditKey.consume(req.user.id, dto.idempotencyKey),
     });
 
     return new ApiResponse(

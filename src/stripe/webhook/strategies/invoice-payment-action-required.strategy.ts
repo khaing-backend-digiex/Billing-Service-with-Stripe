@@ -11,13 +11,6 @@ import {
   STRIPE_WEBHOOK_EVENT,
 } from "../../../common/constants/stripe.constants";
 
-/**
- * Ngân hàng đòi 3DS cho một khoản thu off-session.
- *
- * Trạng thái mà luồng Checkout cũ không bao giờ gặp: khi đó user đang ngồi trước trang
- * Stripe nên 3DS xử lý ngay tại chỗ. Off-session thì user vắng mặt → tiền KHÔNG vào,
- * hoá đơn treo, và chỉ user mới mở khoá được.
- */
 @Injectable()
 export class InvoicePaymentActionRequiredStrategy implements WebhookStrategy {
   private readonly logger = new Logger(InvoicePaymentActionRequiredStrategy.name);
@@ -62,14 +55,11 @@ export class InvoicePaymentActionRequiredStrategy implements WebhookStrategy {
       subscription.id,
     );
 
-    // Lần thu đầu chưa từng thành công → INCOMPLETE (user chưa có gói).
-    // Kỳ gia hạn thì gói cũ vẫn chạy, chỉ tiền kỳ mới chưa vào → PAST_DUE.
+    
     const isInitial = invoice.billingReason === STRIPE_BILLING_REASON.SUBSCRIPTION_CREATE;
     const status = isInitial
       ? SubscriptionStatus.INCOMPLETE
       : SubscriptionStatus.PAST_DUE;
-
-    // Không cấp credit: tiền chưa vào. Credit chỉ do `invoice.paid` cấp.
     await this.prisma.$transaction([
       this.prisma.subscription.update({
         where: { id: subscription.id },

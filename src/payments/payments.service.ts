@@ -28,4 +28,32 @@ export class PaymentsService {
     }
     await this.stripeService.cancelSubscriptionAtPeriodEnd(subscriptionId);
   }
+
+  async upgradeSubscriptionTier(userId: string, newPricingOptionId: string, provider?: PaymentProvider) {
+    if (provider && provider !== PaymentProvider.STRIPE) {
+      throw new BadRequestException(`Payment provider ${provider} is not supported.`);
+    }
+    return this.stripeService.upgradeSubscriptionTier(userId, newPricingOptionId);
+  }
+
+  async upgradeSubscriptionCycle(userId: string, newPricingOptionId: string, provider?: PaymentProvider) {
+    if (provider && provider !== PaymentProvider.STRIPE) {
+      throw new BadRequestException(`Payment provider ${provider} is not supported.`);
+    }
+    return this.stripeService.upgradeSubscriptionCycle(userId, newPricingOptionId);
+  }
+
+  async previewUpgradeSubscriptionTier(userId: string, newPricingOptionId: string, provider?: PaymentProvider) {
+    if (provider && provider !== PaymentProvider.STRIPE) {
+      throw new BadRequestException(`Payment provider ${provider} is not supported.`);
+    }
+    return this.stripeService.previewUpgradeSubscriptionTier(userId, newPricingOptionId);
+  }
+
+  async previewUpgradeSubscriptionCycle(userId: string, newPricingOptionId: string, provider?: PaymentProvider) {
+    if (provider && provider !== PaymentProvider.STRIPE) {
+      throw new BadRequestException(`Payment provider ${provider} is not supported.`);
+    }
+    return this.stripeService.previewUpgradeSubscriptionCycle(userId, newPricingOptionId);
+  }
 }

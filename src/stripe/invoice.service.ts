@@ -4,13 +4,7 @@ import { PrismaService } from "../database/prisma.service";
 import { PaymentInvoice } from "../payments/types/payment.types";
 import { formatStripeAmountToDatabase } from "./utils/stripe-currency.util";
 
-/**
- * Chủ sở hữu bảng `Invoice`. Mọi thay đổi trạng thái hoá đơn đi qua đây.
- *
- * Nhận `tx` thay vì tự mở transaction: bên gọi (settlement, strategy) mới là nơi quyết định
- * ranh giới atomic. Cùng quy ước với phương án (a) trong docs/credits-refactor.md §6 —
- * `tx` là ngữ cảnh, không phải quyền.
- */
+
 @Injectable()
 export class InvoiceService {
   private readonly logger = new Logger(InvoiceService.name);
@@ -21,7 +15,6 @@ export class InvoiceService {
     return tx ?? this.prisma;
   }
 
-  /** Tìm hoặc tạo hàng local. Luôn tạo ở OPEN – chuyển sang PAID/UNCOLLECTIBLE là việc của bên gọi. */
   async ensureLocal(
     providerInvoice: PaymentInvoice,
     subscriptionId: string,
@@ -34,13 +27,7 @@ export class InvoiceService {
     });
   }
 
-  /**
-   * Chốt chặn idempotency của toàn bộ luồng settlement.
-   *
-   * Compare-and-swap: chỉ đúng một lời gọi thắng, kể cả khi webhook và reconciliation cron
-   * chạm cùng một hoá đơn cùng lúc. Trả về boolean để bên gọi KHÔNG THỂ quên kiểm tra –
-   * trước đây đây là một quy ước nằm trong thân hàm, ai viết caller mới cũng có thể bỏ sót.
-   */
+  
   async claimAsPaid(
     tx: Prisma.TransactionClient,
     invoiceId: string,
@@ -58,13 +45,6 @@ export class InvoiceService {
     return claimed.count > 0;
   }
 
-  /**
-   * Ghi nhận một lần thu tiền hỏng: giữ hoá đơn ở OPEN và cập nhật bộ đếm retry của Stripe.
-   *
-   * `subscriptionId = null` nghĩa là không tra ra subscription local → chỉ cập nhật được
-   * hoá đơn đã tồn tại. Trả `null` nếu nó cũng không tồn tại, thay vì ném P2025 rồi làm
-   * chết cả event như trước.
-   */
   async recordFailedAttempt(
     tx: Prisma.TransactionClient,
     providerInvoice: PaymentInvoice,
@@ -103,13 +83,7 @@ export class InvoiceService {
     });
   }
 
-  /**
-   * Subscription local này đã từng có hoá đơn nào được trả chưa (không tính hoá đơn đang xử lý)?
-   *
-   * Dùng để phân biệt "subscription mới" với "sub free sinh ra do downgrade": Stripe gắn
-   * `billing_reason = subscription_create` cho hoá đơn đầu của CẢ HAI, nên nhãn của Stripe
-   * không kết luận được. Dữ liệu thì kết luận được.
-   */
+ 
   async hasPriorPaidInvoice(
     tx: Prisma.TransactionClient,
     subscriptionId: string,
@@ -126,7 +100,6 @@ export class InvoiceService {
     return count > 0;
   }
 
-  /** Stripe đã bỏ cuộc: không retry nữa. */
   async markUncollectible(
     invoiceId: string,
     tx?: Prisma.TransactionClient,

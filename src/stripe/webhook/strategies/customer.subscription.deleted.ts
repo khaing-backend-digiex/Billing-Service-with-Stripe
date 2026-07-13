@@ -70,10 +70,6 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
           tx,
         );
 
-        await tx.creditWallet.updateMany({
-          where: { userId: subscription.userId },
-          data: { is_active: false },
-        });
       });
 
       this.logger.log(`Subscription ${subscription.id} cancelled`);

@@ -52,6 +52,8 @@ export class PaidInvoiceSyncService {
     }
 
     const lineToUse =
+      paidInvoice.lines.find((line) => line.type === "subscription" && !line.isProration) ??
+      paidInvoice.lines.find((line) => !line.isProration && line.subscriptionId) ??
       paidInvoice.lines.find((line) => line.type === "subscription") ??
       paidInvoice.lines[0];
 
@@ -176,16 +178,9 @@ export class PaidInvoiceSyncService {
         tx,
       );
 
-      const walletUpdate = await tx.creditWallet.updateMany({
-        where: { userId: subscription.userId },
-        data: { is_active: plan.code !== PLAN_CODES.FREE },
-      });
-
-      if (walletUpdate.count === 0) {
-        this.logger.log(
-          `No credit wallet found for user ${subscription.userId}, skipping wallet update`,
-        );
-      }
+      // Không còn bật/tắt ví ở đây: quyền tiêu addon được dẫn xuất từ gói hiện tại lúc đọc
+      // (`isAddonUsable`). Trước đây `updateMany` này không tạo row, nên user mua addon
+      // trước khi ví tồn tại sẽ có credit không bao giờ tiêu được.
 
       await tx.subscriptionEvent.create({
         data: {

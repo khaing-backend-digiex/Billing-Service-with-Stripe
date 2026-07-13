@@ -4,8 +4,7 @@ import { JwtService } from '@nestjs/jwt';
 import * as request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { TestContext } from './helpers/context';
-import { CreditTransactionType, SubscriptionStatus } from '@prisma/client';
-import { JwtService } from '@nestjs/jwt';
+import { CreditTransactionType, SubscriptionStatus, User } from '@prisma/client';
 
 describe('CreditsController (e2e)', () => {
   let app: INestApplication;
@@ -63,7 +62,7 @@ describe('CreditsController (e2e)', () => {
       const res = await request(app.getHttpServer())
         .post('/credits/consume')
         .set('Authorization', `Bearer ${token}`)
-        .send({ userId: user.id, amount: 4, referenceId: 'test-gen' })
+        .send({ userId: user.id, amount: 4, referenceId: 'test-gen', idempotencyKey: 'e2e-sub-only' })
         .expect(200);
 
       const sub = await ctx.prisma.subscription.findUnique({ where: { userId: user.id } });
@@ -89,7 +88,7 @@ describe('CreditsController (e2e)', () => {
       const res = await request(app.getHttpServer())
         .post('/credits/consume')
         .set('Authorization', `Bearer ${token}`)
-        .send({ userId: user.id, amount: 5, referenceId: 'test-gen-2' })
+        .send({ userId: user.id, amount: 5, referenceId: 'test-gen-2', idempotencyKey: 'e2e-mixed' })
         .expect(200);
 
       const sub = await ctx.prisma.subscription.findUnique({ where: { userId: user.id } });
@@ -113,7 +112,7 @@ describe('CreditsController (e2e)', () => {
       const res = await request(app.getHttpServer())
         .post('/credits/consume')
         .set('Authorization', `Bearer ${token}`)
-        .send({ userId: user.id, amount: 5 })
+        .send({ userId: user.id, amount: 5, idempotencyKey: 'e2e-insufficient' })
         .expect(400);
 
       expect(res.body.message).toContain('does not have enough credits');

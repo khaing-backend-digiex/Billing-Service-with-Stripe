@@ -470,7 +470,93 @@ export class StripeAdapter implements IPaymentAdapter {
           (typeof l.subscription === 'string' ? l.subscription : (l.subscription as any)?.id) ??
           (l as any).parent?.subscription_item_details?.subscription ??
           null,
+        isProration: (l as any).proration ?? (l as any).parent?.subscription_item_details?.proration ?? false,
       })),
     };
+  }
+  
+  async upgradeSubscriptionTier(subscriptionId: string, newPriceId: string): Promise<PaymentSubscription> {
+    const subscription = await this.stripe.subscriptions.retrieve(subscriptionId);
+    if (!subscription.items.data.length) {
+      throw new BadRequestException('Subscription has no items to update');
+    }
+    const subscriptionItemId = subscription.items.data[0].id;
+
+    const updatedSubscription = await this.stripe.subscriptions.update(subscriptionId, {
+      items: [
+        {
+          id: subscriptionItemId,
+          price: newPriceId,
+        },
+      ],
+      proration_behavior: 'create_prorations',
+    });
+
+    return this.mapSubscription(updatedSubscription);
+  }
+
+  async upgradeSubscriptionCycle(subscriptionId: string, newPriceId: string): Promise<PaymentSubscription> {
+    const subscription = await this.stripe.subscriptions.retrieve(subscriptionId);
+    if (!subscription.items.data.length) {
+      throw new BadRequestException('Subscription has no items to update');
+    }
+    const subscriptionItemId = subscription.items.data[0].id;
+
+    const updatedSubscription = await this.stripe.subscriptions.update(subscriptionId, {
+      items: [
+        {
+          id: subscriptionItemId,
+          price: newPriceId,
+        },
+      ],
+      billing_cycle_anchor: 'now',
+      proration_behavior: 'always_invoice',
+    });
+
+    return this.mapSubscription(updatedSubscription);
+  }
+
+  async previewUpgradeSubscriptionTier(customerId: string, subscriptionId: string, newPriceId: string): Promise<any> {
+    const subscription = await this.stripe.subscriptions.retrieve(subscriptionId);
+    if (!subscription.items.data.length) {
+      throw new BadRequestException('Subscription has no items to preview');
+    }
+    const subscriptionItemId = subscription.items.data[0].id;
+
+    return await this.stripe.invoices.retrieveUpcoming({
+      customer: customerId,
+      subscription: subscriptionId,
+      subscription_details: {
+        items: [
+          {
+            id: subscriptionItemId,
+            price: newPriceId,
+          },
+        ],
+      },
+    });
+  }
+
+  async previewUpgradeSubscriptionCycle(customerId: string, subscriptionId: string, newPriceId: string): Promise<any> {
+    const subscription = await this.stripe.subscriptions.retrieve(subscriptionId);
+    if (!subscription.items.data.length) {
+      throw new BadRequestException('Subscription has no items to preview');
+    }
+    const subscriptionItemId = subscription.items.data[0].id;
+
+    return await this.stripe.invoices.retrieveUpcoming({
+      customer: customerId,
+      subscription: subscriptionId,
+      subscription_details: {
+        items: [
+          {
+            id: subscriptionItemId,
+            price: newPriceId,
+          },
+        ],
+        billing_cycle_anchor: 'now',
+        proration_behavior: 'always_invoice',
+      },
+    });
   }
 }

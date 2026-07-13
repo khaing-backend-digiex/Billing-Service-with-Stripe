@@ -14,6 +14,8 @@ import {
   AllocationSource,
   UserPackageStatus,
   creditKey,
+  KEY_SEPARATOR,
+  isAddonUsable,
 } from './credit.types';
 import { CreditTransactionType, ReferenceType } from '@prisma/client';
 import { InsufficientCreditsException } from './exceptions';
@@ -34,13 +36,17 @@ export class CreditService {
       // 1. Lock rows
       const balances = await this.repo.lockForConsume(cmd.userId, client);
 
-      // 1.5. Idempotency Check
-      const idempotencyPrefix = `req:${cmd.userId}:${cmd.idempotencyKey}:consume`;
+      // 1.5. Idempotency ở tầng REQUEST, không phải tầng (request, bucket).
+      //
+      // Việc chia bucket được tính lại từ số dư HIỆN TẠI ở mỗi lần gọi, nên một retry sau
+      // timeout có thể rơi vào bucket khác lần đầu → sinh khoá mới → lọt unique constraint
+      // → trừ credit hai lần. Vì vậy phải chốt theo khoá của cả request, ngay trong lock,
+      // TRƯỚC khi phân bổ. Khoá đã được `creditKey.consume(userId, requestId)` dựng sẵn.
       const existing = await client.creditTransaction.findMany({
         where: {
           userId: cmd.userId,
           idempotencyKey: {
-            startsWith: `${idempotencyPrefix}:`,
+            startsWith: `${cmd.idempotencyKey}${KEY_SEPARATOR}`,
           },
         },
       });
@@ -96,7 +102,7 @@ export class CreditService {
           amount: -alloc.amount,
           description: cmd.description,
           referenceId: cmd.referenceId,
-          idempotencyKey: `${idempotencyPrefix}:${alloc.bucket}`,
+          idempotencyKey: creditKey.bucketStep(cmd.idempotencyKey, alloc.bucket),
         };
 
         await this.repo.applyDelta(
@@ -145,7 +151,7 @@ export class CreditService {
           amount: cmd.amount,
           description: cmd.description,
           referenceId: cmd.referenceId,
-          idempotencyKey: `req:${cmd.userId}:${cmd.idempotencyKey}:grantSub`,
+          idempotencyKey: cmd.idempotencyKey,
         },
         client,
       );
@@ -211,7 +217,7 @@ export class CreditService {
           amount: -remaining,
           description: cmd.description,
           referenceId: cmd.referenceId,
-          idempotencyKey: `req:${cmd.userId}:${cmd.idempotencyKey}:revokeSub`,
+          idempotencyKey: cmd.idempotencyKey,
         },
         client,
       );
@@ -226,10 +232,12 @@ export class CreditService {
     tx?: TxClient,
   ): Promise<boolean> {
     const exec = async (client: TxClient) => {
+      // Chỉ đảm bảo ví tồn tại để `applyDelta` có hàng mà cộng vào. Quyền tiêu addon KHÔNG
+      // nằm ở đây – nó được dẫn xuất từ gói hiện tại lúc đọc (`isAddonUsable`).
       await client.creditWallet.upsert({
         where: { userId: cmd.userId },
         update: {},
-        create: { userId: cmd.userId, addonCredits: 0, is_active: false },
+        create: { userId: cmd.userId, addonCredits: 0 },
       });
 
       return this.repo.applyDelta(
@@ -241,7 +249,7 @@ export class CreditService {
           amount: cmd.amount,
           description: cmd.description,
           referenceId: cmd.referenceId,
-          idempotencyKey: `req:${cmd.userId}:${cmd.idempotencyKey}:grantAddon`,
+          idempotencyKey: cmd.idempotencyKey,
         },
         client,
       );
@@ -286,7 +294,10 @@ export class CreditService {
       nextBillingDate: subscription?.currentPeriodEnd ?? null,
       subscriptionCredits: subscription?.subscriptionCreditsRemaining ?? 0,
       addonCredits: wallet?.addonCredits ?? 0,
-      addonIsActive: wallet?.is_active ?? false,
+      addonIsActive: isAddonUsable(
+        subscription?.pricingOption?.plan?.code,
+        subscription?.status,
+      ),
     };
   }
 
@@ -300,7 +311,7 @@ export class CreditService {
           bucket: cmd.bucket,
           amount: cmd.amount,
           description: cmd.description,
-          idempotencyKey: `req:${cmd.userId}:${cmd.idempotencyKey}:adjust`,
+          idempotencyKey: cmd.idempotencyKey,
         },
         client,
       );
