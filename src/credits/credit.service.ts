@@ -32,6 +32,35 @@ export class CreditService {
       // 1. Lock rows
       const balances = await this.repo.lockForConsume(cmd.userId, client);
 
+      // 1.5. Idempotency Check
+      const idempotencyPrefix = `req:${cmd.userId}:${cmd.idempotencyKey}:consume`;
+      const existing = await client.creditTransaction.findMany({
+        where: {
+          userId: cmd.userId,
+          idempotencyKey: {
+            startsWith: `${idempotencyPrefix}:`,
+          },
+        },
+      });
+
+      if (existing.length > 0) {
+        let fromSub = 0;
+        let fromAddon = 0;
+        for (const tx of existing) {
+           if (tx.referenceType === ReferenceType.SUBSCRIPTION) {
+               fromSub += Math.abs(tx.amount);
+           } else if (tx.referenceType === ReferenceType.ADDON_PURCHASE) {
+               fromAddon += Math.abs(tx.amount);
+           }
+        }
+        return {
+          fromSubscription: fromSub,
+          fromAddon: fromAddon,
+          remainingSubscription: balances.subscriptionRemaining,
+          remainingAddon: balances.addonCredits,
+        };
+      }
+
       // 2. Prepare allocation sources
       const sources: AllocationSource[] = [
         {
@@ -65,7 +94,7 @@ export class CreditService {
           amount: -alloc.amount,
           description: cmd.description,
           referenceId: cmd.referenceId,
-          idempotencyKey: `${cmd.idempotencyKey}:${alloc.bucket}`,
+          idempotencyKey: `${idempotencyPrefix}:${alloc.bucket}`,
         };
 
         await this.repo.applyDelta(
@@ -114,7 +143,7 @@ export class CreditService {
           amount: cmd.amount,
           description: cmd.description,
           referenceId: cmd.referenceId,
-          idempotencyKey: cmd.idempotencyKey,
+          idempotencyKey: `req:${cmd.userId}:${cmd.idempotencyKey}:grantSub`,
         },
         client,
       );
@@ -129,13 +158,16 @@ export class CreditService {
     tx?: TxClient,
   ): Promise<boolean> {
     const exec = async (client: TxClient) => {
-      const sub = await client.subscription.findUnique({
-        where: { userId: cmd.userId },
-        select: { subscriptionCreditsRemaining: true },
-      });
+      // Lock the row to prevent race conditions with concurrent consume operations
+      const rows = await client.$queryRaw<[{ subscriptionCreditsRemaining: number }] | []>`
+        SELECT "subscriptionCreditsRemaining"
+        FROM "Subscription"
+        WHERE "userId" = ${cmd.userId}
+        FOR UPDATE
+      `;
 
-      const remaining = sub?.subscriptionCreditsRemaining ?? 0;
-      if (remaining === 0) return true;
+      const remaining = rows[0]?.subscriptionCreditsRemaining ?? 0;
+      if (remaining <= 0) return true;
 
       return this.repo.applyDelta(
         cmd.userId,
@@ -146,7 +178,7 @@ export class CreditService {
           amount: -remaining,
           description: cmd.description,
           referenceId: cmd.referenceId,
-          idempotencyKey: cmd.idempotencyKey,
+          idempotencyKey: `req:${cmd.userId}:${cmd.idempotencyKey}:revokeSub`,
         },
         client,
       );
@@ -177,7 +209,7 @@ export class CreditService {
           amount: cmd.amount,
           description: cmd.description,
           referenceId: cmd.referenceId,
-          idempotencyKey: cmd.idempotencyKey,
+          idempotencyKey: `req:${cmd.userId}:${cmd.idempotencyKey}:grantAddon`,
         },
         client,
       );
@@ -186,8 +218,6 @@ export class CreditService {
     if (tx) return exec(tx);
     return this.prisma.$transaction((client) => exec(client));
   }
-
-  // ──────────────── QUERY ────────────────
 
   async getBalance(userId: string): Promise<CreditBalance> {
     const balances = await this.repo.getBalances(userId);
@@ -228,8 +258,6 @@ export class CreditService {
     };
   }
 
-  // ──────────────── ADMIN ────────────────
-
   async adjust(cmd: AdjustCmd, tx?: TxClient): Promise<boolean> {
     const exec = async (client: TxClient) => {
       return this.repo.applyDelta(
@@ -240,7 +268,7 @@ export class CreditService {
           bucket: cmd.bucket,
           amount: cmd.amount,
           description: cmd.description,
-          idempotencyKey: cmd.idempotencyKey,
+          idempotencyKey: `req:${cmd.userId}:${cmd.idempotencyKey}:adjust`,
         },
         client,
       );

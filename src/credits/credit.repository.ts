@@ -35,47 +35,48 @@ export class CreditRepository {
     entry: TransactionEntry,
     tx: TxClient,
   ): Promise<boolean> {
-    try {
-      // 1. Update balance
-      if (entry.bucket === ReferenceType.SUBSCRIPTION) {
-        await tx.subscription.update({
-          where: { userId },
-          data: {
-            subscriptionCreditsRemaining: { increment: delta },
-          },
-        });
-      } else {
-        await tx.creditWallet.update({
-          where: { userId },
-          data: {
-            addonCredits: { increment: delta },
-          },
-        });
-      }
-
-      // 2. log transaction
-      await tx.creditTransaction.create({
-        data: {
-          userId,
-          type: entry.type,
-          amount: entry.amount,
-          description: entry.description,
-          referenceType: entry.bucket,
-          referenceId: entry.referenceId,
-          idempotencyKey: entry.idempotencyKey,
-        },
+    // Check for existing transaction to avoid P2002 transaction poisoning
+    if (entry.idempotencyKey) {
+      const existing = await tx.creditTransaction.findUnique({
+        where: { idempotencyKey: entry.idempotencyKey },
+        select: { id: true },
       });
-
-      return true;
-    } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
+      if (existing) {
         return false;
       }
-      throw error;
     }
+
+    // 1. Update balance
+    if (entry.bucket === ReferenceType.SUBSCRIPTION) {
+      await tx.subscription.update({
+        where: { userId },
+        data: {
+          subscriptionCreditsRemaining: { increment: delta },
+        },
+      });
+    } else {
+      await tx.creditWallet.update({
+        where: { userId },
+        data: {
+          addonCredits: { increment: delta },
+        },
+      });
+    }
+
+    // 2. log transaction
+    await tx.creditTransaction.create({
+      data: {
+        userId,
+        type: entry.type,
+        amount: entry.amount,
+        description: entry.description,
+        referenceType: entry.bucket,
+        referenceId: entry.referenceId,
+        idempotencyKey: entry.idempotencyKey,
+      },
+    });
+
+    return true;
   }
 
   async lockForConsume(
