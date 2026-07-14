@@ -22,7 +22,6 @@ export class PaymentService {
     return tx ?? this.prisma;
   }
 
-  /** Chốt chặn cấp credit addon hai lần khi Stripe gửi lại event. */
   async isSucceeded(
     providerPaymentId: string,
     tx?: Prisma.TransactionClient,

@@ -36,12 +36,6 @@ export class CreditService {
       // 1. Lock rows
       const balances = await this.repo.lockForConsume(cmd.userId, client);
 
-      // 1.5. Idempotency ở tầng REQUEST, không phải tầng (request, bucket).
-      //
-      // Việc chia bucket được tính lại từ số dư HIỆN TẠI ở mỗi lần gọi, nên một retry sau
-      // timeout có thể rơi vào bucket khác lần đầu → sinh khoá mới → lọt unique constraint
-      // → trừ credit hai lần. Vì vậy phải chốt theo khoá của cả request, ngay trong lock,
-      // TRƯỚC khi phân bổ. Khoá đã được `creditKey.consume(userId, requestId)` dựng sẵn.
       const existing = await client.creditTransaction.findMany({
         where: {
           userId: cmd.userId,
@@ -232,8 +226,6 @@ export class CreditService {
     tx?: TxClient,
   ): Promise<boolean> {
     const exec = async (client: TxClient) => {
-      // Chỉ đảm bảo ví tồn tại để `applyDelta` có hàng mà cộng vào. Quyền tiêu addon KHÔNG
-      // nằm ở đây – nó được dẫn xuất từ gói hiện tại lúc đọc (`isAddonUsable`).
       await client.creditWallet.upsert({
         where: { userId: cmd.userId },
         update: {},
