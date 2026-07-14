@@ -5,6 +5,7 @@ import {
   SubscriptionEventType,
   CreditTransactionType,
   ReferenceType,
+  InvoiceStatus,
 } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
@@ -84,6 +85,20 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
     if (subscription.providerSubscriptionId !== sub.id) {
       this.logger.log(
         `Subscription ${subscription.id} already points to ${subscription.providerSubscriptionId} (not ${sub.id}) — skipping downgrade (upgrade detected)`,
+      );
+      return;
+    }
+
+    const hasUnpaidInvoice = await this.prisma.invoice.findFirst({
+      where: {
+        subscriptionId: subscription.id,
+        status: { in: [InvoiceStatus.OPEN, InvoiceStatus.UNCOLLECTIBLE] },
+      },
+    });
+
+    if (hasUnpaidInvoice) {
+      this.logger.warn(
+        `Subscription ${subscription.id} cancelled with unpaid debt (invoice ${hasUnpaidInvoice.id}). Banning instead of downgrading to Free.`,
       );
       return;
     }

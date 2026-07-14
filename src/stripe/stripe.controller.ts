@@ -23,7 +23,7 @@ import { GetUser } from "../common/decorators/get-user.decorator";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { UsersService } from "../users/users.service";
 import { PrismaService } from "../database/prisma.service";
-import { SubscriptionStatus } from "@prisma/client";
+import { SubscriptionStatus, InvoiceStatus } from "@prisma/client";
 import { PLAN_CODES } from "../common/constants/plan.constants";
 import { Roles } from "../common/decorators/roles.decorator";
 import { Role } from "../common/constants/roles.enum";
@@ -77,6 +77,17 @@ export class StripeController {
       where: { userId },
       include: { pricingOption: true },
     });
+
+    const badDebtInvoice = await this.prisma.invoice.findFirst({
+      where: {
+        subscription: { userId },
+        status: { in: [InvoiceStatus.OPEN, InvoiceStatus.UNCOLLECTIBLE] },
+      },
+    });
+
+    if (badDebtInvoice) {
+      throw new BadRequestException("You have an unpaid invoice. Please pay it before creating a new subscription.");
+    }
 
     if (currentSubscription && currentSubscription.pricingOption) {
       const isCancelledOrExpired =

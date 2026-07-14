@@ -12,7 +12,7 @@ export class UsersService {
   private readonly logger = new Logger(UsersService.name);
   constructor(
     private readonly prisma: PrismaService,
-  ) {}
+  ) { }
 
   async createUserRecord(data: {
     email: string;
@@ -22,7 +22,6 @@ export class UsersService {
   }): Promise<User> {
     return this.prisma.user.create({
       data: {
-        id: randomUUID(),
         email: data.email,
         password: data.password,
         name: data.name,

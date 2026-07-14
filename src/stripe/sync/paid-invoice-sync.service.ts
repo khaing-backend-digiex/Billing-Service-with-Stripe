@@ -161,28 +161,30 @@ export class PaidInvoiceSyncService {
         `Subscription ${subscription.id} updated: status=ACTIVE, currentPeriodStart=${periodStart.toISOString()}, currentPeriodEnd=${periodEnd.toISOString()}, nextCreditResetAt=${nextCreditResetAt.toISOString()}`,
       );
 
-      // Revoke old credits (if any)
-      await this.creditService.revokeSubscriptionCredits(
-        {
-          userId: subscription.userId,
-          description: `Unused credits expired before renewal`,
-          referenceId: invoice.id,
-          idempotencyKey: `revoke_sub_${invoice.id}`,
-        },
-        tx,
-      );
+      const isUpdate = paidInvoice.billingReason === "subscription_update";
 
-      // Grant new credits
-      await this.creditService.grantSubscriptionAllowance(
-        {
-          userId: subscription.userId,
-          amount: plan.renewalCredits,
-          description,
-          referenceId: invoice.id,
-          idempotencyKey: `grant_sub_${invoice.id}`,
-        },
-        tx,
-      );
+      if (!isUpdate) {
+        await this.creditService.revokeSubscriptionCredits(
+          {
+            userId: subscription.userId,
+            description: `Unused credits expired before renewal`,
+            referenceId: invoice.id,
+            idempotencyKey: `revoke_sub_${invoice.id}`,
+          },
+          tx,
+        );
+
+        await this.creditService.grantSubscriptionAllowance(
+          {
+            userId: subscription.userId,
+            amount: plan.renewalCredits,
+            description,
+            referenceId: invoice.id,
+            idempotencyKey: `grant_sub_${invoice.id}`,
+          },
+          tx,
+        );
+      }
 
       const walletUpdate = await tx.creditWallet.updateMany({
         where: { userId: subscription.userId },
