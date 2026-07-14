@@ -1,17 +1,13 @@
-import { Injectable } from '@nestjs/common';
-import { CreditBucket } from './credit.types';
-import { PrismaService } from '../database/prisma.service';
-import {
-  CreditTransactionType,
-  ReferenceType,
-  Prisma,
-} from '@prisma/client';
+import { Injectable } from "@nestjs/common";
+import { CreditBucket } from "./credit.types";
+import { PrismaService } from "../database/prisma.service";
+import { CreditTransactionType, ReferenceType, Prisma } from "@prisma/client";
 
-type TxClient = Parameters<Parameters<PrismaService['$transaction']>[0]>[0];
+type TxClient = Parameters<Parameters<PrismaService["$transaction"]>[0]>[0];
 
 export interface TransactionEntry {
   type: CreditTransactionType;
-  bucket: CreditBucket;       
+  bucket: CreditBucket;
   amount: number;
   description: string;
   referenceId?: string;
@@ -30,7 +26,7 @@ export class CreditRepository {
   constructor(private readonly prisma: PrismaService) {}
 
   async applyDelta(
-    userId: number,
+    userId: string,
     delta: number,
     entry: TransactionEntry,
     tx: TxClient,
@@ -70,7 +66,7 @@ export class CreditRepository {
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
+        error.code === "P2002"
       ) {
         return false;
       }
@@ -78,10 +74,7 @@ export class CreditRepository {
     }
   }
 
-  async lockForConsume(
-    userId: number,
-    tx: TxClient,
-  ): Promise<LockedBalances> {
+  async lockForConsume(userId: String, tx: TxClient): Promise<LockedBalances> {
     // Lock subscription row
     const subRows = await tx.$queryRaw<
       [{ subscriptionCreditsRemaining: number }] | []
@@ -93,7 +86,7 @@ export class CreditRepository {
     `;
     const sub = subRows[0] ?? null;
 
-    // Lock wallet row 
+    // Lock wallet row
     const walletRows = await tx.$queryRaw<
       [{ addonCredits: number; is_active: boolean }] | []
     >`
@@ -113,7 +106,7 @@ export class CreditRepository {
     };
   }
 
-  async getBalances(userId: number): Promise<LockedBalances> {
+  async getBalances(userId: string): Promise<LockedBalances> {
     const sub = await this.prisma.subscription.findUnique({
       where: { userId },
       select: { subscriptionCreditsRemaining: true },

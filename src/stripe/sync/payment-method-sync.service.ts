@@ -89,7 +89,7 @@ export class PaymentMethodSyncService {
     await this.syncDefault(user.id, customerId);
   }
 
-  async syncDefault(userId: number, customerId: string): Promise<void> {
+  async syncDefault(userId: string, customerId: string): Promise<void> {
     const defaultPaymentMethodId =
       await this.stripeService.getDefaultPaymentMethodId(customerId);
 
@@ -109,11 +109,7 @@ export class PaymentMethodSyncService {
     ]);
   }
 
-  /**
-   * Thẻ mặc định để thu tiền. Mọi luồng mua đều đi qua đây, nên lỗi phải nói rõ user
-   * cần làm gì tiếp — không còn fallback Checkout để đỡ.
-   */
-  async getDefaultOrThrow(userId: number, customerId: string): Promise<PaymentMethod> {
+  async getDefaultOrThrow(userId: string, customerId: string): Promise<PaymentMethod> {
     const paymentMethod = await this.getDefaultForUser(userId, customerId);
 
     if (!paymentMethod) {
@@ -131,10 +127,6 @@ export class PaymentMethodSyncService {
     return paymentMethod;
   }
 
-  /**
-   * Stripe không bắn webhook nào khi thẻ hết hạn, nên phải tự kiểm mỗi lần dùng.
-   * Thẻ còn hiệu lực tới hết tháng ghi trên thẻ.
-   */
   isExpired(paymentMethod: PaymentMethod): boolean {
     if (!paymentMethod.expMonth || !paymentMethod.expYear) return false;
 
@@ -143,7 +135,7 @@ export class PaymentMethodSyncService {
   }
 
   async getDefaultForUser(
-    userId: number,
+    userId: string,
     customerId: string,
   ): Promise<PaymentMethod | null> {
     const local = await this.prisma.paymentMethod.findFirst({
@@ -158,7 +150,7 @@ export class PaymentMethodSyncService {
   }
   /* Healing */
   private async backfillFromStripe(
-    userId: number,
+    userId: string,
     customerId: string,
   ): Promise<PaymentMethod | null> {
     const paymentMethods = await this.stripeService.listPaymentMethods(customerId);

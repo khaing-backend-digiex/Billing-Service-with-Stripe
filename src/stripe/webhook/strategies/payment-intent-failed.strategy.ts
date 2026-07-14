@@ -45,13 +45,7 @@ export class PaymentIntentFailedStrategy implements WebhookStrategy {
       return;
     }
 
-    const userId = parseInt(userIdStr, 10);
-    if (Number.isNaN(userId)) {
-      this.logger.error(
-        `Invalid userId "${userIdStr}" in intent ${paymentIntent.id} metadata`,
-      );
-      return;
-    }
+    const userId = userIdStr;
 
     // Addon mua off-session hỏng ngay lần đầu → chưa có hàng nào. Ghi lại để user thấy giao
     // dịch hỏng trong lịch sử thay vì nó biến mất không dấu vết.

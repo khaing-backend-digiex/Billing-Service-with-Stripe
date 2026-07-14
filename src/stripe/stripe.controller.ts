@@ -53,7 +53,7 @@ export class StripeController {
   @Roles(Role.ADMIN)
   @ApiOperation({ summary: "Create a Stripe customer for the current user" })
   async createCustomer(
-    @GetUser("id") userId: number,
+    @GetUser("id") userId: string,
     @Body() dto: CreateCustomerDto,
   ) {
     const user = await this.usersService.findById(userId);
@@ -85,7 +85,7 @@ export class StripeController {
   @Post("purchase/subscription")
   @ApiOperation({ summary: "Buy a subscription with the saved default card" })
   async purchaseSubscription(
-    @GetUser("id") userId: number,
+    @GetUser("id") userId: string,
     @Body() dto: PurchaseSubscriptionDto,
   ) {
     const user = await this.usersService.findById(userId);
@@ -135,7 +135,7 @@ export class StripeController {
   @Post("purchase/addon")
   @ApiOperation({ summary: "Buy an addon with the saved default card" })
   async purchaseAddon(
-    @GetUser("id") userId: number,
+    @GetUser("id") userId: string,
     @Body() dto: PurchaseAddonDto,
   ) {
     const user = await this.usersService.findById(userId);
@@ -181,7 +181,7 @@ export class StripeController {
 
   @Post("billing-portal")
   @ApiOperation({ summary: "Create a billing portal session (invoice history only – cards are managed in-app)" })
-  async createBillingPortal(@GetUser("id") userId: number) {
+  async createBillingPortal(@GetUser("id") userId: string) {
     const user = await this.usersService.findById(userId);
 
     if (!user.providerCustomerId) {
@@ -199,7 +199,7 @@ export class StripeController {
 
   @Get("payments")
   @ApiOperation({ summary: "Get payment history for the current user" })
-  async getPayments(@GetUser("id") userId: number) {
+  async getPayments(@GetUser("id") userId: string) {
     const payments = await this.prisma.payment.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },

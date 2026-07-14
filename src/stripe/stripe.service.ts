@@ -18,7 +18,7 @@ import { STRIPE_METADATA_KEY } from "../common/constants/stripe.constants";
 import { formatDatabaseAmountToStripe } from "./utils/stripe-currency.util";
 
 type StripeCustomerOwner = {
-  id: number;
+  id: string;
   email: string;
   name?: string | null;
   providerCustomerId?: string | null;
@@ -105,7 +105,7 @@ export class StripeService {
   }
 
   async createCustomer(
-    userId: number,
+    userId: string,
     email: string,
     name?: string,
   ): Promise<PaymentCustomer> {
@@ -177,7 +177,7 @@ export class StripeService {
   }
 
   async createOffSessionSubscription(
-    userId: number,
+    userId: string,
     priceId: string,
     customerId: string,
     paymentMethodId: string,
@@ -191,7 +191,7 @@ export class StripeService {
   }
 
   async createAddonPayment(
-    userId: number,
+    userId: string,
     addon: AddonPackage,
     customerId: string,
     paymentMethodId: string,

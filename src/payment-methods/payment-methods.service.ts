@@ -34,13 +34,13 @@ export class PaymentMethodsService {
    * Số thẻ KHÔNG đi qua backend: client dùng clientSecret này để gửi thẻ thẳng lên Stripe
    * qua Elements. Ranh giới PCI nằm ở đây.
    */
-  async createSetupIntent(userId: number): Promise<SetupIntentResult> {
+  async createSetupIntent(userId: string): Promise<SetupIntentResult> {
     const user = await this.usersService.findById(userId);
     const customerId = await this.stripeService.ensureValidCustomerId(user);
     return this.stripeService.createSetupIntent(customerId);
   }
 
-  async list(userId: number): Promise<PaymentMethod[]> {
+  async list(userId: string): Promise<PaymentMethod[]> {
     const user = await this.usersService.findById(userId);
 
     if (user.providerCustomerId) {
@@ -54,7 +54,7 @@ export class PaymentMethodsService {
     });
   }
 
-  async setDefault(userId: number, paymentMethodId: string): Promise<void> {
+  async setDefault(userId: string, paymentMethodId: string): Promise<void> {
     const paymentMethod = await this.findOwned(userId, paymentMethodId);
 
     if (this.paymentMethodSync.isExpired(paymentMethod)) {
@@ -73,7 +73,7 @@ export class PaymentMethodsService {
     await this.paymentMethodSync.syncDefault(userId, customerId);
   }
 
-  async remove(userId: number, paymentMethodId: string): Promise<void> {
+  async remove(userId: string, paymentMethodId: string): Promise<void> {
     const paymentMethod = await this.findOwned(userId, paymentMethodId);
 
     if (paymentMethod.isDefault && (await this.hasLivePaidSubscription(userId))) {
@@ -88,7 +88,7 @@ export class PaymentMethodsService {
   }
 
   /** Lọc theo userId ngay trong query: không để user này thao tác lên thẻ của user khác. */
-  private async findOwned(userId: number, id: string): Promise<PaymentMethod> {
+  private async findOwned(userId: string, id: string): Promise<PaymentMethod> {
     const paymentMethod = await this.prisma.paymentMethod.findFirst({
       where: { id, userId },
     });
@@ -100,7 +100,7 @@ export class PaymentMethodsService {
     return paymentMethod;
   }
 
-  private async hasLivePaidSubscription(userId: number): Promise<boolean> {
+  private async hasLivePaidSubscription(userId: string): Promise<boolean> {
     const subscription = await this.prisma.subscription.findUnique({
       where: { userId },
       include: { pricingOption: { include: { plan: true } } },

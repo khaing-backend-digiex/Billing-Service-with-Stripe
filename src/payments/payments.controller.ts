@@ -36,7 +36,7 @@ export class PaymentsController {
 
   @Post("customers")
   async createCustomer(
-    @GetUser("id") userId: number,
+    @GetUser("id") userId: string,
     @Body() dto: CreateCustomerDto & { provider?: PaymentProvider },
   ) {
     const user = await this.usersService.findById(userId);
@@ -63,7 +63,7 @@ export class PaymentsController {
     description: "Billing portal session created",
   })
   async createBillingPortal(
-    @GetUser("id") userId: number,
+    @GetUser("id") userId: string,
     @Body() dto: { provider?: PaymentProvider },
   ) {
     const user = await this.usersService.findById(userId);
@@ -90,7 +90,7 @@ export class PaymentsController {
     description: "Subscription will cancel at period end",
   })
   async cancelSubscription(
-    @GetUser("id") userId: number,
+    @GetUser("id") userId: string,
     @Body() dto: CancelSubscriptionDto & { provider?: PaymentProvider },
   ) {
     const user = await this.usersService.findById(userId);

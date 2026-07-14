@@ -84,20 +84,8 @@ export class PaidInvoiceSyncService {
     const resetMonths = Math.max(1, Math.round(plan.resetIntervalDay / 30));
     const nextCreditResetAt = addCalendarMonths(periodStart, resetMonths);
 
-    // Con trỏ tới subscription trên Stripe.
-    //
-    // Trước đây `invoice.paid` KHÔNG bao giờ đổi field này: nhánh update của upsert bên
-    // InvoicePaidStrategy để trống (đúng – nó nằm ngoài chốt claim), còn ở đây thì không
-    // ai set. Nên khi user nâng cấp từ Free, hàng local vẫn trỏ vào sub Free cũ cho tới khi
-    // `customer.subscription.updated` về. Bấm huỷ gói trong cửa sổ đó = huỷ nhầm sub Free,
-    // còn sub trả phí tiếp tục thu tiền.
-    //
-    // Đặt ở đây, TRONG transaction đã claim, nên replay không ghi lại lần hai.
     const stripeSubscriptionId =
       paidInvoice.subscriptionId ?? lineToUse?.subscriptionId ?? null;
-
-    // Chỉ trỏ tới nếu hoá đơn này không thuộc kỳ CŨ hơn kỳ đang chạy: một `invoice.paid`
-    // của kỳ trước về muộn không được kéo con trỏ ngược lại.
     const isStale = periodStart < subscription.currentPeriodStart;
     const shouldRepoint =
       stripeSubscriptionId !== null &&
@@ -163,13 +151,6 @@ export class PaidInvoiceSyncService {
         `Subscription ${subscription.id} updated: status=ACTIVE, currentPeriodStart=${periodStart.toISOString()}, currentPeriodEnd=${periodEnd.toISOString()}, nextCreditResetAt=${nextCreditResetAt.toISOString()}`,
       );
 
-      // `billing_reason` một mình KHÔNG đủ để kết luận đây là subscription mới.
-      // Stripe gắn `subscription_create` cho hoá đơn đầu của MỌI sub mới trên Stripe – kể cả
-      // sub free sinh ra lúc downgrade. Trước đây một lần downgrade ghi ra cả DOWNGRADED lẫn
-      // CREATED cho cùng một subscription local.
-      //
-      // Mốc đúng là dữ liệu, không phải nhãn của Stripe: subscription LOCAL này đã từng có
-      // hoá đơn nào được trả chưa? Chưa → đây thật sự là lần đầu.
       const hasPriorPaid = await this.invoiceService.hasPriorPaidInvoice(
         tx,
         subscription.id,
@@ -181,9 +162,6 @@ export class PaidInvoiceSyncService {
         ? SubscriptionEventType.CREATED
         : SubscriptionEventType.RENEWED;
 
-      // Sang kỳ = đốt phần dư rồi cấp mới. Khoá theo KỲ BILLING, nên `invoice.paid` gửi lại
-      // hay cron chạm cùng kỳ đều no-op. `referenceId` luôn là subscription.id với bucket
-      // SUBSCRIPTION, để đọc ngược sổ được mà không cần biết ai đã ghi.
       await this.creditService.resetSubscriptionAllowance(
         {
           userId: subscription.userId,

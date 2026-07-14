@@ -3,7 +3,7 @@ import { ReferenceType } from '@prisma/client';
 export type CreditBucket = typeof ReferenceType.SUBSCRIPTION | typeof ReferenceType.ADDON_PURCHASE;
 
 export interface GrantSubscriptionCmd {
-  userId: number;
+  userId: string;
   amount: number;
   description: string;
   referenceId: string;
@@ -11,14 +11,14 @@ export interface GrantSubscriptionCmd {
 }
 
 export interface RevokeSubscriptionCmd {
-  userId: number;
+  userId: string;
   description: string;
   referenceId: string;
   idempotencyKey: string;
 }
 
 export interface ResetSubscriptionCmd {
-  userId: number;
+  userId: string;
   amount: number;
   grantDescription: string;
   revokeDescription: string;
@@ -27,7 +27,7 @@ export interface ResetSubscriptionCmd {
 }
 
 export interface GrantAddonCmd {
-  userId: number;
+  userId: string;
   amount: number;
   description: string;
   referenceId: string;
@@ -35,7 +35,7 @@ export interface GrantAddonCmd {
 }
 
 export interface ConsumeCmd {
-  userId: number;
+  userId: string;
   amount: number;
   description: string;
   referenceId: string;
@@ -43,7 +43,7 @@ export interface ConsumeCmd {
 }
 
 export interface AdjustCmd {
-  userId: number;
+  userId: string;
   bucket: CreditBucket;
   amount: number;
   description: string;

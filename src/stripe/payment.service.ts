@@ -9,7 +9,7 @@ import { formatStripeAmountToDatabase } from "./utils/stripe-currency.util";
  * quên làm, ghi thẳng cents vào DB khiến `GET /stripe/payments` trộn lẫn hai đơn vị.
  */
 export interface RecordPaymentInput {
-  userId: number;
+  userId: string;
   providerPaymentId: string;
   providerAmount: number;
   currency: string;

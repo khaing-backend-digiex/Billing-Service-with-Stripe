@@ -22,7 +22,7 @@ export class PaymentMethodsController {
 
   @Post("setup-intent")
   @ApiOperation({ summary: "Start saving a card (returns a SetupIntent client secret)" })
-  async createSetupIntent(@GetUser("id") userId: number) {
+  async createSetupIntent(@GetUser("id") userId: string) {
     const setupIntent = await this.paymentMethodsService.createSetupIntent(userId);
 
     return new ApiResponse(HttpStatus.CREATED, "Setup intent created", {
@@ -33,7 +33,7 @@ export class PaymentMethodsController {
 
   @Get()
   @ApiOperation({ summary: "List the saved cards of the current user" })
-  async list(@GetUser("id") userId: number) {
+  async list(@GetUser("id") userId: string) {
     const paymentMethods = await this.paymentMethodsService.list(userId);
 
     return new ApiResponse(HttpStatus.OK, "Payment methods fetched successfully", paymentMethods);
@@ -41,7 +41,7 @@ export class PaymentMethodsController {
 
   @Post(":id/default")
   @ApiOperation({ summary: "Set a saved card as the default one" })
-  async setDefault(@GetUser("id") userId: number, @Param("id") id: string) {
+  async setDefault(@GetUser("id") userId: string, @Param("id") id: string) {
     await this.paymentMethodsService.setDefault(userId, id);
 
     return new ApiResponse(HttpStatus.OK, "Default payment method updated", null);
@@ -49,7 +49,7 @@ export class PaymentMethodsController {
 
   @Delete(":id")
   @ApiOperation({ summary: "Remove a saved card" })
-  async remove(@GetUser("id") userId: number, @Param("id") id: string) {
+  async remove(@GetUser("id") userId: string, @Param("id") id: string) {
     await this.paymentMethodsService.remove(userId, id);
 
     return new ApiResponse(HttpStatus.OK, "Payment method removed", null);

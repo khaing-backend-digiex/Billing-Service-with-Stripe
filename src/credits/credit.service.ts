@@ -126,13 +126,6 @@ export class CreditService {
     return this.prisma.$transaction((client) => exec(client));
   }
 
-  /**
-   * Đốt phần credit chưa dùng của kỳ cũ rồi cấp allowance kỳ mới, trong CÙNG một transaction.
-   *
-   * Đây là thuật toán duy nhất cho mọi lần "sang kỳ": `invoice.paid` và cron reset đều gọi
-   * nó, chỉ khác `idempotencyKey` (kỳ billing vs mốc reset). Hai bút toán luôn đi cùng nhau
-   * nên số dư không bao giờ lệch sổ.
-   */
   async resetSubscriptionAllowance(
     cmd: ResetSubscriptionCmd,
     tx?: TxClient,
@@ -201,7 +194,6 @@ export class CreditService {
     tx?: TxClient,
   ): Promise<boolean> {
     const exec = async (client: TxClient) => {
-      // Ensure wallet exists
       await client.creditWallet.upsert({
         where: { userId: cmd.userId },
         update: {},
@@ -229,7 +221,7 @@ export class CreditService {
 
   // ──────────────── QUERY ────────────────
 
-  async getBalance(userId: number): Promise<CreditBalance> {
+  async getBalance(userId: string): Promise<CreditBalance> {
     const balances = await this.repo.getBalances(userId);
 
     return {
@@ -242,7 +234,7 @@ export class CreditService {
     };
   }
 
-  async getUserPackageStatus(userId: number): Promise<UserPackageStatus> {
+  async getUserPackageStatus(userId: string): Promise<UserPackageStatus> {
     const subscription = await this.prisma.subscription.findUnique({
       where: { userId },
       include: {
