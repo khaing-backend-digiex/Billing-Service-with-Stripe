@@ -66,6 +66,8 @@ export class PaidInvoiceSyncService {
     }
 
     const lineToUse =
+      paidInvoice.lines.find((line) => line.type === "subscription" && !line.isProration) ??
+      paidInvoice.lines.find((line) => !line.isProration && line.subscriptionId) ??
       paidInvoice.lines.find((line) => line.type === "subscription") ??
       paidInvoice.lines[0];
 
