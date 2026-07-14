@@ -254,7 +254,7 @@ export class StripeService {
     return this.paymentAdapter.mapRawInvoice(rawInvoice);
   }
 
-  async upgradeSubscriptionTier(userId: number, newPricingOptionId: string): Promise<PaymentSubscription> {
+  async upgradeSubscriptionTier(userId: string, newPricingOptionId: string): Promise<PaymentSubscription> {
     const currentSub = await this.prisma.subscription.findUnique({
       where: { userId },
     });
@@ -286,7 +286,7 @@ export class StripeService {
     return updatedStripeSub;
   }
 
-  async upgradeSubscriptionCycle(userId: number, newPricingOptionId: string): Promise<PaymentSubscription> {
+  async upgradeSubscriptionCycle(userId: string, newPricingOptionId: string): Promise<PaymentSubscription> {
     const currentSub = await this.prisma.subscription.findUnique({
       where: { userId },
     });
@@ -318,7 +318,7 @@ export class StripeService {
     return updatedStripeSub;
   }
 
-  async previewUpgradeSubscriptionTier(userId: number, newPricingOptionId: string): Promise<any> {
+  async previewUpgradeSubscriptionTier(userId: string, newPricingOptionId: string): Promise<any> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
     });
@@ -350,7 +350,7 @@ export class StripeService {
     );
   }
 
-  async previewUpgradeSubscriptionCycle(userId: number, newPricingOptionId: string): Promise<any> {
+  async previewUpgradeSubscriptionCycle(userId: string, newPricingOptionId: string): Promise<any> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
     });

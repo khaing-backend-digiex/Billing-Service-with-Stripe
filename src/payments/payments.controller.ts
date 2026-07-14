@@ -181,7 +181,7 @@ export class PaymentsController {
     description: "Subscription tier upgraded successfully",
   })
   async upgradeSubscriptionTier(
-    @GetUser("id") userId: number,
+    @GetUser("id") userId: string,
     @Body() dto: UpgradeSubscriptionDto,
   ) {
     const updatedSub = await this.paymentsService.upgradeSubscriptionTier(
@@ -199,7 +199,7 @@ export class PaymentsController {
     description: "Subscription billing cycle upgraded successfully",
   })
   async upgradeSubscriptionCycle(
-    @GetUser("id") userId: number,
+    @GetUser("id") userId: string,
     @Body() dto: UpgradeSubscriptionDto,
   ) {
     const updatedSub = await this.paymentsService.upgradeSubscriptionCycle(
@@ -217,7 +217,7 @@ export class PaymentsController {
     description: "Returns the upcoming invoice preview for the tier upgrade",
   })
   async previewUpgradeSubscriptionTier(
-    @GetUser("id") userId: number,
+    @GetUser("id") userId: string,
     @Query("pricingOptionId") pricingOptionId: string,
     @Query("provider") provider?: PaymentProvider,
   ) {
@@ -229,7 +229,12 @@ export class PaymentsController {
       pricingOptionId,
       provider,
     );
-    return new ApiResponse(HttpStatus.OK, "Upcoming invoice preview generated successfully", preview);
+    const result = {
+      amount_due: preview.amount_due,
+      currency: preview.currency,
+      next_payment_date: preview.period_end,
+    };
+    return new ApiResponse(HttpStatus.OK, "Upcoming invoice preview generated successfully", result);
   }
 
   @Get("subscriptions/preview-upgrade-cycle")
@@ -239,7 +244,7 @@ export class PaymentsController {
     description: "Returns the upcoming invoice preview for the cycle upgrade",
   })
   async previewUpgradeSubscriptionCycle(
-    @GetUser("id") userId: number,
+    @GetUser("id") userId: string,
     @Query("pricingOptionId") pricingOptionId: string,
     @Query("provider") provider?: PaymentProvider,
   ) {
@@ -251,6 +256,11 @@ export class PaymentsController {
       pricingOptionId,
       provider,
     );
-    return new ApiResponse(HttpStatus.OK, "Upcoming invoice preview generated successfully", preview);
+    const result = {
+      amount_due: preview.amount_due,
+      currency: preview.currency,
+      next_payment_date: preview.period_end,
+    };
+    return new ApiResponse(HttpStatus.OK, "Upcoming invoice preview generated successfully", result);
   }
 }
