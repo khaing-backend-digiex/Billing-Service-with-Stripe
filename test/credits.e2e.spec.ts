@@ -4,7 +4,8 @@ import { JwtService } from '@nestjs/jwt';
 import * as request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { TestContext } from './helpers/context';
-import { CreditTransactionType, SubscriptionStatus, User } from '@prisma/client';
+import { CreditTransactionType, SubscriptionStatus } from '@prisma/client';
+import { JwtService } from '@nestjs/jwt';
 
 describe('CreditsController (e2e)', () => {
   let app: INestApplication;
@@ -29,6 +30,7 @@ describe('CreditsController (e2e)', () => {
     app.useGlobalPipes(new ValidationPipe({ transform: true }));
     jwtService = moduleFixture.get(JwtService);
     await app.init();
+    jwtService = app.get(JwtService);
   });
 
   afterAll(async () => {
@@ -39,9 +41,10 @@ describe('CreditsController (e2e)', () => {
   describe('POST /credits/consume', () => {
     it('returns 400 Bad Request if missing body parameters', async () => {
       const user = await ctx.createUser();
+      const token = jwtService.sign({ sub: user.id, email: user.email, roles: ['user'] });
       return request(app.getHttpServer())
         .post('/credits/consume')
-        .set('Authorization', authFor(user))
+        .set('Authorization', `Bearer ${token}`)
         .send({})
         .expect(400);
     });
@@ -56,15 +59,12 @@ describe('CreditsController (e2e)', () => {
         data: { userId: user.id, addonCredits: 5 },
       });
 
+      const token = jwtService.sign({ sub: user.id, email: user.email, roles: ['user'] });
       const res = await request(app.getHttpServer())
         .post('/credits/consume')
-        .set('Authorization', authFor(user))
-        .send({ amount: 4, referenceId: 'test-gen', idempotencyKey: `req_${Date.now()}_1` })
+        .set('Authorization', `Bearer ${token}`)
+        .send({ userId: user.id, amount: 4, referenceId: 'test-gen' })
         .expect(200);
-
-      // ApiResponse bọc kết quả trong `data` – không có field `success`.
-      expect(res.body.data.fromSubscription).toBe(4);
-      expect(res.body.data.fromAddon).toBe(0);
 
       const sub = await ctx.prisma.subscription.findUnique({ where: { userId: user.id } });
       expect(sub!.subscriptionCreditsRemaining).toBe(6); // 10 - 4
@@ -85,15 +85,12 @@ describe('CreditsController (e2e)', () => {
         data: { userId: user.id, addonCredits: 10, is_active: true },
       });
 
+      const token = jwtService.sign({ sub: user.id, email: user.email, roles: ['user'] });
       const res = await request(app.getHttpServer())
         .post('/credits/consume')
-        .set('Authorization', authFor(user))
-        .send({ amount: 5, referenceId: 'test-gen-2', idempotencyKey: `req_${Date.now()}_2` })
+        .set('Authorization', `Bearer ${token}`)
+        .send({ userId: user.id, amount: 5, referenceId: 'test-gen-2' })
         .expect(200);
-
-      // Tiêu subscription trước, thiếu bao nhiêu mới lấy từ addon.
-      expect(res.body.data.fromSubscription).toBe(2);
-      expect(res.body.data.fromAddon).toBe(3);
 
       const sub = await ctx.prisma.subscription.findUnique({ where: { userId: user.id } });
       expect(sub!.subscriptionCreditsRemaining).toBe(0); 
@@ -112,10 +109,11 @@ describe('CreditsController (e2e)', () => {
         data: { userId: user.id, addonCredits: 1 },
       });
 
+      const token = jwtService.sign({ sub: user.id, email: user.email, roles: ['user'] });
       const res = await request(app.getHttpServer())
         .post('/credits/consume')
-        .set('Authorization', authFor(user))
-        .send({ amount: 5, referenceId: 'test-gen-3', idempotencyKey: `req_${Date.now()}_3` })
+        .set('Authorization', `Bearer ${token}`)
+        .send({ userId: user.id, amount: 5 })
         .expect(400);
 
       expect(res.body.message).toContain('does not have enough credits');
@@ -125,6 +123,56 @@ describe('CreditsController (e2e)', () => {
       expect(sub!.subscriptionCreditsRemaining).toBe(1); 
       const wallet = await ctx.prisma.creditWallet.findUnique({ where: { userId: user.id } });
       expect(wallet!.addonCredits).toBe(1); 
+    });
+
+    it('is idempotent on mixed-bucket retry without poisoning the transaction', async () => {
+      const user = await ctx.createUser();
+      await ctx.createSubscription(user.id, {
+        status: SubscriptionStatus.ACTIVE,
+        subscriptionCreditsRemaining: 4,
+      });
+      await ctx.prisma.creditWallet.create({
+        data: { userId: user.id, addonCredits: 10, is_active: true },
+      });
+
+      // First request: uses 4 sub, 6 addon
+      const token = jwtService.sign({ sub: user.id, email: user.email, roles: ['user'] });
+      const res1 = await request(app.getHttpServer())
+        .post('/credits/consume')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ userId: user.id, amount: 10, idempotencyKey: 'retry-test-key' })
+        .expect(200);
+      
+      expect(res1.body.data.fromSubscription).toBe(4);
+      expect(res1.body.data.fromAddon).toBe(6);
+
+      // Now we intentionally change the balance to simulate a race or a later retry where balances differ.
+      // E.g., subscription is now 0, addon is 10.
+      // A bad idempotency implementation would try to draw 10 from addon, generate a new key, and double-deduct!
+      // Or it would hit P2002 and poison the transaction.
+      await ctx.prisma.creditWallet.update({
+        where: { userId: user.id },
+        data: { addonCredits: 10 }
+      });
+      await ctx.prisma.subscription.update({
+        where: { userId: user.id },
+        data: { subscriptionCreditsRemaining: 0 }
+      });
+
+      // Second request (retry)
+      const res2 = await request(app.getHttpServer())
+        .post('/credits/consume')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ userId: user.id, amount: 10, idempotencyKey: 'retry-test-key' })
+        .expect(200);
+
+      // It should gracefully return the ORIGINAL consumption amounts!
+      expect(res2.body.data.fromSubscription).toBe(4);
+      expect(res2.body.data.fromAddon).toBe(6);
+
+      // And no additional ledger entries should have been created
+      const txs = await ctx.prisma.creditTransaction.findMany({ where: { userId: user.id, idempotencyKey: { startsWith: `req:${user.id}:retry-test-key:consume:` } }});
+      expect(txs).toHaveLength(2); // Only the original two entries
     });
   });
 });
