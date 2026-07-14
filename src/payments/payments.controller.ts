@@ -173,7 +173,12 @@ export class PaymentsController {
       pricingOptionId,
       provider,
     );
-    return new ApiResponse(HttpStatus.OK, "Upcoming invoice preview generated successfully", preview);
+    const result = {
+      amount_due: preview.amount_due,
+      currency: preview.currency,
+      next_payment_date: preview.period_end,
+    };
+    return new ApiResponse(HttpStatus.OK, "Upcoming invoice preview generated successfully", result);
   }
 
   @Get("subscriptions/preview-upgrade-cycle")
@@ -195,6 +200,11 @@ export class PaymentsController {
       pricingOptionId,
       provider,
     );
-    return new ApiResponse(HttpStatus.OK, "Upcoming invoice preview generated successfully", preview);
+    const result = {
+      amount_due: preview.amount_due,
+      currency: preview.currency,
+      next_payment_date: preview.period_end,
+    };
+    return new ApiResponse(HttpStatus.OK, "Upcoming invoice preview generated successfully", result);
   }
 }

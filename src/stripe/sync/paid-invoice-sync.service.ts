@@ -101,6 +101,12 @@ export class PaidInvoiceSyncService {
     }
 
     const isInitial = paidInvoice.billingReason === "subscription_create";
+    const eventType = isInitial
+      ? SubscriptionEventType.CREATED
+      : SubscriptionEventType.RENEWED;
+    const description = isInitial
+      ? `Credits granted – ${plan.name} (initial)`
+      : `Credits granted – ${plan.name} (renewal)`;
     const paymentIntentId = paidInvoice.paymentIntentId ?? null;
 
     await this.prisma.$transaction(async (tx) => {
@@ -153,30 +159,30 @@ export class PaidInvoiceSyncService {
         `Subscription ${subscription.id} updated: status=ACTIVE, currentPeriodStart=${periodStart.toISOString()}, currentPeriodEnd=${periodEnd.toISOString()}, nextCreditResetAt=${nextCreditResetAt.toISOString()}`,
       );
 
-      const hasPriorPaid = await this.invoiceService.hasPriorPaidInvoice(
-        tx,
-        subscription.id,
-        invoice.id,
-      );
-      const isFirstSettlement = isInitial && !hasPriorPaid;
+      const isUpdate = paidInvoice.billingReason === "subscription_update";
 
-      const eventType = isFirstSettlement
-        ? SubscriptionEventType.CREATED
-        : SubscriptionEventType.RENEWED;
+      if (!isUpdate) {
+        await this.creditService.revokeSubscriptionCredits(
+          {
+            userId: subscription.userId,
+            description: `Unused credits expired before renewal`,
+            referenceId: invoice.id,
+            idempotencyKey: `revoke_sub_${invoice.id}`,
+          },
+          tx,
+        );
 
-      await this.creditService.resetSubscriptionAllowance(
-        {
-          userId: subscription.userId,
-          amount: plan.renewalCredits,
-          grantDescription: isFirstSettlement
-            ? `Credits granted – ${plan.name} (initial)`
-            : `Credits granted – ${plan.name} (renewal)`,
-          revokeDescription: `Unused credits expired before renewal – ${plan.name}`,
-          referenceId: subscription.id,
-          idempotencyKey: creditKey.subscriptionPeriod(subscription.id, periodStart),
-        },
-        tx,
-      );
+        await this.creditService.grantSubscriptionAllowance(
+          {
+            userId: subscription.userId,
+            amount: plan.renewalCredits,
+            description,
+            referenceId: invoice.id,
+            idempotencyKey: `grant_sub_${invoice.id}`,
+          },
+          tx,
+        );
+      }
 
       // Không còn bật/tắt ví ở đây: quyền tiêu addon được dẫn xuất từ gói hiện tại lúc đọc
       // (`isAddonUsable`). Trước đây `updateMany` này không tạo row, nên user mua addon
