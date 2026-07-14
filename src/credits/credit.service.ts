@@ -217,7 +217,7 @@ export class CreditService {
           amount: -remaining,
           description: cmd.description,
           referenceId: cmd.referenceId,
-          idempotencyKey: cmd.idempotencyKey,
+          idempotencyKey: `req:${cmd.userId}:${cmd.idempotencyKey}:revokeSub`,
         },
         client,
       );
@@ -249,7 +249,7 @@ export class CreditService {
           amount: cmd.amount,
           description: cmd.description,
           referenceId: cmd.referenceId,
-          idempotencyKey: cmd.idempotencyKey,
+          idempotencyKey: `req:${cmd.userId}:${cmd.idempotencyKey}:grantAddon`,
         },
         client,
       );
@@ -311,7 +311,7 @@ export class CreditService {
           bucket: cmd.bucket,
           amount: cmd.amount,
           description: cmd.description,
-          idempotencyKey: cmd.idempotencyKey,
+          idempotencyKey: `req:${cmd.userId}:${cmd.idempotencyKey}:adjust`,
         },
         client,
       );
