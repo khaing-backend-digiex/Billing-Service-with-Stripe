@@ -15,12 +15,14 @@ export class UsersService {
 
   async createUserRecord(data: {
     email: string;
+    password: string;
     name?: string;
     roles?: string[];
   }): Promise<User> {
     return this.prisma.user.create({
       data: {
         email: data.email,
+        password: data.password,
         name: data.name,
         roles: data.roles,
       },

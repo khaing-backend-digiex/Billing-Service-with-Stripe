@@ -11,6 +11,7 @@ import {
 import { PrismaService } from "../../database/prisma.service";
 import { StripeService } from "../stripe.service";
 import { addCalendarMonths } from "../../common/utils/date.util";
+import { CreditService } from "../../credits/credit.service";
 
 type SubscriptionWithPricing = Subscription & { pricingOption: PricingOption };
 
@@ -21,6 +22,7 @@ export class FreePlanDowngradeService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly stripeService: StripeService,
+    private readonly creditService: CreditService,
   ) {}
 
   async downgradeToFree(
@@ -72,25 +74,15 @@ export class FreePlanDowngradeService {
 
    
     await this.prisma.$transaction(async (tx) => {
-   
-      const current = await tx.subscription.findUnique({
-        where: { id: subscription.id },
-        select: { subscriptionCreditsRemaining: true },
-      });
-      const remaining = current?.subscriptionCreditsRemaining ?? 0;
-
-      if (remaining > 0) {
-        await tx.creditTransaction.create({
-          data: {
-            userId: subscription.userId,
-            type: CreditTransactionType.EXPIRATION,
-            amount: -remaining,
-            description: `Credits forfeited – downgraded to free (${reason})`,
-            referenceType: ReferenceType.SUBSCRIPTION,
-            referenceId: subscription.id,
-          },
-        });
-      }
+      await this.creditService.revokeSubscriptionCredits(
+        {
+          userId: subscription.userId,
+          description: `Credits forfeited – downgraded to free (${reason})`,
+          referenceId: subscription.id,
+          idempotencyKey: `downgrade_${stripeSub.id}`,
+        },
+        tx,
+      );
 
       if (freePricingOption) {
         const freePlan = freePricingOption.plan;
@@ -104,22 +96,21 @@ export class FreePlanDowngradeService {
             providerSubscriptionId: freeSub.id,
             currentPeriodStart: periodStart,
             currentPeriodEnd: periodEnd,
-            subscriptionCreditsRemaining: freePlan.renewalCredits,
             nextCreditResetAt: addCalendarMonths(periodStart, resetMonths),
             cancelledAt: null,
           },
         });
 
-        await tx.creditTransaction.create({
-          data: {
+        await this.creditService.grantSubscriptionAllowance(
+          {
             userId: subscription.userId,
-            type: CreditTransactionType.RENEWAL,
             amount: freePlan.renewalCredits,
             description: `Credits granted – ${freePlan.name} (downgrade)`,
-            referenceType: ReferenceType.SUBSCRIPTION,
             referenceId: subscription.id,
+            idempotencyKey: `grant_free_${freeSub.id}`,
           },
-        });
+          tx,
+        );
       }
 
       await tx.subscriptionEvent.create({

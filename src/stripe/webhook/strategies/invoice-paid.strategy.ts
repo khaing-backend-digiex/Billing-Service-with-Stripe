@@ -16,7 +16,7 @@ export class InvoicePaidStrategy implements WebhookStrategy {
     private readonly pricingService: PricingService,
     private readonly paidInvoiceSync: PaidInvoiceSyncService,
     private readonly stripeService: StripeService,
-  ) { }
+  ) {}
 
   private readonly invoicePaid = "invoice.paid";
   canHandle(eventType: string): boolean {
@@ -24,9 +24,7 @@ export class InvoicePaidStrategy implements WebhookStrategy {
   }
 
   async handle(event: Stripe.Event): Promise<void> {
-    this.logger.log(`invoice.paid: {${JSON.stringify(event.data.object)}}`);
     const paidInvoice = this.stripeService.mapRawInvoice(event.data.object);
-    this.logger.log(`invoice.paid: ${paidInvoice.id}`);
     this.logger.debug(`invoice.paid: ${JSON.stringify(paidInvoice)}`);
     const lineToUse =
       paidInvoice.lines.find(line => line.type === "subscription" && !line.isProration) ??
@@ -36,7 +34,9 @@ export class InvoicePaidStrategy implements WebhookStrategy {
     const stripeSubscriptionId = paidInvoice.subscriptionId ?? lineToUse?.subscriptionId ?? null;
 
     if (!stripeSubscriptionId) {
-      this.logger.error(`Invoice ${paidInvoice.id} has no linked subscription, skipping`);
+      this.logger.error(
+        `Invoice ${paidInvoice.id} has no linked subscription, skipping`,
+      );
       return;
     }
 
@@ -51,7 +51,9 @@ export class InvoicePaidStrategy implements WebhookStrategy {
     });
 
     if (!user) {
-      this.logger.error(`No user found for Stripe customer ${paidInvoice.customerId}`);
+      this.logger.error(
+        `No user found for Stripe customer ${paidInvoice.customerId}`,
+      );
       return;
     }
 
@@ -62,7 +64,8 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       return;
     }
 
-    const pricingOption = await this.pricingService.findByProviderPriceId(priceId);
+    const pricingOption =
+      await this.pricingService.findByProviderPriceId(priceId);
     if (!pricingOption) {
       this.logger.error(`No pricing option found for priceId ${priceId}`);
       return;

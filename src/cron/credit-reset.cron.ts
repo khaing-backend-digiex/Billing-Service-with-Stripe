@@ -8,12 +8,16 @@ import {
 } from "@prisma/client";
 import { PrismaService } from "../database/prisma.service";
 import { addCalendarMonths } from "../common/utils/date.util";
+import { CreditService } from "../credits/credit.service";
 
 @Injectable()
 export class CreditResetCronService {
   private readonly logger = new Logger(CreditResetCronService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly creditService: CreditService,
+  ) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
   async handleCreditReset(): Promise<void> {
@@ -72,7 +76,6 @@ export class CreditResetCronService {
               nextCreditResetAt: subscription.nextCreditResetAt,
             },
             data: {
-              subscriptionCreditsRemaining: plan.renewalCredits,
               nextCreditResetAt: newNextReset,
             },
           });
@@ -84,16 +87,28 @@ export class CreditResetCronService {
             return false;
           }
 
-          await tx.creditTransaction.create({
-            data: {
+          // Revoke unused credits
+          await this.creditService.revokeSubscriptionCredits(
+            {
               userId: subscription.userId,
-              type: CreditTransactionType.RENEWAL,
+              description: `Unused credits expired before monthly reset`,
+              referenceId: subscription.id,
+              idempotencyKey: `cron_revoke_${subscription.id}_${now.getTime()}`,
+            },
+            tx,
+          );
+
+          // Grant new monthly credits
+          await this.creditService.grantSubscriptionAllowance(
+            {
+              userId: subscription.userId,
               amount: plan.renewalCredits,
               description: `Credits reset – ${plan.name} (monthly cycle)`,
-              referenceType: ReferenceType.SUBSCRIPTION,
               referenceId: subscription.id,
+              idempotencyKey: `cron_grant_${subscription.id}_${now.getTime()}`,
             },
-          });
+            tx,
+          );
 
           await tx.subscriptionEvent.create({
             data: {

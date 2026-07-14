@@ -14,6 +14,7 @@ import { PaymentInvoice } from "../../payments/types/payment.types";
 import { formatStripeAmountToDatabase } from "../utils/stripe-currency.util";
 import { addCalendarMonths } from "../../common/utils/date.util";
 import { PLAN_CODES } from "../../common/constants/plan.constants";
+import { CreditService } from "../../credits/credit.service";
 
 @Injectable()
 export class PaidInvoiceSyncService {
@@ -22,6 +23,7 @@ export class PaidInvoiceSyncService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly pricingService: PricingService,
+    private readonly creditService: CreditService,
   ) {}
 
   async applyPaidInvoice(
@@ -152,24 +154,35 @@ export class PaidInvoiceSyncService {
           pricingOptionId: pricingOption.id,
           currentPeriodStart: periodStart,
           currentPeriodEnd: periodEnd,
-          subscriptionCreditsRemaining: plan.renewalCredits,
           nextCreditResetAt,
         },
       });
       this.logger.log(
-        `Subscription ${subscription.id} updated: status=ACTIVE, currentPeriodStart=${periodStart.toISOString()}, currentPeriodEnd=${periodEnd.toISOString()}, subscriptionCreditsRemaining=${plan.renewalCredits}, nextCreditResetAt=${nextCreditResetAt.toISOString()}`,
+        `Subscription ${subscription.id} updated: status=ACTIVE, currentPeriodStart=${periodStart.toISOString()}, currentPeriodEnd=${periodEnd.toISOString()}, nextCreditResetAt=${nextCreditResetAt.toISOString()}`,
       );
 
-      await tx.creditTransaction.create({
-        data: {
+      // Revoke old credits (if any)
+      await this.creditService.revokeSubscriptionCredits(
+        {
           userId: subscription.userId,
-          type: CreditTransactionType.RENEWAL,
+          description: `Unused credits expired before renewal`,
+          referenceId: invoice.id,
+          idempotencyKey: `revoke_sub_${invoice.id}`,
+        },
+        tx,
+      );
+
+      // Grant new credits
+      await this.creditService.grantSubscriptionAllowance(
+        {
+          userId: subscription.userId,
           amount: plan.renewalCredits,
           description,
-          referenceType: ReferenceType.SUBSCRIPTION,
-          referenceId: subscription.id,
+          referenceId: invoice.id,
+          idempotencyKey: `grant_sub_${invoice.id}`,
         },
-      });
+        tx,
+      );
 
       const walletUpdate = await tx.creditWallet.updateMany({
         where: { userId: subscription.userId },
