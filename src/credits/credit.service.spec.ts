@@ -22,7 +22,6 @@ describe('CreditService', () => {
     // Create a mock user for testing
     const user = await prisma.user.create({
       data: {
-        id: randomUUID(),
         email: `test-${randomUUID()}@example.com`,
         password: 'password',
         name: 'Test User',

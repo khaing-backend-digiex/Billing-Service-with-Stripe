@@ -45,14 +45,14 @@ export class StripeWebhookController {
         signature,
       );
 
-      this.logger.log(`Received Stripe event: ${webhookEvent.type} (${webhookEvent.id})`);
+      this.logger.log(`📩 Received Stripe event: ${webhookEvent.type} (${webhookEvent.id})`);
 
       await this.webhookService.handleEvent(webhookEvent.data as any);
 
       return { received: true };
     } catch (error) {
       this.logger.error(
-        `Webhook error: ${error instanceof Error ? error.message : error}`,
+        `❌ Webhook error: ${error instanceof Error ? error.message : error}`,
       );
       throw new BadRequestException(error instanceof Error ? error.message : `Webhook error`);
     }

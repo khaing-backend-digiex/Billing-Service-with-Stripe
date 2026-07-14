@@ -6,7 +6,6 @@ import {
   HttpStatus,
   UseGuards,
   BadRequestException,
-  Query,
 } from "@nestjs/common";
 import {
   ApiTags,
@@ -20,7 +19,6 @@ import { CreateCheckoutDto } from "../payments/dto/create-checkout.dto";
 import { CreatePaymentIntentDto } from "./dto/create-payment-intent.dto";
 import { CreateCustomerDto } from "./dto/create-customer.dto";
 import { CancelSubscriptionDto } from "./dto/cancel-subscription.dto";
-import { UpgradeSubscriptionDto } from "./dto/upgrade-subscription.dto";
 import { ApiResponse } from "../common/dto/api-response.dto";
 import { GetUser } from "../common/decorators/get-user.decorator";
 import { RolesGuard } from "../common/guards/roles.guard";
@@ -173,94 +171,5 @@ export class PaymentsController {
 
     return new ApiResponse(HttpStatus.OK, "Subscription will cancel at period end", null);
   }
-
-  @Post("subscriptions/upgrade-tier")
-  @ApiOperation({ summary: "Upgrade subscription tier (same billing cycle, e.g. Pro to Ultra)" })
-  @SwaggerResponse({
-    status: 200,
-    description: "Subscription tier upgraded successfully",
-  })
-  async upgradeSubscriptionTier(
-    @GetUser("id") userId: string,
-    @Body() dto: UpgradeSubscriptionDto,
-  ) {
-    const updatedSub = await this.paymentsService.upgradeSubscriptionTier(
-      userId,
-      dto.pricingOptionId,
-      dto.provider,
-    );
-    return new ApiResponse(HttpStatus.OK, "Subscription tier upgraded successfully", updatedSub);
-  }
-
-  @Post("subscriptions/upgrade-cycle")
-  @ApiOperation({ summary: "Upgrade subscription billing cycle (e.g. Monthly to Yearly)" })
-  @SwaggerResponse({
-    status: 200,
-    description: "Subscription billing cycle upgraded successfully",
-  })
-  async upgradeSubscriptionCycle(
-    @GetUser("id") userId: string,
-    @Body() dto: UpgradeSubscriptionDto,
-  ) {
-    const updatedSub = await this.paymentsService.upgradeSubscriptionCycle(
-      userId,
-      dto.pricingOptionId,
-      dto.provider,
-    );
-    return new ApiResponse(HttpStatus.OK, "Subscription billing cycle upgraded successfully", updatedSub);
-  }
-
-  @Get("subscriptions/preview-upgrade-tier")
-  @ApiOperation({ summary: "Preview subscription tier upgrade (same billing cycle)" })
-  @SwaggerResponse({
-    status: 200,
-    description: "Returns the upcoming invoice preview for the tier upgrade",
-  })
-  async previewUpgradeSubscriptionTier(
-    @GetUser("id") userId: string,
-    @Query("pricingOptionId") pricingOptionId: string,
-    @Query("provider") provider?: PaymentProvider,
-  ) {
-    if (!pricingOptionId) {
-      throw new BadRequestException("pricingOptionId is required");
-    }
-    const preview = await this.paymentsService.previewUpgradeSubscriptionTier(
-      userId,
-      pricingOptionId,
-      provider,
-    );
-    const result = {
-      amount_due: preview.amount_due,
-      currency: preview.currency,
-      next_payment_date: preview.period_end,
-    };
-    return new ApiResponse(HttpStatus.OK, "Upcoming invoice preview generated successfully", result);
-  }
-
-  @Get("subscriptions/preview-upgrade-cycle")
-  @ApiOperation({ summary: "Preview subscription billing cycle upgrade (e.g. Monthly to Yearly)" })
-  @SwaggerResponse({
-    status: 200,
-    description: "Returns the upcoming invoice preview for the cycle upgrade",
-  })
-  async previewUpgradeSubscriptionCycle(
-    @GetUser("id") userId: string,
-    @Query("pricingOptionId") pricingOptionId: string,
-    @Query("provider") provider?: PaymentProvider,
-  ) {
-    if (!pricingOptionId) {
-      throw new BadRequestException("pricingOptionId is required");
-    }
-    const preview = await this.paymentsService.previewUpgradeSubscriptionCycle(
-      userId,
-      pricingOptionId,
-      provider,
-    );
-    const result = {
-      amount_due: preview.amount_due,
-      currency: preview.currency,
-      next_payment_date: preview.period_end,
-    };
-    return new ApiResponse(HttpStatus.OK, "Upcoming invoice preview generated successfully", result);
-  }
 }
+

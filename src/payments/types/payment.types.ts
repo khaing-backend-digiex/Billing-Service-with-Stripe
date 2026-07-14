@@ -52,7 +52,6 @@ export interface PaymentInvoiceLine {
   type: string;
   priceId?: string | null;
   subscriptionId?: string | null;
-  isProration?: boolean;
 }
 
 export interface CheckoutSession {

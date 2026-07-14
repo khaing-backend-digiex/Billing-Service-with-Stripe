@@ -5,7 +5,6 @@ import {
 } from "@nestjs/common";
 import { PrismaService } from "../database/prisma.service";
 import { User } from "@prisma/client";
-import { randomUUID } from "crypto";
 
 @Injectable()
 export class UsersService {
@@ -22,7 +21,6 @@ export class UsersService {
   }): Promise<User> {
     return this.prisma.user.create({
       data: {
-        id: randomUUID(),
         email: data.email,
         password: data.password,
         name: data.name,

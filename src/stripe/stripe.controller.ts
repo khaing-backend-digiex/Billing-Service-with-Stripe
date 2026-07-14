@@ -91,6 +91,7 @@ export class StripeController {
       }
     }
 
+    // Validate that the pricingOptionId belongs to a valid Subscription Pricing Option
     const pricingOption = await this.prisma.pricingOption.findUnique({
       where: { id: dto.pricingOptionId },
     });

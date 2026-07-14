@@ -25,7 +25,7 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly stripeService: StripeService,
-  ) { }
+  ) {}
   private readonly invoicePaymentFailed = "invoice.payment_failed";
   canHandle(eventType: string): boolean {
     return eventType === this.invoicePaymentFailed;
@@ -35,14 +35,14 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
     const stripeInvoice = event.data.object as Stripe.Invoice;
     this.logger.log(`invoice.payment_failed: ${stripeInvoice.id} (attempt #${stripeInvoice.attempt_count})`);
 
-    let line = stripeInvoice.lines?.data?.find(line => line.type === 'subscription') || stripeInvoice.lines?.data?.[0];
+    let line =stripeInvoice.lines?.data?.find(line => line.type === 'subscription') || stripeInvoice.lines?.data?.[0];
     let stripeSubscriptionId = line?.subscription ?? (line as any)?.parent?.subscription_item_details?.subscription ?? null;
 
     const result = await this.prisma.$transaction(async (tx) => {
       const subscription = stripeSubscriptionId
         ? await tx.subscription.findFirst({
-          where: { providerSubscriptionId: stripeSubscriptionId },
-        })
+            where: { providerSubscriptionId: stripeSubscriptionId },
+          })
         : null;
 
       const retryData = {
@@ -53,7 +53,7 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
           : null,
       };
 
-
+    
       let invoice: Invoice | null = null;
       if (subscription) {
         invoice = await tx.invoice.upsert({
@@ -83,7 +83,7 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
           return null;
         }
 
-
+       
       }
 
       if (!stripeSubscriptionId) return { invoice, subscription: null };
@@ -95,10 +95,7 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
 
       await tx.subscription.update({
         where: { id: subscription.id },
-        data: {
-          status: SubscriptionStatus.PAST_DUE,
-          subscriptionCreditsRemaining: 0,
-        },
+        data: { status: SubscriptionStatus.PAST_DUE },
       });
 
       await tx.subscriptionEvent.create({
@@ -118,11 +115,11 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
 
     if (!result?.subscription || !result.invoice || !stripeSubscriptionId) return;
 
-    await this.downgradeToFreeIfRetriesExhausted(result.invoice, result.subscription, stripeInvoice, stripeSubscriptionId);
+    await this.cancelIfRetriesExhausted(result.invoice, result.subscription, stripeInvoice, stripeSubscriptionId);
   }
 
-
-  private async downgradeToFreeIfRetriesExhausted(
+ 
+  private async cancelIfRetriesExhausted(
     invoice: Invoice,
     subscription: Subscription,
     stripeInvoice: Stripe.Invoice,
@@ -135,39 +132,10 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
 
     this.logger.warn(
       `Retries exhausted for subscription ${subscription.id} ` +
-      `(retries: ${retriesUsed}/${MAX_RETRY_ATTEMPTS}, window exceeded: ${windowExceeded}) – downgrading to free`,
+        `(retries: ${retriesUsed}/${MAX_RETRY_ATTEMPTS}, window exceeded: ${windowExceeded}) – cancelling`,
     );
 
-    const freePlan = await this.prisma.plan.findUnique({
-      where: { code: 'FREE' },
-      include: { pricingOptions: true },
-    });
-    const freePricingOption = freePlan?.pricingOptions?.[0];
-
-    if (!freePricingOption?.providerPriceId) {
-      await this.stripeService.cancelSubscriptionNow(stripeSubscriptionId);
-      return;
-    }
-
-    try {
-      await this.stripeService.upgradeSubscriptionTier(
-        subscription.userId,
-        freePricingOption.id,
-      );
-
-      await this.prisma.subscription.update({
-        where: { id: subscription.id },
-        data: {
-          status: SubscriptionStatus.ACTIVE,
-        },
-      });
-    } catch (error) {
-      this.logger.error(
-        `Failed to downgrade subscription ${subscription.id} to free`,
-        error,
-      );
-      await this.stripeService.cancelSubscriptionNow(stripeSubscriptionId);
-    }
+    await this.stripeService.cancelSubscriptionNow(stripeSubscriptionId);
 
     await this.prisma.invoice.update({
       where: { id: invoice.id },
