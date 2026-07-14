@@ -30,7 +30,7 @@ export class CreditRepository {
   constructor(private readonly prisma: PrismaService) {}
 
   async applyDelta(
-    userId: number,
+    userId: string,
     delta: number,
     entry: TransactionEntry,
     tx: TxClient,
@@ -79,7 +79,7 @@ export class CreditRepository {
   }
 
   async lockForConsume(
-    userId: number,
+    userId: String,
     tx: TxClient,
   ): Promise<LockedBalances> {
     // Lock subscription row
@@ -113,7 +113,7 @@ export class CreditRepository {
     };
   }
 
-  async getBalances(userId: number): Promise<LockedBalances> {
+  async getBalances(userId: string): Promise<LockedBalances> {
     const sub = await this.prisma.subscription.findUnique({
       where: { userId },
       select: { subscriptionCreditsRemaining: true },

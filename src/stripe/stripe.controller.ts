@@ -44,7 +44,7 @@ export class StripeController {
   @Roles(Role.ADMIN)
   @ApiOperation({ summary: "Create a Stripe customer for the current user" })
   async createCustomer(
-    @GetUser("id") userId: number,
+    @GetUser("id") userId: string,
     @Body() dto: CreateCustomerDto,
   ) {
     const user = await this.usersService.findById(userId);
@@ -69,7 +69,7 @@ export class StripeController {
   @Post("checkout/subscription")
   @ApiOperation({ summary: "Create a Stripe checkout session for a subscription" })
   async createSubscriptionCheckout(
-    @GetUser("id") userId: number,
+    @GetUser("id") userId: string,
     @Body() dto: CreateSubscriptionCheckoutDto,
   ) {
     const user = await this.usersService.findById(userId);
@@ -120,7 +120,7 @@ export class StripeController {
   @Post("checkout/addon")
   @ApiOperation({ summary: "Create a Stripe checkout session for an addon" })
   async createAddonCheckout(
-    @GetUser("id") userId: number,
+    @GetUser("id") userId: string,
     @Body() dto: CreateAddonCheckoutDto,
   ) {
     const user = await this.usersService.findById(userId);
@@ -163,7 +163,7 @@ export class StripeController {
   @Post("payment-intent")
   @ApiOperation({ summary: "Create a payment intent" })
   async createPaymentIntent(
-    @GetUser("id") userId: number,
+    @GetUser("id") userId: string,
     @Body() dto: CreatePaymentIntentDto,
   ) {
     const user = await this.usersService.findById(userId);
@@ -184,7 +184,7 @@ export class StripeController {
 
   @Post("billing-portal")
   @ApiOperation({ summary: "Create a billing portal session" })
-  async createBillingPortal(@GetUser("id") userId: number) {
+  async createBillingPortal(@GetUser("id") userId: string) {
     const user = await this.usersService.findById(userId);
 
     if (!user.providerCustomerId) {
@@ -202,7 +202,7 @@ export class StripeController {
 
   @Get("payments")
   @ApiOperation({ summary: "Get payment history for the current user" })
-  async getPayments(@GetUser("id") userId: number) {
+  async getPayments(@GetUser("id") userId: string) {
     const payments = await this.prisma.payment.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },

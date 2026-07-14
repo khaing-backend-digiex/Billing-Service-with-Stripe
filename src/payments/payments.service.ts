@@ -6,7 +6,7 @@ import { StripeService } from "../stripe/stripe.service";
 export class PaymentsService {
   constructor(private readonly stripeService: StripeService) { }
 
-  async createCustomer(userId: number, email: string, name?: string, provider?: PaymentProvider) {
+  async createCustomer(userId: string, email: string, name?: string, provider?: PaymentProvider) {
     if (provider && provider !== PaymentProvider.STRIPE) {
       throw new BadRequestException(`Payment provider ${provider} is not supported.`);
     }
@@ -15,7 +15,7 @@ export class PaymentsService {
   }
 
   async createCheckoutSession(
-    userId: number,
+    userId: string,
     priceId: string,
     mode: "payment" | "subscription" = "payment",
     customerId?: string,
@@ -36,7 +36,7 @@ export class PaymentsService {
   }
 
   async createPaymentIntent(
-    userId: number,
+    userId: string,
     amount: number,
     currency: string = "usd",
     description?: string,

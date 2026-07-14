@@ -17,7 +17,7 @@ model User {
   name               String?
   roles              String[]            @default(["user"])
   password           String              @default("$2a$10$jeaeQtlxxRmjRqVD/h9HnOC2GANB1oKKPAraPazA81nbgJcpOsIyG")
-  id                 String              @id
+  id                 String              @id @default(uuid())
   creditTransactions CreditTransaction[]
   creditWallet       CreditWallet?
   payments           Payment[]

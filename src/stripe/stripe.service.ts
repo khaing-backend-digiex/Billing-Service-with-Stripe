@@ -14,7 +14,7 @@ import { PaymentStatus, PaymentProvider, SubscriptionStatus } from "@prisma/clie
 import { PLAN_CODES } from "../common/constants/plan.constants";
 
 type StripeCustomerOwner = {
-  id: number;
+  id: string;
   email: string;
   name?: string | null;
   providerCustomerId?: string | null;
@@ -101,7 +101,7 @@ export class StripeService {
   }
 
   async createCustomer(
-    userId: number,
+    userId: string,
     email: string,
     name?: string,
   ): Promise<PaymentCustomer> {
@@ -177,7 +177,7 @@ export class StripeService {
   }
 
   async createCheckoutSession(
-    userId: number,
+    userId: string,
     priceId: string,
     mode: "payment" | "subscription" = "payment",
     customerId?: string,
@@ -196,7 +196,7 @@ export class StripeService {
   }
 
   async createPaymentIntent(
-    userId: number,
+    userId: string,
     amount: number,
     currency: string = "usd",
     description?: string,
