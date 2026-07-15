@@ -3,7 +3,7 @@ import Stripe from "stripe";
 import { SubscriptionEventType, SubscriptionStatus } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
-import { InvoiceService } from "../../invoice.service";
+import { InvoiceRecordService } from "../../invoice-record.service";
 import { StripeService } from "../../stripe.service";
 import {
   STRIPE_BILLING_REASON,
@@ -17,7 +17,7 @@ export class InvoicePaymentActionRequiredStrategy implements WebhookStrategy {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly invoiceService: InvoiceService,
+    private readonly invoiceService: InvoiceRecordService,
     private readonly stripeService: StripeService,
   ) {}
 

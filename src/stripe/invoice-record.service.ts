@@ -6,8 +6,8 @@ import { formatStripeAmountToDatabase } from "./utils/stripe-currency.util";
 
 
 @Injectable()
-export class InvoiceService {
-  private readonly logger = new Logger(InvoiceService.name);
+export class InvoiceRecordService {
+  private readonly logger = new Logger(InvoiceRecordService.name);
 
   constructor(private readonly prisma: PrismaService) {}
 

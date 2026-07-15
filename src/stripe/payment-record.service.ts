@@ -13,8 +13,8 @@ export interface RecordPaymentInput {
 }
 
 @Injectable()
-export class PaymentService {
-  private readonly logger = new Logger(PaymentService.name);
+export class PaymentRecordService {
+  private readonly logger = new Logger(PaymentRecordService.name);
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -22,7 +22,6 @@ export class PaymentService {
     return tx ?? this.prisma;
   }
 
-  /** Chốt chặn cấp credit addon hai lần khi Stripe gửi lại event. */
   async isSucceeded(
     providerPaymentId: string,
     tx?: Prisma.TransactionClient,

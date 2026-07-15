@@ -7,20 +7,12 @@ import { SetupIntentResult } from "../payments/types/payment.types";
 import { PLAN_CODES } from "../common/constants/plan.constants";
 import { UsersService } from "../users/users.service";
 
-/** Gói trả phí còn hiệu lực → xoá mất thẻ mặc định là mất gói ở kỳ gia hạn sau. */
 const LIVE_STATUSES: SubscriptionStatus[] = [
   SubscriptionStatus.ACTIVE,
   SubscriptionStatus.TRIALING,
   SubscriptionStatus.PAST_DUE,
 ];
 
-/**
- * Quản lý thẻ của user.
- *
- * Đây là COMMAND side: chỉ ra lệnh cho Stripe rồi trả về. Việc ghi DB do webhook
- * (`payment_method.*`) làm — xem [PaymentMethodSyncService]. Nhờ vậy nếu Stripe thành công
- * mà DB hỏng thì lần webhook sau vẫn chữa lại được, không kẹt trạng thái vĩnh viễn.
- */
 @Injectable()
 export class PaymentMethodsService {
   constructor(
@@ -30,10 +22,6 @@ export class PaymentMethodsService {
     private readonly paymentMethodSync: PaymentMethodSyncService,
   ) {}
 
-  /**
-   * Số thẻ KHÔNG đi qua backend: client dùng clientSecret này để gửi thẻ thẳng lên Stripe
-   * qua Elements. Ranh giới PCI nằm ở đây.
-   */
   async createSetupIntent(userId: string): Promise<SetupIntentResult> {
     const user = await this.usersService.findById(userId);
     const customerId = await this.stripeService.ensureValidCustomerId(user);
@@ -44,7 +32,6 @@ export class PaymentMethodsService {
     const user = await this.usersService.findById(userId);
 
     if (user.providerCustomerId) {
-      // Kéo về thẻ user đã lưu trên Stripe từ trước feature này (mua qua Checkout cũ).
       await this.paymentMethodSync.getDefaultForUser(userId, user.providerCustomerId);
     }
 
@@ -87,7 +74,6 @@ export class PaymentMethodsService {
     await this.paymentMethodSync.syncDetached(paymentMethod.providerPaymentMethodId);
   }
 
-  /** Lọc theo userId ngay trong query: không để user này thao tác lên thẻ của user khác. */
   private async findOwned(userId: string, id: string): Promise<PaymentMethod> {
     const paymentMethod = await this.prisma.paymentMethod.findFirst({
       where: { id, userId },

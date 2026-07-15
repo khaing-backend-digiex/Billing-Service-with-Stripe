@@ -17,11 +17,6 @@ export class ConsumeCreditsDto {
   @IsString()
   description?: string;
 
-  /**
-   * BẮT BUỘC. Chỉ client mới biết hai lần gọi có phải cùng một request hay không (retry sau
-   * timeout, double-click, job chạy lại). Nếu server tự sinh khoá thì mỗi lần retry là một
-   * khoá mới → trừ credit hai lần. Webhook idempotency không cứu được ca này.
-   */
   @IsNotEmpty()
   @IsString()
   idempotencyKey!: string;

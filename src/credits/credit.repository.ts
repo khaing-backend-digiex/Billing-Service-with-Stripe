@@ -17,7 +17,6 @@ export interface TransactionEntry {
 export interface LockedBalances {
   subscriptionRemaining: number;
   addonCredits: number;
-  /** Dẫn xuất từ gói hiện tại – xem `isAddonUsable`. Không đọc từ `CreditWallet.is_active` nữa. */
   isActive: boolean;
 }
 
