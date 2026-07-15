@@ -11,22 +11,22 @@ export class CreateUserDto {
   @ApiProperty({ example: "jane_doe" })
   @IsString()
   @IsNotEmpty()
-  username: string;
+  username!: string;
 
   @ApiProperty({ example: "securePassword123" })
   @IsString()
   @IsNotEmpty()
-  password: string;
+  password!: string;
 
   @ApiProperty({ example: "Jane Doe" })
   @IsString()
   @IsNotEmpty()
-  name: string;
+  name!: string;
 
   @ApiProperty({ example: "jane@example.com" })
   @IsEmail()
   @IsNotEmpty()
-  email: string;
+  email!: string;
 
   @ApiPropertyOptional({ example: "1992-05-20" })
   @IsString()

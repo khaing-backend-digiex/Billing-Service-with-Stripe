@@ -6,7 +6,7 @@ export class UpgradeSubscriptionDto {
   @ApiProperty({ description: "The ID of the new pricing option to upgrade to" })
   @IsNotEmpty()
   @IsString()
-  pricingOptionId: string;
+  pricingOptionId!: string;
 
   @ApiPropertyOptional({ enum: PaymentProvider, default: PaymentProvider.STRIPE })
   @IsOptional()

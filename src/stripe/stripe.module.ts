@@ -28,7 +28,6 @@ import { CreditsModule } from "../credits/credits.module";
   imports: [UsersModule, PricingModule, CreditsModule],
   controllers: [StripeController, StripeWebhookController],
   providers: [
-
     StripeService,
     StripeWebhookService,
     FreePlanDowngradeService,

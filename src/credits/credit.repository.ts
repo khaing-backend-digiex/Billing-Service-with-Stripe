@@ -75,10 +75,6 @@ export class CreditRepository {
   }
 
   async lockForConsume(userId: String, tx: TxClient): Promise<LockedBalances> {
-    // Lock subscription row
-    // `FOR UPDATE OF s`: chỉ khoá hàng Subscription. Để `FOR UPDATE` trần thì Postgres khoá
-    // luôn PricingOption và Plan – mà Plan dùng chung cho MỌI user, tức là mọi người cùng gói
-    // sẽ bị xếp hàng sau nhau.
     const subRows = await tx.$queryRaw<
       [{ subscriptionCreditsRemaining: number; status: SubscriptionStatus; planCode: string }] | []
     >`
@@ -108,25 +104,13 @@ export class CreditRepository {
     };
   }
 
-  async getBalances(userId: string): Promise<LockedBalances> {
-    const sub = await this.prisma.subscription.findUnique({
-      where: { userId },
-      select: {
-        subscriptionCreditsRemaining: true,
-        status: true,
-        pricingOption: { select: { plan: { select: { code: true } } } },
-      },
-    });
-
-    const wallet = await this.prisma.creditWallet.findUnique({
-      where: { userId },
-      select: { addonCredits: true },
-    });
-
-    return {
-      subscriptionRemaining: sub?.subscriptionCreditsRemaining ?? 0,
-      addonCredits: wallet?.addonCredits ?? 0,
-      isActive: isAddonUsable(sub?.pricingOption?.plan?.code, sub?.status),
-    };
+  async lockForRevokeSubscription(userId: String, tx: TxClient): Promise<number> {
+    const rows = await tx.$queryRaw<[{ subscriptionCreditsRemaining: number }] | []>`
+      SELECT "subscriptionCreditsRemaining"
+      FROM "Subscription"
+      WHERE "userId" = ${userId}
+      FOR UPDATE
+    `;
+    return rows[0]?.subscriptionCreditsRemaining ?? 0;
   }
 }
