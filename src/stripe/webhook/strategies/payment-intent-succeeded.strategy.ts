@@ -1,15 +1,11 @@
 import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
-import {
-  PaymentProvider,
-  PaymentStatus,
-  CreditTransactionType,
-  ReferenceType,
-} from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
-import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
+import { PaymentService } from "../../payment.service";
 import { CreditService } from "../../../credits/credit.service";
+import { creditKey } from "../../../credits/credit.types";
+import { STRIPE_METADATA_KEY } from "../../../common/constants/stripe.constants";
 
 @Injectable()
 export class PaymentIntentSucceededStrategy implements WebhookStrategy {
@@ -17,7 +13,8 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly creditService: CreditService
+    private readonly paymentService: PaymentService,
+    private readonly creditService: CreditService,
   ) {}
 
   private readonly paymentIntentSucceeded = "payment_intent.succeeded";
@@ -29,8 +26,8 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
     const paymentIntent = event.data.object as Stripe.PaymentIntent;
     this.logger.log(`payment_intent.succeeded: ${paymentIntent.id}`);
 
-    const addonPackageId = paymentIntent.metadata?.addonPackageId;
-    const userIdStr = paymentIntent.metadata?.userId;
+    const addonPackageId = paymentIntent.metadata?.[STRIPE_METADATA_KEY.ADDON_PACKAGE_ID];
+    const userIdStr = paymentIntent.metadata?.[STRIPE_METADATA_KEY.USER_ID];
 
     if (!addonPackageId || !userIdStr) {
       this.logger.log(
@@ -40,10 +37,7 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
     }
     const userId = userIdStr;
 
-    const existing = await this.prisma.payment.findUnique({
-      where: { providerPaymentId: paymentIntent.id },
-    });
-    if (existing && existing.status === PaymentStatus.SUCCEEDED) {
+    if (await this.paymentService.isSucceeded(paymentIntent.id)) {
       this.logger.log(
         `Payment for intent ${paymentIntent.id} already SUCCEEDED – skipping`,
       );
@@ -61,23 +55,16 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      const payment = await tx.payment.upsert({
-        where: { providerPaymentId: paymentIntent.id },
-        create: {
+      const payment = await this.paymentService.recordSucceeded(
+        {
           userId,
-          addonPackageId,
-          provider: PaymentProvider.STRIPE,
           providerPaymentId: paymentIntent.id,
-          amount: formatStripeAmountToDatabase(
-            paymentIntent.amount_received,
-            paymentIntent.currency,
-          ),
+          providerAmount: paymentIntent.amount_received,
           currency: paymentIntent.currency,
-          status: PaymentStatus.SUCCEEDED,
-          paidAt: new Date(),
+          addonPackageId,
         },
-        update: { status: PaymentStatus.SUCCEEDED, paidAt: new Date() },
-      });
+        tx,
+      );
 
       await this.creditService.grantAddonCredits(
         {
@@ -85,7 +72,7 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
           amount: addon.credits,
           description: `Purchased Addon: ${addon.name}`,
           referenceId: payment.id,
-          idempotencyKey: `payment_intent:${paymentIntent.id}`,
+          idempotencyKey: creditKey.addonPurchase(paymentIntent.id),
         },
         tx,
       );

@@ -1,20 +1,19 @@
+
 import { Injectable, Logger } from "@nestjs/common";
 import {
-  CreditTransactionType,
-  ReferenceType,
-  SubscriptionEventType,
-  PaymentProvider,
-  SubscriptionStatus,
   InvoiceStatus,
-  PaymentStatus,
+  SubscriptionEventType,
+  SubscriptionStatus,
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
 import { PricingService } from "../../pricing/pricing.service";
+import { InvoiceService } from "../invoice.service";
+import { PaymentService } from "../payment.service";
 import { PaymentInvoice } from "../../payments/types/payment.types";
-import { formatStripeAmountToDatabase } from "../utils/stripe-currency.util";
 import { addCalendarMonths } from "../../common/utils/date.util";
 import { PLAN_CODES } from "../../common/constants/plan.constants";
 import { CreditService } from "../../credits/credit.service";
+import { creditKey } from "../../credits/credit.types";
 
 @Injectable()
 export class PaidInvoiceSyncService {
@@ -23,6 +22,8 @@ export class PaidInvoiceSyncService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly pricingService: PricingService,
+    private readonly invoiceService: InvoiceService,
+    private readonly paymentService: PaymentService,
     private readonly creditService: CreditService,
   ) {}
 
@@ -40,25 +41,10 @@ export class PaidInvoiceSyncService {
       );
     }
 
-    const invoice = await this.prisma.invoice.upsert({
-      where: { providerInvoiceId: paidInvoice.id },
-      update: {},
-      create: {
-        subscriptionId: subscription.id,
-        provider: PaymentProvider.STRIPE,
-        providerInvoiceId: paidInvoice.id,
-        amount: formatStripeAmountToDatabase(
-          paidInvoice.amountDue,
-          paidInvoice.currency,
-        ),
-        currency: paidInvoice.currency,
-        billingReason: paidInvoice.billingReason ?? null,
-        status: InvoiceStatus.OPEN,
-        dueAt: paidInvoice.dueDate
-          ? new Date(paidInvoice.dueDate * 1000)
-          : new Date(paidInvoice.periodEnd * 1000),
-      },
-    });
+    const invoice = await this.invoiceService.ensureLocal(
+      paidInvoice,
+      subscription.id,
+    );
 
     if (invoice.status === InvoiceStatus.PAID) {
       this.logger.log(`Invoice ${invoice.id} already PAID – skipping`);
@@ -100,6 +86,20 @@ export class PaidInvoiceSyncService {
     const resetMonths = Math.max(1, Math.round(plan.resetIntervalDay / 30));
     const nextCreditResetAt = addCalendarMonths(periodStart, resetMonths);
 
+    const stripeSubscriptionId =
+      paidInvoice.subscriptionId ?? lineToUse?.subscriptionId ?? null;
+    const isStale = periodStart < subscription.currentPeriodStart;
+    const shouldRepoint =
+      stripeSubscriptionId !== null &&
+      stripeSubscriptionId !== subscription.providerSubscriptionId &&
+      !isStale;
+
+    if (stripeSubscriptionId !== null && !shouldRepoint && isStale) {
+      this.logger.warn(
+        `Invoice ${paidInvoice.id} belongs to an older period – keeping providerSubscriptionId ${subscription.providerSubscriptionId}`,
+      );
+    }
+
     const isInitial = paidInvoice.billingReason === "subscription_create";
     const eventType = isInitial
       ? SubscriptionEventType.CREATED
@@ -107,20 +107,16 @@ export class PaidInvoiceSyncService {
     const description = isInitial
       ? `Credits granted – ${plan.name} (initial)`
       : `Credits granted – ${plan.name} (renewal)`;
-
     const paymentIntentId = paidInvoice.paymentIntentId ?? null;
 
     await this.prisma.$transaction(async (tx) => {
-      const claimed = await tx.invoice.updateMany({
-        where: { id: invoice.id, status: { not: InvoiceStatus.PAID } },
-        data: {
-          status: InvoiceStatus.PAID,
-          billingReason: paidInvoice.billingReason ?? null,
-          paidAt: new Date(),
-        },
-      });
+      const claimed = await this.invoiceService.claimAsPaid(
+        tx,
+        invoice.id,
+        paidInvoice.billingReason ?? null,
+      );
 
-      if (claimed.count === 0) {
+      if (!claimed) {
         this.logger.log(
           `Invoice ${invoice.id} already PAID (concurrent delivery) – skipping`,
         );
@@ -128,23 +124,16 @@ export class PaidInvoiceSyncService {
       }
 
       if (paymentIntentId) {
-        await tx.payment.upsert({
-          where: { providerPaymentId: paymentIntentId },
-          create: {
+        await this.paymentService.recordSucceeded(
+          {
             userId: subscription.userId,
-            invoiceId: invoice.id,
-            provider: PaymentProvider.STRIPE,
             providerPaymentId: paymentIntentId,
-            amount: formatStripeAmountToDatabase(
-              paidInvoice.amountPaid,
-              paidInvoice.currency,
-            ),
+            providerAmount: paidInvoice.amountPaid,
             currency: paidInvoice.currency,
-            status: PaymentStatus.SUCCEEDED,
-            paidAt: new Date(),
+            invoiceId: invoice.id,
           },
-          update: { status: PaymentStatus.SUCCEEDED, paidAt: new Date() },
-        });
+          tx,
+        );
       }
 
       await tx.subscription.update({
@@ -155,45 +144,49 @@ export class PaidInvoiceSyncService {
           currentPeriodStart: periodStart,
           currentPeriodEnd: periodEnd,
           nextCreditResetAt,
+          ...(shouldRepoint
+            ? { providerSubscriptionId: stripeSubscriptionId }
+            : {}),
         },
       });
+
+      if (shouldRepoint) {
+        this.logger.log(
+          `Subscription ${subscription.id} repointed: ${subscription.providerSubscriptionId} → ${stripeSubscriptionId}`,
+        );
+      }
       this.logger.log(
         `Subscription ${subscription.id} updated: status=ACTIVE, currentPeriodStart=${periodStart.toISOString()}, currentPeriodEnd=${periodEnd.toISOString()}, nextCreditResetAt=${nextCreditResetAt.toISOString()}`,
       );
 
-      // Revoke old credits (if any)
-      await this.creditService.revokeSubscriptionCredits(
-        {
-          userId: subscription.userId,
-          description: `Unused credits expired before renewal`,
-          referenceId: invoice.id,
-          idempotencyKey: `revoke_sub_${invoice.id}`,
-        },
-        tx,
-      );
+      const isUpdate = paidInvoice.billingReason === "subscription_update";
 
-      // Grant new credits
-      await this.creditService.grantSubscriptionAllowance(
-        {
-          userId: subscription.userId,
-          amount: plan.renewalCredits,
-          description,
-          referenceId: invoice.id,
-          idempotencyKey: `grant_sub_${invoice.id}`,
-        },
-        tx,
-      );
+      if (!isUpdate) {
+        await this.creditService.revokeSubscriptionCredits(
+          {
+            userId: subscription.userId,
+            description: `Unused credits expired before renewal`,
+            referenceId: invoice.id,
+            idempotencyKey: `revoke_sub_${invoice.id}`,
+          },
+          tx,
+        );
 
-      const walletUpdate = await tx.creditWallet.updateMany({
-        where: { userId: subscription.userId },
-        data: { is_active: plan.code !== PLAN_CODES.FREE },
-      });
-
-      if (walletUpdate.count === 0) {
-        this.logger.log(
-          `No credit wallet found for user ${subscription.userId}, skipping wallet update`,
+        await this.creditService.grantSubscriptionAllowance(
+          {
+            userId: subscription.userId,
+            amount: plan.renewalCredits,
+            description,
+            referenceId: invoice.id,
+            idempotencyKey: `grant_sub_${invoice.id}`,
+          },
+          tx,
         );
       }
+
+      // Không còn bật/tắt ví ở đây: quyền tiêu addon được dẫn xuất từ gói hiện tại lúc đọc
+      // (`isAddonUsable`). Trước đây `updateMany` này không tạo row, nên user mua addon
+      // trước khi ví tồn tại sẽ có credit không bao giờ tiêu được.
 
       await tx.subscriptionEvent.create({
         data: {

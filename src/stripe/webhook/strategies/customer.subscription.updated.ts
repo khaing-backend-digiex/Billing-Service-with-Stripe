@@ -26,6 +26,7 @@ const CANCELLATION_REASON = {
 
 import { StripeService } from "../../stripe.service";
 import { CreditService } from "../../../credits/credit.service";
+import { creditKey } from "../../../credits/credit.types";
 
 @Injectable()
 export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
@@ -152,15 +153,13 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
             userId: subscription.userId,
             description: "Credits forfeited – subscription expired (payment failed)",
             referenceId: subscription.id,
-            idempotencyKey: `expire_sub_${stripeSubscription.id}`,
+            idempotencyKey: creditKey.subscriptionRevoke(subscription.id, stripeSubscription.id),
           },
           tx,
         );
 
-        await tx.creditWallet.updateMany({
-          where: { userId: subscription.userId },
-          data: { is_active: false },
-        });
+        // Ví addon KHÔNG bị đụng tới: giữ nguyên số dư, chỉ tạm khoá vì gói hết hiệu lực.
+        // Xem `isAddonUsable`.
       });
 
       this.logger.log(

@@ -1,6 +1,12 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { Cron, CronExpression } from "@nestjs/schedule";
-import { User } from "@prisma/client";
+import {
+  CreditTransactionType,
+  ReferenceType,
+  SubscriptionStatus,
+  User,
+} from "@prisma/client";
+import { PrismaService } from "../database/prisma.service";
 import { StripeService } from "../stripe/stripe.service";
 import { PaymentSubscription } from "../payments/types/payment.types";
 import { UsersService } from "../users/users.service";
@@ -26,10 +32,16 @@ export class FreePlanReconciliationCron {
     private readonly usersService: UsersService,
     private readonly subscriptionSync: SubscriptionSyncService,
     private readonly paidInvoiceSync: PaidInvoiceSyncService,
+    private readonly prisma: PrismaService,
   ) { }
 
   @Cron(CronExpression.EVERY_HOUR)
   async reconcile(): Promise<void> {
+    await this.reconcileOnboarding();
+    await this.reconcileMissingSettlement();
+  }
+
+  private async reconcileOnboarding(): Promise<void> {
     const users = await this.usersService.findIncompleteOnboardingUsers({
       createdBefore: new Date(Date.now() - GRACE_MS),
       limit: BATCH_SIZE,
@@ -56,6 +68,73 @@ export class FreePlanReconciliationCron {
     } else {
       this.logger.log(`Free plan reconciliation done: ${summary}`);
     }
+  }
+
+  private async reconcileMissingSettlement(): Promise<void> {
+    const candidates = await this.prisma.subscription.findMany({
+      where: {
+        status: SubscriptionStatus.ACTIVE,
+        providerSubscriptionId: { not: null },
+        subscriptionCreditsRemaining: 0,
+        currentPeriodStart: { lt: new Date(Date.now() - GRACE_MS) },
+        pricingOption: { plan: { renewalCredits: { gt: 0 } } },
+      },
+      take: BATCH_SIZE,
+    });
+
+    if (candidates.length === 0) return;
+
+    const grants = await this.prisma.creditTransaction.findMany({
+      where: {
+        type: CreditTransactionType.RENEWAL,
+        referenceType: ReferenceType.SUBSCRIPTION,
+        referenceId: { in: candidates.map((s) => s.id) },
+      },
+      select: { referenceId: true, createdAt: true },
+    });
+
+    const stuck = candidates.filter(
+      (sub) =>
+        !grants.some(
+          (grant) =>
+            grant.referenceId === sub.id &&
+            grant.createdAt >= sub.currentPeriodStart,
+        ),
+    );
+
+    if (stuck.length === 0) return;
+
+    this.logger.warn(
+      `Missing settlement: ${stuck.length} active subscription(s) never granted credits for the current period`,
+    );
+
+    let healed = 0;
+    for (const sub of stuck) {
+      try {
+        const latestPaid = await this.stripeService.getLatestPaidInvoice(
+          sub.providerSubscriptionId!,
+        );
+
+        if (!latestPaid) {
+          this.logger.warn(
+            `Subscription ${sub.id}: no paid invoice on Stripe – nothing to settle`,
+          );
+          continue;
+        }
+
+        await this.paidInvoiceSync.applyPaidInvoice(latestPaid, sub.id);
+        healed += 1;
+        this.logger.log(
+          `Subscription ${sub.id}: settled from Stripe invoice ${latestPaid.id}`,
+        );
+      } catch (err) {
+        this.logger.error(
+          `Missing-settlement heal failed for subscription ${sub.id}: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
+
+    this.logger.log(`Missing settlement done: healed=${healed}/${stuck.length}`);
   }
 
   private async reconcileUser(user: User): Promise<ReconcileOutcome> {

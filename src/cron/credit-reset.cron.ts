@@ -9,6 +9,7 @@ import {
 import { PrismaService } from "../database/prisma.service";
 import { addCalendarMonths } from "../common/utils/date.util";
 import { CreditService } from "../credits/credit.service";
+import { creditKey } from "../credits/credit.types";
 
 @Injectable()
 export class CreditResetCronService {
@@ -87,25 +88,22 @@ export class CreditResetCronService {
             return false;
           }
 
-          // Revoke unused credits
-          await this.creditService.revokeSubscriptionCredits(
-            {
-              userId: subscription.userId,
-              description: `Unused credits expired before monthly reset`,
-              referenceId: subscription.id,
-              idempotencyKey: `cron_revoke_${subscription.id}_${now.getTime()}`,
-            },
-            tx,
-          );
-
-          // Grant new monthly credits
-          await this.creditService.grantSubscriptionAllowance(
+          // Cùng một thuật toán "sang kỳ" với invoice.paid, chỉ khác mốc chống trùng.
+          //
+          // Khoá phải neo vào `nextCreditResetAt` (mốc reset ĐANG xử lý), không phải thời
+          // điểm chạy: khoá theo `Date.now()` thì mỗi lần cron chạy sinh một khoá mới, tức
+          // là không chống trùng được gì cả.
+          await this.creditService.resetSubscriptionAllowance(
             {
               userId: subscription.userId,
               amount: plan.renewalCredits,
-              description: `Credits reset – ${plan.name} (monthly cycle)`,
+              grantDescription: `Credits reset – ${plan.name} (monthly cycle)`,
+              revokeDescription: `Unused credits expired before monthly reset – ${plan.name}`,
               referenceId: subscription.id,
-              idempotencyKey: `cron_grant_${subscription.id}_${now.getTime()}`,
+              idempotencyKey: creditKey.subscriptionReset(
+                subscription.id,
+                subscription.nextCreditResetAt,
+              ),
             },
             tx,
           );

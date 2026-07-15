@@ -8,6 +8,7 @@ import { AuthModule } from "./auth/auth.module";
 import { UsersModule } from "./users/users.module";
 import { StripeModule } from "./stripe/stripe.module";
 import { PaymentsModule } from "./payments/payments.module";
+import { PaymentMethodsModule } from "./payment-methods/payment-methods.module";
 import { HealthController } from "./health/health.controller";
 import { JwtAuthGuard } from "./common/guards/jwt-auth.guard";
 import { PricingModule } from "./pricing/pricing.module";
@@ -28,6 +29,7 @@ import { CreditsModule } from "./credits/credits.module";
     AuthModule,
     StripeModule,
     PaymentsModule,
+    PaymentMethodsModule,
     PricingModule,
     CronModule,
     ProvisioningModule,

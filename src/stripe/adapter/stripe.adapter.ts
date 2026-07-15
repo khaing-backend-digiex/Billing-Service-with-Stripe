@@ -9,27 +9,63 @@ import {
   PaymentCustomer,
   PaymentSubscription,
   PaymentInvoice,
-  CheckoutSession,
-  PaymentIntentResult,
+  PaymentMethodDetails,
+  SetupIntentResult,
+  OffSessionPaymentResult,
+  OffSessionSubscriptionResult,
   BillingPortalSession,
   WebhookEvent,
-  CreateCheckoutParams,
-  CreatePaymentIntentParams,
+  CreateOffSessionSubscriptionParams,
+  CreateOffSessionPaymentParams,
   RecurringInterval,
 } from "../../payments/types/payment.types";
 import Stripe from "stripe";
 import { SubscriptionStatus } from "@prisma/client";
+import {
+  OFF_SESSION_STATUS,
+  OffSessionStatus,
+} from "../../common/constants/payment.constants";
+import {
+  STRIPE_ERROR_CODE,
+  STRIPE_SUBSCRIPTION_STATUS,
+  STRIPE_PAYMENT_INTENT_STATUS,
+  STRIPE_PAYMENT_METHOD_TYPE,
+  STRIPE_SETUP_INTENT_USAGE,
+  STRIPE_PAYMENT_BEHAVIOR,
+  STRIPE_ALLOW_REDIRECTS,
+  STRIPE_EXPAND,
+} from "../../common/constants/stripe.constants";
 
 const STRIPE_STATUS_MAP: Record<string, SubscriptionStatus> = {
-  active: SubscriptionStatus.ACTIVE,
-  past_due: SubscriptionStatus.PAST_DUE,
-  canceled: SubscriptionStatus.CANCELLED,
-  unpaid: SubscriptionStatus.PAST_DUE,
-  trialing: SubscriptionStatus.TRIALING,
-  paused: SubscriptionStatus.PAUSED,
-  incomplete: SubscriptionStatus.PAST_DUE,
-  incomplete_expired: SubscriptionStatus.EXPIRED,
+  [STRIPE_SUBSCRIPTION_STATUS.ACTIVE]: SubscriptionStatus.ACTIVE,
+  [STRIPE_SUBSCRIPTION_STATUS.PAST_DUE]: SubscriptionStatus.PAST_DUE,
+  [STRIPE_SUBSCRIPTION_STATUS.CANCELED]: SubscriptionStatus.CANCELLED,
+  [STRIPE_SUBSCRIPTION_STATUS.UNPAID]: SubscriptionStatus.PAST_DUE,
+  [STRIPE_SUBSCRIPTION_STATUS.TRIALING]: SubscriptionStatus.TRIALING,
+  [STRIPE_SUBSCRIPTION_STATUS.PAUSED]: SubscriptionStatus.PAUSED,
+  // Chưa từng thanh toán thành công lần nào – KHÔNG phải PAST_DUE (đang trễ hạn).
+  // Off-session làm trạng thái này trở nên thường xuyên: thẻ bị từ chối hoặc cần 3DS.
+  [STRIPE_SUBSCRIPTION_STATUS.INCOMPLETE]: SubscriptionStatus.INCOMPLETE,
+  [STRIPE_SUBSCRIPTION_STATUS.INCOMPLETE_EXPIRED]: SubscriptionStatus.EXPIRED,
 };
+
+/**
+ * Trạng thái PaymentIntent của Stripe → trạng thái off-session của hệ thống.
+ * `requires_confirmation` gộp vào `REQUIRES_ACTION`: cả hai đều cần client xác nhận.
+ */
+const OFF_SESSION_STATUS_MAP: Record<string, OffSessionStatus> = {
+  [STRIPE_PAYMENT_INTENT_STATUS.SUCCEEDED]: OFF_SESSION_STATUS.SUCCEEDED,
+  [STRIPE_PAYMENT_INTENT_STATUS.PROCESSING]: OFF_SESSION_STATUS.PROCESSING,
+  [STRIPE_PAYMENT_INTENT_STATUS.REQUIRES_ACTION]: OFF_SESSION_STATUS.REQUIRES_ACTION,
+  [STRIPE_PAYMENT_INTENT_STATUS.REQUIRES_CONFIRMATION]: OFF_SESSION_STATUS.REQUIRES_ACTION,
+  [STRIPE_PAYMENT_INTENT_STATUS.REQUIRES_PAYMENT_METHOD]: OFF_SESSION_STATUS.REQUIRES_PAYMENT_METHOD,
+};
+
+function toOffSessionStatus(stripeStatus?: string | null): OffSessionStatus {
+  return (
+    OFF_SESSION_STATUS_MAP[stripeStatus ?? ""] ?? OFF_SESSION_STATUS.REQUIRES_PAYMENT_METHOD
+  );
+}
 
 @Injectable()
 export class StripeAdapter implements IPaymentAdapter {
@@ -127,69 +163,88 @@ export class StripeAdapter implements IPaymentAdapter {
     return this.mapInvoice(invoices.data[0]);
   }
 
-  async createCheckoutSession(params: CreateCheckoutParams): Promise<CheckoutSession> {
-    try {
-      const sessionData: Stripe.Checkout.SessionCreateParams = {
-        payment_method_types: ["card"],
-        line_items: [{ price: params.priceId, quantity: 1 }],
-        mode: params.mode,
-        success_url: params.successUrl || this.configService.get<string>("STRIPE_SUCCESS_URL", "http://localhost:3000/stripe/success?session_id={CHECKOUT_SESSION_ID}"),
-        cancel_url: params.cancelUrl || this.configService.get<string>("STRIPE_CANCEL_URL", "http://localhost:3000/stripe/cancel?session_id={CHECKOUT_SESSION_ID}"),
-        metadata: params.metadata,
-      };
+  async createOffSessionSubscription(
+    params: CreateOffSessionSubscriptionParams,
+  ): Promise<OffSessionSubscriptionResult> {
+    const sub = await this.stripe.subscriptions.create({
+      customer: params.customerId,
+      items: [{ price: params.priceId }],
+      default_payment_method: params.paymentMethodId,
+      payment_behavior: STRIPE_PAYMENT_BEHAVIOR.ALLOW_INCOMPLETE,
+      off_session: true,
+      metadata: params.metadata,
+      expand: [STRIPE_EXPAND.LATEST_INVOICE_PAYMENT_INTENT],
+    });
 
-      if (params.mode === "payment") {
-        sessionData.payment_intent_data = { metadata: params.metadata };
-      } else if (params.mode === "subscription") {
-        sessionData.subscription_data = { metadata: params.subscriptionMetadata };
-      }
+    const intent = this.extractInvoicePaymentIntent(sub.latest_invoice);
+    this.logger.log(
+      `Created off-session subscription ${sub.id} for customer ${params.customerId} (status: ${sub.status})`,
+    );
 
-      if (params.customerId) {
-        sessionData.customer = params.customerId;
-      }
-
-      const session = await this.stripe.checkout.sessions.create(sessionData);
-      return { id: session.id, url: session.url };
-    } catch (error) {
-      this.logger.error(`Failed to create checkout session: ${error}`);
-      throw new BadRequestException("Failed to create checkout session");
-    }
+    return {
+      subscription: this.mapSubscription(sub),
+      paymentIntentId: intent?.id ?? null,
+  
+      status:
+        sub.status === STRIPE_SUBSCRIPTION_STATUS.ACTIVE
+          ? OFF_SESSION_STATUS.SUCCEEDED
+          : toOffSessionStatus(intent?.status),
+      clientSecret: intent?.client_secret ?? null,
+    };
   }
 
-  async createPaymentIntent(params: CreatePaymentIntentParams): Promise<PaymentIntentResult> {
+  async createOffSessionPayment(
+    params: CreateOffSessionPaymentParams,
+  ): Promise<OffSessionPaymentResult> {
     try {
-      const intentData: Stripe.PaymentIntentCreateParams = {
+      const intent = await this.stripe.paymentIntents.create({
         amount: params.amount,
         currency: params.currency,
+        customer: params.customerId,
+        payment_method: params.paymentMethodId,
         description: params.description,
         metadata: params.metadata,
-        automatic_payment_methods: { enabled: true },
-      };
+        confirm: true,
+        off_session: true,
+        automatic_payment_methods: {
+          enabled: true,
+          allow_redirects: STRIPE_ALLOW_REDIRECTS.NEVER,
+        },
+      });
 
-      if (params.customerId) {
-        intentData.customer = params.customerId;
-      }
-
-      const paymentIntent = await this.stripe.paymentIntents.create(intentData);
       return {
-        id: paymentIntent.id,
-        clientSecret: paymentIntent.client_secret,
-        amount: paymentIntent.amount,
-        currency: paymentIntent.currency,
-        status: paymentIntent.status,
-        metadata: paymentIntent.metadata,
+        paymentIntentId: intent.id,
+        status: toOffSessionStatus(intent.status),
+        clientSecret: intent.client_secret,
       };
     } catch (error) {
-      this.logger.error(`Failed to create payment intent: ${error}`);
-      throw new BadRequestException("Failed to create payment intent");
+      const intent = (error as Stripe.StripeRawError)?.payment_intent;
+      if (!intent) {
+        this.logger.error(`Failed to create off-session payment: ${error}`);
+        throw new BadRequestException("Failed to charge the saved payment method");
+      }
+
+      this.logger.warn(
+        `Off-session payment ${intent.id} needs attention: ${intent.status} ` +
+          `(${(error as Stripe.StripeRawError).code})`,
+      );
+
+      return {
+        paymentIntentId: intent.id,
+        status: toOffSessionStatus(intent.status),
+        clientSecret: intent.client_secret ?? null,
+      };
     }
   }
 
   async createBillingPortalSession(customerId: string, returnUrl?: string): Promise<BillingPortalSession> {
     try {
+      const configuration = this.configService.get<string>("STRIPE_PORTAL_CONFIGURATION_ID");
+
       const session = await this.stripe.billingPortal.sessions.create({
         customer: customerId,
         return_url: returnUrl || this.configService.get<string>("STRIPE_SUCCESS_URL", "http://localhost:3000"),
+        ...(configuration ? { configuration } : {}),
       });
       return { url: session.url };
     } catch (error) {
@@ -198,22 +253,67 @@ export class StripeAdapter implements IPaymentAdapter {
     }
   }
 
-  async hasDefaultPaymentMethod(customerId: string): Promise<boolean> {
-    try {
-      const customer = await this.stripe.customers.retrieve(customerId) as Stripe.Customer;
-      if (customer.deleted) return false;
-      if (customer.invoice_settings?.default_payment_method) return true;
-      if (customer.default_source) return true;
+  async createSetupIntent(customerId: string): Promise<SetupIntentResult> {
+    const setupIntent = await this.stripe.setupIntents.create({
+      customer: customerId,
+      usage: STRIPE_SETUP_INTENT_USAGE.OFF_SESSION,
+      payment_method_types: [STRIPE_PAYMENT_METHOD_TYPE.CARD],
+    });
 
-      const paymentMethods = await this.stripe.paymentMethods.list({
-        customer: customerId,
-        type: 'card',
-      });
-      return paymentMethods.data.length > 0;
+    this.logger.log(`Created setup intent ${setupIntent.id} for customer ${customerId}`);
+    return { id: setupIntent.id, clientSecret: setupIntent.client_secret };
+  }
+
+  async getPaymentMethod(paymentMethodId: string): Promise<PaymentMethodDetails | null> {
+    try {
+      const paymentMethod = await this.stripe.paymentMethods.retrieve(paymentMethodId);
+      return this.mapPaymentMethod(paymentMethod);
     } catch (error) {
-      this.logger.error(`Error checking payment methods for customer ${customerId}`, error);
-      return false;
+      if ((error as Stripe.StripeRawError)?.code === STRIPE_ERROR_CODE.RESOURCE_MISSING) {
+        return null;
+      }
+      throw error;
     }
+  }
+
+  async listPaymentMethods(customerId: string): Promise<PaymentMethodDetails[]> {
+    const paymentMethods = await this.stripe.paymentMethods.list({
+      customer: customerId,
+      type: STRIPE_PAYMENT_METHOD_TYPE.CARD,
+    });
+    return paymentMethods.data.map(pm => this.mapPaymentMethod(pm));
+  }
+
+  async detachPaymentMethod(paymentMethodId: string): Promise<void> {
+    try {
+      await this.stripe.paymentMethods.detach(paymentMethodId);
+      this.logger.log(`Detached payment method ${paymentMethodId}`);
+    } catch (error) {
+      if ((error as Stripe.StripeRawError)?.code === STRIPE_ERROR_CODE.RESOURCE_MISSING) {
+        return;
+      }
+      throw error;
+    }
+  }
+
+  async setDefaultPaymentMethod(customerId: string, paymentMethodId: string): Promise<void> {
+    await this.stripe.customers.update(customerId, {
+      invoice_settings: { default_payment_method: paymentMethodId },
+    });
+    this.logger.log(`Default payment method of customer ${customerId} → ${paymentMethodId}`);
+  }
+
+  async getDefaultPaymentMethodId(customerId: string): Promise<string | null> {
+    const customer = await this.stripe.customers.retrieve(customerId);
+    if ((customer as Stripe.DeletedCustomer).deleted) return null;
+
+    const defaultPaymentMethod = (customer as Stripe.Customer).invoice_settings
+      ?.default_payment_method;
+
+    if (!defaultPaymentMethod) return null;
+    return typeof defaultPaymentMethod === "string"
+      ? defaultPaymentMethod
+      : defaultPaymentMethod.id;
   }
 
   constructWebhookEvent(rawBody: Buffer, signature: string): WebhookEvent {
@@ -274,6 +374,49 @@ export class StripeAdapter implements IPaymentAdapter {
 
   mapRawInvoice(rawInvoice: unknown): PaymentInvoice {
     return this.mapInvoice(rawInvoice as Stripe.Invoice);
+  }
+
+  mapRawPaymentMethod(rawPaymentMethod: unknown): PaymentMethodDetails {
+    return this.mapPaymentMethod(rawPaymentMethod as Stripe.PaymentMethod);
+  }
+
+  private mapPaymentMethod(paymentMethod: Stripe.PaymentMethod): PaymentMethodDetails {
+    const card = paymentMethod.card;
+    return {
+      id: paymentMethod.id,
+    
+      customerId:
+        typeof paymentMethod.customer === 'string'
+          ? paymentMethod.customer
+          : (paymentMethod.customer?.id ?? null),
+      brand: card?.brand ?? null,
+      last4: card?.last4 ?? null,
+      expMonth: card?.exp_month ?? null,
+      expYear: card?.exp_year ?? null,
+      fingerprint: card?.fingerprint ?? null,
+    };
+  }
+
+  private extractInvoicePaymentIntent(
+    latestInvoice: Stripe.Subscription['latest_invoice'],
+  ): { id: string | null; status?: string | null; client_secret?: string | null } | null {
+    if (!latestInvoice || typeof latestInvoice === 'string') return null;
+
+    const paymentIntent = (latestInvoice as any).payment_intent;
+    if (paymentIntent && typeof paymentIntent !== 'string') {
+      return paymentIntent as Stripe.PaymentIntent;
+    }
+
+    const confirmationSecret = (latestInvoice as any).confirmation_secret;
+    if (confirmationSecret?.client_secret) {
+      return {
+        id: typeof paymentIntent === 'string' ? paymentIntent : null,
+        status: null,
+        client_secret: confirmationSecret.client_secret,
+      };
+    }
+
+    return null;
   }
 
   private mapSubscription(stripeSubscription: Stripe.Subscription): PaymentSubscription {

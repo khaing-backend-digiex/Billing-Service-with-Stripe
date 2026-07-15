@@ -17,7 +17,7 @@ export class ConsumeCreditsDto {
   @IsString()
   description?: string;
 
-  @IsOptional()
+  @IsNotEmpty()
   @IsString()
-  idempotencyKey?: string;
+  idempotencyKey!: string;
 }

@@ -2,12 +2,14 @@ import {
   PaymentCustomer,
   PaymentSubscription,
   PaymentInvoice,
-  CheckoutSession,
-  PaymentIntentResult,
+  PaymentMethodDetails,
+  SetupIntentResult,
+  OffSessionPaymentResult,
+  OffSessionSubscriptionResult,
   BillingPortalSession,
   WebhookEvent,
-  CreateCheckoutParams,
-  CreatePaymentIntentParams,
+  CreateOffSessionSubscriptionParams,
+  CreateOffSessionPaymentParams,
   RecurringInterval,
 } from './payment.types';
 
@@ -19,19 +21,26 @@ export interface IPaymentAdapter {
   customerExists(customerId: string): Promise<boolean>;
 
   createSubscription(customerId: string, priceId: string): Promise<PaymentSubscription>;
+  createOffSessionSubscription(params: CreateOffSessionSubscriptionParams): Promise<OffSessionSubscriptionResult>;
   cancelSubscriptionAtPeriodEnd(subscriptionId: string): Promise<void>;
   cancelSubscriptionNow(subscriptionId: string): Promise<void>;
   listSubscriptions(customerId: string): Promise<PaymentSubscription[]>;
   getLatestPaidInvoice(subscriptionId: string): Promise<PaymentInvoice | null>;
 
-  createCheckoutSession(params: CreateCheckoutParams): Promise<CheckoutSession>;
-  createPaymentIntent(params: CreatePaymentIntentParams): Promise<PaymentIntentResult>;
+  createOffSessionPayment(params: CreateOffSessionPaymentParams): Promise<OffSessionPaymentResult>;
   createBillingPortalSession(customerId: string, returnUrl?: string): Promise<BillingPortalSession>;
-  hasDefaultPaymentMethod(customerId: string): Promise<boolean>;
+
+  createSetupIntent(customerId: string): Promise<SetupIntentResult>;
+  getPaymentMethod(paymentMethodId: string): Promise<PaymentMethodDetails | null>;
+  listPaymentMethods(customerId: string): Promise<PaymentMethodDetails[]>;
+  detachPaymentMethod(paymentMethodId: string): Promise<void>;
+  setDefaultPaymentMethod(customerId: string, paymentMethodId: string): Promise<void>;
+  getDefaultPaymentMethodId(customerId: string): Promise<string | null>;
 
   constructWebhookEvent(rawBody: Buffer, signature: string): WebhookEvent;
   mapRawSubscription(rawSubscription: unknown): PaymentSubscription;
   mapRawInvoice(rawInvoice: unknown): PaymentInvoice;
+  mapRawPaymentMethod(rawPaymentMethod: unknown): PaymentMethodDetails;
 
   createProduct(name: string): Promise<string>;  // returns productId
   createRecurringPrice(productId: string, amount: number, currency: string, recurring: RecurringInterval): Promise<string>;  // returns priceId

@@ -3,16 +3,18 @@ import Stripe from "stripe";
 import {
   Invoice,
   Subscription,
-  InvoiceStatus,
   SubscriptionStatus,
   SubscriptionEventType,
+  InvoiceStatus,
   PaymentProvider,
-  PaymentStatus,
+  
 } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
+import { InvoiceService } from "../../invoice.service";
 import { StripeService } from "../../stripe.service";
 import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
+import { PLAN_CODES } from "@/common/constants/plan.constants";
 
 
 const MAX_RETRY_ATTEMPTS = 3;
@@ -89,15 +91,21 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
       if (!stripeSubscriptionId) return { invoice, subscription: null };
 
       if (!subscription) {
-        this.logger.error(`No local subscription found for Stripe subscription ${stripeSubscriptionId}`);
+        if (stripeSubscriptionId) {
+          this.logger.error(
+            `No local subscription found for Stripe subscription ${stripeSubscriptionId}`,
+          );
+        }
         return { invoice, subscription: null };
       }
+
+      const isUpdate = stripeInvoice.billing_reason === 'subscription_update';
 
       await tx.subscription.update({
         where: { id: subscription.id },
         data: {
-          status: SubscriptionStatus.PAST_DUE,
-          subscriptionCreditsRemaining: 0,
+          status: isUpdate ? undefined : SubscriptionStatus.PAST_DUE,
+          subscriptionCreditsRemaining: isUpdate ? undefined : 0,
         },
       });
 
@@ -108,7 +116,9 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
           metadata: {
             stripeInvoiceId: stripeInvoice.id,
             attemptCount: stripeInvoice.attempt_count,
-            nextPaymentAttempt: stripeInvoice.next_payment_attempt ?? null,
+            nextPaymentAttempt: stripeInvoice.next_payment_attempt
+              ? new Date(stripeInvoice.next_payment_attempt * 1000)
+              : null,
           },
         },
       });
@@ -116,7 +126,7 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
       return { invoice, subscription };
     });
 
-    if (!result?.subscription || !result.invoice || !stripeSubscriptionId) return;
+    if (!result?.subscription || !stripeSubscriptionId) return;
 
     await this.downgradeToFreeIfRetriesExhausted(result.invoice, result.subscription, stripeInvoice, stripeSubscriptionId);
   }
@@ -129,7 +139,8 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
     stripeSubscriptionId: string,
   ): Promise<void> {
     const retriesUsed = (stripeInvoice.attempt_count ?? 1) - 1;
-    const windowExceeded = Date.now() - invoice.createdAt.getTime() > RETRY_WINDOW_MS;
+    const windowExceeded =
+      Date.now() - invoice.createdAt.getTime() > RETRY_WINDOW_MS;
 
     if (retriesUsed < MAX_RETRY_ATTEMPTS && !windowExceeded) return;
 
@@ -139,7 +150,8 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
     );
 
     const freePlan = await this.prisma.plan.findUnique({
-      where: { code: 'FREE' },
+      where: { code: PLAN_CODES.FREE
+       },
       include: { pricingOptions: true },
     });
     const freePricingOption = freePlan?.pricingOptions?.[0];
@@ -149,25 +161,7 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
       return;
     }
 
-    try {
-      await this.stripeService.upgradeSubscriptionTier(
-        subscription.userId,
-        freePricingOption.id,
-      );
-
-      await this.prisma.subscription.update({
-        where: { id: subscription.id },
-        data: {
-          status: SubscriptionStatus.ACTIVE,
-        },
-      });
-    } catch (error) {
-      this.logger.error(
-        `Failed to downgrade subscription ${subscription.id} to free`,
-        error,
-      );
-      await this.stripeService.cancelSubscriptionNow(stripeSubscriptionId);
-    }
+    await this.stripeService.cancelSubscriptionNow(stripeSubscriptionId);
 
     await this.prisma.invoice.update({
       where: { id: invoice.id },

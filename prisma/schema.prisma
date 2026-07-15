@@ -148,14 +148,14 @@ model PaymentMethod {
   provider                PaymentProvider
   providerPaymentMethodId String          @unique
   isDefault               Boolean         @default(false)
-  metadata                Json?
-  createdAt               DateTime        @default(now())
   brand                   String?
+  last4                   String?
   expMonth                Int?
   expYear                 Int?
   fingerprint             String?
-  last4                   String?
-  updatedAt               DateTime        @default(now())
+  metadata                Json?
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
   userId                  String
   user                    User            @relation(fields: [userId], references: [id])
 

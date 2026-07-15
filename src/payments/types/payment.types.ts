@@ -1,4 +1,5 @@
 import { SubscriptionStatus } from '@prisma/client';
+import { OffSessionStatus } from '../../common/constants/payment.constants';
 
 export interface PaymentCustomer {
   id: string;
@@ -55,18 +56,29 @@ export interface PaymentInvoiceLine {
   isProration?: boolean;
 }
 
-export interface CheckoutSession {
+export interface PaymentMethodDetails {
   id: string;
-  url: string | null;
+  customerId: string | null;
+  brand: string | null;
+  last4: string | null;
+  expMonth: number | null;
+  expYear: number | null;
+  fingerprint: string | null;
 }
 
-export interface PaymentIntentResult {
+export interface SetupIntentResult {
   id: string;
   clientSecret: string | null;
-  amount: number;
-  currency: string;
-  status: string;
-  metadata?: Record<string, string>;
+}
+
+export interface OffSessionPaymentResult {
+  paymentIntentId: string | null;
+  status: OffSessionStatus;
+  clientSecret: string | null;
+}
+
+export interface OffSessionSubscriptionResult extends OffSessionPaymentResult {
+  subscription: PaymentSubscription;
 }
 
 export interface BillingPortalSession {
@@ -85,20 +97,18 @@ export interface RecurringInterval {
   intervalCount: number;
 }
 
-export interface CreateCheckoutParams {
-  customerId?: string;
+export interface CreateOffSessionSubscriptionParams {
+  customerId: string;
   priceId: string;
-  mode: 'payment' | 'subscription';
+  paymentMethodId: string;
   metadata?: Record<string, string>;
-  successUrl?: string;
-  cancelUrl?: string;
-  subscriptionMetadata?: Record<string, string>;
 }
 
-export interface CreatePaymentIntentParams {
+export interface CreateOffSessionPaymentParams {
+  customerId: string;
+  paymentMethodId: string;
   amount: number;
   currency: string;
-  customerId?: string;
   description?: string;
   metadata?: Record<string, string>;
 }

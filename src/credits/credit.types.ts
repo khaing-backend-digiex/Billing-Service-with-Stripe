@@ -1,6 +1,21 @@
-import { ReferenceType } from '@prisma/client';
+import { ReferenceType, SubscriptionStatus } from '@prisma/client';
+import { PLAN_CODES } from '../common/constants/plan.constants';
 
 export type CreditBucket = typeof ReferenceType.SUBSCRIPTION | typeof ReferenceType.ADDON_PURCHASE;
+
+export const ADDON_LIVE_STATUSES: SubscriptionStatus[] = [
+  SubscriptionStatus.ACTIVE,
+  SubscriptionStatus.TRIALING,
+];
+
+export const isAddonUsable = (
+  planCode: string | null | undefined,
+  status: SubscriptionStatus | null | undefined,
+): boolean =>
+  !!planCode &&
+  planCode !== PLAN_CODES.FREE &&
+  !!status &&
+  ADDON_LIVE_STATUSES.includes(status);
 
 export interface GrantSubscriptionCmd {
   userId: string;
@@ -13,6 +28,15 @@ export interface GrantSubscriptionCmd {
 export interface RevokeSubscriptionCmd {
   userId: string;
   description: string;
+  referenceId: string;
+  idempotencyKey: string;
+}
+
+export interface ResetSubscriptionCmd {
+  userId: string;
+  amount: number;
+  grantDescription: string;
+  revokeDescription: string;
   referenceId: string;
   idempotencyKey: string;
 }
@@ -74,3 +98,37 @@ export interface UserPackageStatus {
   addonCredits: number;
   addonIsActive: boolean;
 }
+
+export const KEY_SEPARATOR = ':';
+
+const KEY_SCOPE = {
+  SUBSCRIPTION: 'sub',
+  PAYMENT_INTENT: 'pi',
+  REQUEST: 'req',
+} as const;
+
+const KEY_ACTION = {
+  PERIOD: 'period',
+  RESET: 'reset',
+  REVOKE: 'revoke',
+  GRANT: 'grant',
+  CONSUME: 'consume',
+} as const;
+
+const join = (...parts: string[]) => parts.join(KEY_SEPARATOR);
+
+export const creditKey = {
+  subscriptionPeriod: (subscriptionId: string, periodStart: Date) =>
+    join(KEY_SCOPE.SUBSCRIPTION, subscriptionId, KEY_ACTION.PERIOD, periodStart.toISOString()),
+  subscriptionReset: (subscriptionId: string, nextCreditResetAt: Date) =>
+    join(KEY_SCOPE.SUBSCRIPTION, subscriptionId, KEY_ACTION.RESET, nextCreditResetAt.toISOString()),
+  subscriptionRevoke: (subscriptionId: string, providerSubscriptionId: string) =>
+    join(KEY_SCOPE.SUBSCRIPTION, subscriptionId, KEY_ACTION.REVOKE, providerSubscriptionId),
+  addonPurchase: (providerPaymentId: string) =>
+    join(KEY_SCOPE.PAYMENT_INTENT, providerPaymentId),
+  consume: (userId: string, requestId: string) =>
+    join(KEY_SCOPE.REQUEST, userId, requestId, KEY_ACTION.CONSUME),
+  revokeStep: (baseKey: string) => join(baseKey, KEY_ACTION.REVOKE),
+  grantStep: (baseKey: string) => join(baseKey, KEY_ACTION.GRANT),
+  bucketStep: (baseKey: string, bucket: string) => join(baseKey, bucket),
+} as const;

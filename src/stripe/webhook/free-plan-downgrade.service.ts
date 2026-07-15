@@ -5,13 +5,10 @@ import {
   PricingOption,
   SubscriptionEventType,
   SubscriptionStatus,
-  CreditTransactionType,
-  ReferenceType,
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
 import { StripeService } from "../stripe.service";
 import { addCalendarMonths } from "../../common/utils/date.util";
-import { CreditService } from "../../credits/credit.service";
 
 type SubscriptionWithPricing = Subscription & { pricingOption: PricingOption };
 
@@ -22,7 +19,6 @@ export class FreePlanDowngradeService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly stripeService: StripeService,
-    private readonly creditService: CreditService,
   ) {}
 
   async downgradeToFree(
@@ -31,16 +27,22 @@ export class FreePlanDowngradeService {
     reason: string,
   ): Promise<void> {
     const freePriceId = await this.stripeService.getFreePriceId();
-    if (!freePriceId) return; 
+    if (!freePriceId) return;
     if (subscription.pricingOption.providerPriceId === freePriceId) {
-      this.logger.log(`Subscription ${subscription.id} is already the free plan – no downgrade`);
+      this.logger.log(
+        `Subscription ${subscription.id} is already the free plan – no downgrade`,
+      );
       return;
     }
 
     const customerId =
-      typeof stripeSub.customer === "string" ? stripeSub.customer : stripeSub.customer?.id;
+      typeof stripeSub.customer === "string"
+        ? stripeSub.customer
+        : stripeSub.customer?.id;
     if (!customerId) {
-      this.logger.error(`No customer on Stripe subscription ${stripeSub.id} – cannot downgrade`);
+      this.logger.error(
+        `No customer on Stripe subscription ${stripeSub.id} – cannot downgrade`,
+      );
       return;
     }
 
@@ -54,7 +56,6 @@ export class FreePlanDowngradeService {
       );
       return;
     }
-
 
     const freeSub = await this.stripeService.ensureFreeSubscription(customerId);
     if (!freeSub) return;
@@ -72,21 +73,13 @@ export class FreePlanDowngradeService {
       ? new Date(freeItem.currentPeriodEnd * 1000)
       : addCalendarMonths(periodStart, 1);
 
-   
     await this.prisma.$transaction(async (tx) => {
-      await this.creditService.revokeSubscriptionCredits(
-        {
-          userId: subscription.userId,
-          description: `Credits forfeited – downgraded to free (${reason})`,
-          referenceId: subscription.id,
-          idempotencyKey: `downgrade_${stripeSub.id}`,
-        },
-        tx,
-      );
-
       if (freePricingOption) {
         const freePlan = freePricingOption.plan;
-        const resetMonths = Math.max(1, Math.round(freePlan.resetIntervalDay / 30));
+        const resetMonths = Math.max(
+          1,
+          Math.round(freePlan.resetIntervalDay / 30),
+        );
 
         await tx.subscription.update({
           where: { id: subscription.id },
@@ -100,17 +93,6 @@ export class FreePlanDowngradeService {
             cancelledAt: null,
           },
         });
-
-        await this.creditService.grantSubscriptionAllowance(
-          {
-            userId: subscription.userId,
-            amount: freePlan.renewalCredits,
-            description: `Credits granted – ${freePlan.name} (downgrade)`,
-            referenceId: subscription.id,
-            idempotencyKey: `grant_free_${freeSub.id}`,
-          },
-          tx,
-        );
       }
 
       await tx.subscriptionEvent.create({
@@ -123,14 +105,13 @@ export class FreePlanDowngradeService {
             stripeSubscriptionId: stripeSub.id,
             newStripeSubscriptionId: freeSub.id,
             reason,
-            creditsGranted: freePricingOption?.plan.renewalCredits ?? 0,
           },
         },
       });
     });
 
     this.logger.log(
-      `User ${subscription.userId} downgraded to free plan (new stripe sub: ${freeSub.id}, reason: ${reason}, credits: ${freePricingOption?.plan.renewalCredits ?? 0})`,
+      `User ${subscription.userId} downgraded to free plan (new stripe sub: ${freeSub.id}, reason: ${reason}) – credits will be granted by invoice.paid`,
     );
   }
 }

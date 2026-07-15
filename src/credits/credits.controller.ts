@@ -1,6 +1,7 @@
 import { Controller, Post, Body, HttpCode, HttpStatus, UsePipes, ValidationPipe, Get, Req, UseGuards } from '@nestjs/common';
 import { CreditService } from './credit.service';
 import { ConsumeCreditsDto } from './dto/consume-credits.dto';
+import { creditKey } from './credit.types';
 import { ApiBearerAuth } from '@nestjs/swagger';
 import { Public } from '../common/decorators/public.decorator';
 import { ApiResponse } from '../common/dto/api-response.dto';
@@ -21,7 +22,7 @@ export class CreditsController {
       amount: dto.amount,
       referenceId: dto.referenceId ?? 'api-consume',
       description: dto.description ?? 'API Consume',
-      idempotencyKey: dto.idempotencyKey ?? `consume-${Date.now()}-${Math.random()}`,
+      idempotencyKey: creditKey.consume(req.user.id, dto.idempotencyKey),
     });
 
     return new ApiResponse(

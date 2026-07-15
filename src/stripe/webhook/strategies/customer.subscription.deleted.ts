@@ -5,11 +5,13 @@ import {
   SubscriptionEventType,
   CreditTransactionType,
   ReferenceType,
+  InvoiceStatus,
 } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { FreePlanDowngradeService } from "../free-plan-downgrade.service";
 import { CreditService } from "../../../credits/credit.service";
+import { creditKey } from "../../../credits/credit.types";
 
 @Injectable()
 export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
@@ -64,15 +66,11 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
             userId: subscription.userId,
             description: "Credits forfeited – subscription cancelled",
             referenceId: subscription.id,
-            idempotencyKey: `cancel_sub_${sub.id}`,
+            idempotencyKey: creditKey.subscriptionRevoke(subscription.id, sub.id),
           },
           tx,
         );
 
-        await tx.creditWallet.updateMany({
-          where: { userId: subscription.userId },
-          data: { is_active: false },
-        });
       });
 
       this.logger.log(`Subscription ${subscription.id} cancelled`);
@@ -84,6 +82,20 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
     if (subscription.providerSubscriptionId !== sub.id) {
       this.logger.log(
         `Subscription ${subscription.id} already points to ${subscription.providerSubscriptionId} (not ${sub.id}) — skipping downgrade (upgrade detected)`,
+      );
+      return;
+    }
+
+    const hasUnpaidInvoice = await this.prisma.invoice.findFirst({
+      where: {
+        subscriptionId: subscription.id,
+        status: { in: [InvoiceStatus.OPEN, InvoiceStatus.UNCOLLECTIBLE] },
+      },
+    });
+
+    if (hasUnpaidInvoice) {
+      this.logger.warn(
+        `Subscription ${subscription.id} cancelled with unpaid debt (invoice ${hasUnpaidInvoice.id}). Banning instead of downgrading to Free.`,
       );
       return;
     }
