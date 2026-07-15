@@ -1,11 +1,12 @@
 import {
+  BadRequestException,
   Injectable,
   UnauthorizedException,
-  ConflictException,
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcrypt";
 import { UsersService } from "../users/users.service";
+import { UserProvisioningService } from "../provisioning/user-provisioning.service";
 import { LoginDto } from "./dto/login.dto";
 import { RegisterDto } from "./dto/register.dto";
 
@@ -13,69 +14,62 @@ import { RegisterDto } from "./dto/register.dto";
 export class AuthService {
   constructor(
     private readonly usersService: UsersService,
+    private readonly userProvisioningService: UserProvisioningService,
     private readonly jwtService: JwtService,
-  ) {}
+  ) { }
 
   async login(loginDto: LoginDto) {
-    const { username, password } = loginDto;
+    const user = await this.usersService.findByEmail(loginDto.email);
 
-    const user = await this.usersService.findByUsername(username);
     if (!user) {
-      throw new UnauthorizedException("Invalid username or password");
+      throw new UnauthorizedException("Invalid email or password.");
     }
 
-    const isPasswordValid = await bcrypt.compare(password, user.password);
+    const isPasswordValid = await bcrypt.compare(
+      loginDto.password,
+      user.password,
+    );
+
     if (!isPasswordValid) {
-      throw new UnauthorizedException("Invalid username or password");
+      throw new UnauthorizedException("Invalid email or password.");
     }
 
     const payload = {
       sub: user.id,
-      username: user.username,
+      email: user.email,
       roles: user.roles,
     };
 
-    const accessToken = this.jwtService.sign(payload);
-
     return {
-      accessToken,
+      accessToken: this.jwtService.sign(payload),
       user: {
-        id: user.id,
-        username: user.username,
-        name: user.name,
         email: user.email,
+        name: user.name,
         roles: user.roles,
       },
     };
   }
 
   async register(registerDto: RegisterDto) {
-    const existingUser = await this.usersService.findByUsername(
-      registerDto.username,
-    );
+    const { email, name, password } = registerDto;
+
+    const existingUser = await this.usersService.findByEmail(email);
+
     if (existingUser) {
-      throw new ConflictException("Username already exists");
+      throw new BadRequestException("Email already exists.");
     }
 
-    const hashedPassword = await bcrypt.hash(registerDto.password, 10);
+    const hashedPassword = await bcrypt.hash(password, 10);
 
-    const user = await this.usersService.create({
-      username: registerDto.username,
-      password: hashedPassword,
-      name: registerDto.name,
-      email: registerDto.email,
-      dateOfBirth: registerDto.dateOfBirth
-        ? new Date(registerDto.dateOfBirth)
-        : undefined,
-      roles: ["user"],
-    });
+    const user = await this.userProvisioningService.createUser(
+      email,
+      hashedPassword,
+      name,
+    );
 
     return {
-      id: user.id,
-      username: user.username,
       name: user.name,
       email: user.email,
-      dateOfBirth: user.dateOfBirth,
       roles: user.roles,
     };
   }

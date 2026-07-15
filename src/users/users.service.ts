@@ -1,112 +1,86 @@
 import {
   Injectable,
   NotFoundException,
-  BadRequestException,
+  Logger,
 } from "@nestjs/common";
-import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
-import * as bcrypt from "bcrypt";
-import { User } from "../database/entities/user.entity";
-import { CreateUserDto } from "./dto/create-user.dto";
-import { UpdateUserDto } from "./dto/update-user.dto";
+import { PrismaService } from "../database/prisma.service";
+import { User } from "@prisma/client";
+import { randomUUID } from "crypto";
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
   constructor(
-    @InjectRepository(User)
-    private readonly userRepository: Repository<User>,
-  ) {}
+    private readonly prisma: PrismaService,
+  ) { }
 
-  async create(data: Partial<User>): Promise<User> {
-    const user = this.userRepository.create(data);
-    return this.userRepository.save(user);
+  async createUserRecord(data: {
+    email: string;
+    password: string;
+    name?: string;
+    roles?: string[];
+  }): Promise<User> {
+    return this.prisma.user.create({
+      data: {
+        email: data.email,
+        password: data.password,
+        name: data.name,
+        roles: data.roles,
+      },
+    });
   }
 
-  async createUser(dto: CreateUserDto): Promise<User> {
-    const existing = await this.findByUsername(dto.username);
-    if (existing) {
-      throw new BadRequestException("Username already exists");
-    }
-
-    const existingEmail = await this.userRepository.findOne({
-      where: { email: dto.email },
+  async findIncompleteOnboardingUsers(params: {
+    createdBefore: Date;
+    limit: number;
+  }): Promise<User[]> {
+    return this.prisma.user.findMany({
+      where: {
+        createdAt: { lt: params.createdBefore },
+        OR: [{ providerCustomerId: null }, { subscription: null }],
+      },
+      orderBy: { createdAt: "asc" },
+      take: params.limit,
     });
-    if (existingEmail) {
-      throw new BadRequestException("Email already exists");
-    }
-
-    const hashedPassword = await bcrypt.hash(dto.password, 10);
-
-    const user = this.userRepository.create({
-      ...dto,
-      password: hashedPassword,
-      dateOfBirth: dto.dateOfBirth ? new Date(dto.dateOfBirth) : undefined,
-      roles: dto.roles || ["user"],
-    });
-
-    const savedUser = await this.userRepository.save(user);
-    return this.sanitizeUser(savedUser);
   }
 
   async findAll(limit: number = 10, offset: number = 0): Promise<User[]> {
-    const users = await this.userRepository.find({
+    return this.prisma.user.findMany({
       take: Math.max(1, limit),
       skip: Math.max(0, offset),
-      order: { createdAt: "DESC" },
+      orderBy: { createdAt: "desc" },
     });
-
-    return users.map((user) => this.sanitizeUser(user));
   }
 
-  async findById(id: number): Promise<User> {
-    const user = await this.userRepository.findOne({ where: { id } });
+  async findById(id: string): Promise<User> {
+    const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) {
       throw new NotFoundException("User not found");
     }
     return user;
   }
 
-  async findByUsername(username: string): Promise<User | null> {
-    return this.userRepository.findOne({ where: { username } });
+  async findByEmail(email: string): Promise<User | null> {
+    return this.prisma.user.findUnique({ where: { email } });
   }
 
   async findByStripeCustomerId(stripeCustomerId: string): Promise<User | null> {
-    return this.userRepository.findOne({ where: { stripeCustomerId } });
-  }
-
-  async updateUser(id: number, dto: UpdateUserDto): Promise<User> {
-    const user = await this.findById(id);
-
-    if (dto.password) {
-      dto.password = await bcrypt.hash(dto.password, 10);
-    }
-
-    Object.assign(user, dto);
-
-    if (dto.dateOfBirth) {
-      user.dateOfBirth = new Date(dto.dateOfBirth);
-    }
-
-    const savedUser = await this.userRepository.save(user);
-    return this.sanitizeUser(savedUser);
+    return this.prisma.user.findFirst({
+      where: { providerCustomerId: stripeCustomerId },
+    });
   }
 
   async updateStripeCustomerId(
-    userId: number,
+    userId: string,
     stripeCustomerId: string,
   ): Promise<User> {
-    const user = await this.findById(userId);
-    user.stripeCustomerId = stripeCustomerId;
-    return this.userRepository.save(user);
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: { providerCustomerId: stripeCustomerId },
+    });
   }
 
-  async deleteUser(id: number): Promise<void> {
-    const user = await this.findById(id);
-    await this.userRepository.remove(user);
-  }
-
-  private sanitizeUser(user: User): User {
-    const { password, ...sanitized } = user;
-    return sanitized as User;
+  async deleteUser(id: string): Promise<void> {
+    await this.prisma.user.delete({ where: { id } });
   }
 }

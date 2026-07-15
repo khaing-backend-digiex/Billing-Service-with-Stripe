@@ -21,7 +21,7 @@ export class StripeWebhookController {
   constructor(
     private readonly stripeService: StripeService,
     private readonly webhookService: StripeWebhookService,
-  ) {}
+  ) { }
 
   @Public()
   @Post("webhook")
@@ -40,21 +40,21 @@ export class StripeWebhookController {
     }
 
     try {
-      const event = this.stripeService.constructWebhookEvent(
+      const webhookEvent = this.stripeService.constructWebhookEvent(
         rawBody,
         signature,
       );
 
-      this.logger.log(`📩 Received Stripe event: ${event.type} (${event.id})`);
+      this.logger.log(`Received Stripe event: ${webhookEvent.type} (${webhookEvent.id})`);
 
-      await this.webhookService.handleEvent(event);
+      await this.webhookService.handleEvent(webhookEvent.data as any);
 
       return { received: true };
     } catch (error) {
       this.logger.error(
-        `❌ Webhook error: ${error instanceof Error ? error.message : error}`,
+        `Webhook error: ${error instanceof Error ? error.message : error}`,
       );
-      throw new BadRequestException(`Webhook signature verification failed`);
+      throw new BadRequestException(error instanceof Error ? error.message : `Webhook error`);
     }
   }
 }

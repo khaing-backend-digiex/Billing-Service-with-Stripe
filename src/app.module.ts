@@ -1,22 +1,39 @@
 import { Module } from "@nestjs/common";
 import { APP_GUARD } from "@nestjs/core";
+import { ConfigModule } from "@nestjs/config";
+import { ScheduleModule } from "@nestjs/schedule";
 import { AppConfigModule } from "./config/config.module";
 import { DatabaseModule } from "./database/database.module";
 import { AuthModule } from "./auth/auth.module";
 import { UsersModule } from "./users/users.module";
 import { StripeModule } from "./stripe/stripe.module";
+import { PaymentsModule } from "./payments/payments.module";
+import { PaymentMethodsModule } from "./payment-methods/payment-methods.module";
 import { HealthController } from "./health/health.controller";
 import { JwtAuthGuard } from "./common/guards/jwt-auth.guard";
+import { PricingModule } from "./pricing/pricing.module";
+import { CronModule } from "./cron/cron.module";
+import { ProvisioningModule } from "./provisioning/provisioning.module";
+import { PaymentAdapterModule } from "./stripe/adapter/adapter.module";
+import { CreditsModule } from "./credits/credits.module";
 
 @Module({
   imports: [
-    AppConfigModule,
-
+    ConfigModule.forRoot({
+      isGlobal: true,
+    }),
+    ScheduleModule.forRoot(),
+    PaymentAdapterModule,
     DatabaseModule,
-
-    AuthModule,
     UsersModule,
+    AuthModule,
     StripeModule,
+    PaymentsModule,
+    PaymentMethodsModule,
+    PricingModule,
+    CronModule,
+    ProvisioningModule,
+    CreditsModule,
   ],
   controllers: [HealthController],
   providers: [
@@ -26,4 +43,5 @@ import { JwtAuthGuard } from "./common/guards/jwt-auth.guard";
     },
   ],
 })
-export class AppModule {}
+export class AppModule { }
+

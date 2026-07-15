@@ -4,8 +4,10 @@ node_modules/
 # Build output
 dist/
 
-# Environment
+# Environment (giữ lại .env.example làm template)
 .env
+.env.*
+!.env.example
 
 # IDE
 .idea/
@@ -17,13 +19,28 @@ dist/
 .DS_Store
 Thumbs.db
 
-# Debug
+# Logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+*.log
 
-# Test
+# Test artifacts (source test/ được track, chỉ ignore output)
 coverage/
 
 # Misc
 api-test.http
+test-renewal.ts
+
+# Local-only integration test (dùng DB/Stripe thật, không commit)
+test/users.rollback.integration.spec.ts
+
+# Agent
+.agents/
+skills.json
+skills-lock.json
+implementation_plan.md
+code_review.md
+task.md
+walkthrough.md
+subscription_upgrade_architecture_final.md

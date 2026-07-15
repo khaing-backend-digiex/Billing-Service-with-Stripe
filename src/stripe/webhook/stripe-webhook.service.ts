@@ -1,136 +1,151 @@
 import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
-import { StripeService } from "../stripe.service";
-import { PaymentStatus } from "../../database/entities/payment.entity";
+import { PrismaService } from "../../database/prisma.service";
+import { PaymentProvider, WebhookEventStatus } from "@prisma/client";
+import { WebhookStrategyFactory } from "./strategies/webhook-strategy.factory";
+import { DatabaseException } from "../../common/exceptions/database.exception";
+import { ExternalServiceException } from "../../common/exceptions/external-service.exception";
+
+const STALE_CLAIM_MS = 10 * 60_000;
+function isUniqueViolation(error: unknown): boolean {
+  return (error as { code?: string })?.code === "P2002";
+}
 
 @Injectable()
 export class StripeWebhookService {
   private readonly logger = new Logger(StripeWebhookService.name);
 
-  constructor(private readonly stripeService: StripeService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly strategyFactory: WebhookStrategyFactory,
+  ) {}
 
   async handleEvent(event: Stripe.Event): Promise<void> {
-    switch (event.type) {
-      case "checkout.session.completed":
-        await this.handleCheckoutSessionCompleted(
-          event.data.object as Stripe.Checkout.Session,
-        );
-        break;
+    const claimed = await this.claimEvent(event);
 
-      case "payment_intent.succeeded":
-        await this.handlePaymentIntentSucceeded(
-          event.data.object as Stripe.PaymentIntent,
-        );
-        break;
-
-      case "payment_intent.payment_failed":
-        await this.handlePaymentIntentFailed(
-          event.data.object as Stripe.PaymentIntent,
-        );
-        break;
-
-      case "customer.subscription.created":
-        await this.handleSubscriptionCreated(
-          event.data.object as Stripe.Subscription,
-        );
-        break;
-
-      case "customer.subscription.updated":
-        await this.handleSubscriptionUpdated(
-          event.data.object as Stripe.Subscription,
-        );
-        break;
-
-      case "customer.subscription.deleted":
-        await this.handleSubscriptionDeleted(
-          event.data.object as Stripe.Subscription,
-        );
-        break;
-
-      case "invoice.paid":
-        await this.handleInvoicePaid(event.data.object as Stripe.Invoice);
-        break;
-
-      case "invoice.payment_failed":
-        await this.handleInvoicePaymentFailed(
-          event.data.object as Stripe.Invoice,
-        );
-        break;
-
-      default:
-        this.logger.log(` Unhandled event type: ${event.type}`);
+    if (!claimed) {
+      return;
     }
-  }
 
-  private async handleCheckoutSessionCompleted(
-    session: Stripe.Checkout.Session,
-  ): Promise<void> {
-    this.logger.log(` Checkout session completed: ${session.id}`);
+    const strategy = this.strategyFactory.getStrategy(event.type);
 
-    const userId = session.metadata?.userId
-      ? parseInt(session.metadata.userId, 10)
-      : null;
+    try {
+      if (strategy) {
+        await strategy.handle(event);
+        await this.markProcessed(event.id, WebhookEventStatus.SUCCESS);
+      } else {
+        this.logger.log(`Unhandled event type: ${event.type}`);
+        await this.markProcessed(event.id, WebhookEventStatus.UNHANDLED);
+      }
+    } catch (error) {
+      await this.markFailed(event.id, error instanceof Error ? error.message : String(error));
+      
+      if (
+        error instanceof DatabaseException ||
+        error instanceof ExternalServiceException
+      ) {
+        throw error;
+      }
 
-    if (userId) {
-      await this.stripeService.saveCheckoutPayment(
-        session.id,
-        userId,
-        session.amount_total || 0,
-        session.currency || "usd",
-        PaymentStatus.SUCCEEDED,
+      this.logger.error(
+        `Logic error in webhook ${event.id}, not throwing to prevent retry.`,
+        error instanceof Error ? error.stack : String(error),
       );
     }
   }
 
-  private async handlePaymentIntentSucceeded(
-    paymentIntent: Stripe.PaymentIntent,
-  ): Promise<void> {
-    this.logger.log(`Payment succeeded: ${paymentIntent.id}`);
+  private async claimEvent(event: Stripe.Event): Promise<boolean> {
+    const obj = event.data.object as any;
+    const objectId = obj?.id ?? null;
+    const objectType = obj?.object ?? null;
 
-    await this.stripeService.updatePaymentStatus(
-      paymentIntent.id,
-      PaymentStatus.SUCCEEDED,
+    try {
+      await this.prisma.webhookEvent.create({
+        data: {
+          id: event.id,
+          provider: PaymentProvider.STRIPE,
+          eventType: event.type,
+          objectId,
+          objectType,
+          status: WebhookEventStatus.RECEIVED,
+          payload: event as any,
+          processedAt: null,
+        },
+      });
+
+      return true;
+    } catch (error) {
+      if (!isUniqueViolation(error)) {
+        throw error;
+      }
+
+      return this.handleDuplicateClaim(event.id);
+    }
+  }
+
+  private async handleDuplicateClaim(eventId: string): Promise<boolean> {
+    const existing = await this.prisma.webhookEvent.findUnique({
+      where: { id: eventId },
+    });
+
+    if (!existing) {
+      return true;
+    }
+
+    if (existing.status === WebhookEventStatus.SUCCESS || existing.status === WebhookEventStatus.UNHANDLED) {
+      this.logger.log(`Skipping already processed webhook event: ${eventId}`);
+      return false;
+    }
+
+    const claimAge = Date.now() - existing.createdAt.getTime();
+
+    if (existing.status === WebhookEventStatus.RECEIVED && claimAge < STALE_CLAIM_MS) {
+      this.logger.log(
+        `Event ${eventId} is already being processed – skipping duplicate delivery`,
+      );
+      return false;
+    }
+
+    this.logger.warn(
+      `Reclaiming webhook event ${eventId} (Status: ${existing.status})`,
     );
+
+    await this.prisma.webhookEvent.update({
+      where: { id: eventId },
+      data: {
+        status: WebhookEventStatus.RECEIVED,
+        attempts: { increment: 1 },
+        errorMessage: null,
+      },
+    });
+
+    return true;
   }
 
-  private async handlePaymentIntentFailed(
-    paymentIntent: Stripe.PaymentIntent,
-  ): Promise<void> {
-    this.logger.log(` Payment failed: ${paymentIntent.id}`);
-
-    await this.stripeService.updatePaymentStatus(
-      paymentIntent.id,
-      PaymentStatus.FAILED,
-    );
+  private async markProcessed(eventId: string, status: WebhookEventStatus): Promise<void> {
+    await this.prisma.webhookEvent.update({
+      where: { id: eventId },
+      data: {
+        status,
+        processedAt: new Date(),
+      },
+    });
   }
 
-  private async handleSubscriptionCreated(
-    subscription: Stripe.Subscription,
-  ): Promise<void> {
-    this.logger.log(`Subscription created: ${subscription.id}`);
-  }
-
-  private async handleSubscriptionUpdated(
-    subscription: Stripe.Subscription,
-  ): Promise<void> {
-    this.logger.log(
-      ` Subscription updated: ${subscription.id} → ${subscription.status}`,
-    );
-  }
-
-  private async handleSubscriptionDeleted(
-    subscription: Stripe.Subscription,
-  ): Promise<void> {
-    this.logger.log(`Subscription canceled: ${subscription.id}`);
-  }
-
-  private async handleInvoicePaid(invoice: Stripe.Invoice): Promise<void> {
-    this.logger.log(`Invoice paid: ${invoice.id}`);
-  }
-
-  private async handleInvoicePaymentFailed(
-    invoice: Stripe.Invoice,
-  ): Promise<void> {
-    this.logger.log(`Invoice payment failed: ${invoice.id}`);
+  private async markFailed(eventId: string, errorMessage: string): Promise<void> {
+    try {
+      await this.prisma.webhookEvent.update({
+        where: { id: eventId },
+        data: {
+          status: WebhookEventStatus.FAILED,
+          errorMessage,
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to mark event ${eventId} as failed`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
   }
 }
