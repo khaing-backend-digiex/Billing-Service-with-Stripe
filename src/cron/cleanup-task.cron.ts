@@ -33,7 +33,7 @@ export class CleanupTaskCron {
           where: { id: task.id },
           data: { status: "DONE" },
         });
-        this.logger.log(`✅ Cleaned up Stripe customer ${task.target}`);
+        this.logger.log(`Cleaned up Stripe customer ${task.target}`);
       } catch (error) {
         const attempts = task.attempts + 1;
         const status = attempts >= MAX_ATTEMPTS ? "FAILED" : "PENDING";

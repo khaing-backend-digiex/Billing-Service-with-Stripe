@@ -23,7 +23,7 @@ export class CreditResetCronService {
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
   async handleCreditReset(): Promise<void> {
     const now = new Date();
-    this.logger.log(`⏰ Credit reset cron started at ${now.toISOString()}`);
+    this.logger.log(`Credit reset cron started at ${now.toISOString()}`);
 
     const subscriptions = await this.prisma.subscription.findMany({
       where: {
@@ -88,11 +88,6 @@ export class CreditResetCronService {
             return false;
           }
 
-          // Cùng một thuật toán "sang kỳ" với invoice.paid, chỉ khác mốc chống trùng.
-          //
-          // Khoá phải neo vào `nextCreditResetAt` (mốc reset ĐANG xử lý), không phải thời
-          // điểm chạy: khoá theo `Date.now()` thì mỗi lần cron chạy sinh một khoá mới, tức
-          // là không chống trùng được gì cả.
           await this.creditService.resetSubscriptionAllowance(
             {
               userId: subscription.userId,
