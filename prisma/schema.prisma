@@ -18,7 +18,10 @@ model User {
   roles              String[]            @default(["user"])
   password           String              @default("$2a$10$jeaeQtlxxRmjRqVD/h9HnOC2GANB1oKKPAraPazA81nbgJcpOsIyG")
   id                 String              @id @default(uuid())
+  creditGrants       CreditGrant[]
   creditTransactions CreditTransaction[]
+  // EXPAND: CreditWallet sống song song với CreditGrant cho tới khi PR2 (Dev A) chuyển xong
+  // implementation. Xoá ở PR4 (contract).
   creditWallet       CreditWallet?
   payments           Payment[]
   paymentMethods     PaymentMethod[]
@@ -65,6 +68,7 @@ model PricingOption {
   // Composite FK, không phải FK đơn `planId`: FK đơn để `productId` tự do, cho phép
   // PricingOption { planId: AI_Pro, productId: OCR } lọt qua (OCR là product có thật).
   plan                  Plan                @relation(fields: [planId, productId], references: [id, productId])
+  invoices              Invoice[]
   subscriptions         Subscription[]
   subscriptionEventsNew SubscriptionEvent[] @relation("NewPricing")
   subscriptionEventsOld SubscriptionEvent[] @relation("OldPricing")
@@ -75,34 +79,88 @@ model PricingOption {
 }
 
 model Subscription {
-  id                           String              @id @default(cuid())
-  pricingOptionId              String
-  status                       SubscriptionStatus
-  currentPeriodStart           DateTime
-  currentPeriodEnd             DateTime
-  nextCreditResetAt            DateTime
-  subscriptionCreditsRemaining Int
-  autoRenew                    Boolean             @default(true)
-  provider                     PaymentProvider?
-  providerSubscriptionId       String?
-  cancelledAt                  DateTime?
-  createdAt                    DateTime            @default(now())
-  updatedAt                    DateTime            @updatedAt
+  id                 String             @id @default(cuid())
+  pricingOptionId    String
+  status             SubscriptionStatus
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  nextCreditResetAt  DateTime
+  autoRenew          Boolean            @default(true)
+  provider           PaymentProvider?
+  cancelledAt        DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  // ─── EXPAND: cột mới, chưa có implementation cho tới PR3 (Dev B) ───
+
+  /// Denormalize từ pricingOption.plan.productId để làm partial unique index
+  /// `(userId, productId) WHERE status IN ('ACTIVE','PAST_DUE')` (§13.1).
+  /// Nullable ở PR1: row cũ chưa backfill nên index tạm thời trơ; PR3 populate +
+  /// thêm composite FK (pricingOptionId, productId) → PricingOption(id, productId),
+  /// PR4 siết NOT NULL.
+  productId   String?
+  /// Row Free = NONE (không có Stripe sub phía sau), Enterprise = MANUAL.
+  /// Default PROVIDER khớp toàn bộ 107 row hiện có (đều có providerSubscriptionId).
+  billingMode BillingMode @default(PROVIDER)
+
+  // ─── CONTRACT: sẽ xoá, giữ để branch luôn compile ───
+
+  /// @deprecated Số dư dời sang CreditGrant. PR2 (Dev A) chuyển implementation, PR4 xoá cột.
+  /// `@default(0)` để code mới của PR3 khỏi phải điền một cột đã chết.
+  subscriptionCreditsRemaining Int       @default(0)
+  /// @deprecated D12 bỏ trial hoàn toàn. Xoá ở PR4.
   trialEnd                     DateTime?
+  /// @deprecated D12 bỏ trial hoàn toàn. Xoá ở PR4.
   trialStart                   DateTime?
-  userId                       String              @unique
-  invoices                     Invoice[]
-  pricingOption                PricingOption       @relation(fields: [pricingOptionId], references: [id])
-  user                         User                @relation(fields: [userId], references: [id])
-  events                       SubscriptionEvent[]
+
+  /// @unique giữ tới PR3: bỏ nó bây giờ làm hỏng 27 chỗ trong src/credits (call-site mà
+  /// PR2 sẽ tự xoá) và ép User.subscription thành 1-n. Dev B drop ở PR3 khi đã sạch.
+  userId String @unique
+
+  providerSubscriptionId String?
+  invoices               Invoice[]
+  pricingOption          PricingOption       @relation(fields: [pricingOptionId], references: [id])
+  user                   User                @relation(fields: [userId], references: [id])
+  events                 SubscriptionEvent[]
+
+  @@unique([provider, providerSubscriptionId])
 }
 
+/// @deprecated Thay bằng CreditGrant. PR2 (Dev A) chuyển implementation, PR4 xoá model.
+/// "Wallet" sau đó chỉ còn là khái niệm đọc: SUM(amountRemaining) GROUP BY productId, sourceType.
 model CreditWallet {
   addonCredits Int      @default(0)
   updatedAt    DateTime @updatedAt
   is_active    Boolean  @default(false)
   userId       String   @id
   user         User     @relation(fields: [userId], references: [id])
+}
+
+/// Bucket ledger thay CreditWallet + Subscription.subscriptionCreditsRemaining (§4).
+/// Consume lock theo `priority ASC, expiresAt ASC NULLS LAST, id ASC`, chỉ lấy
+/// amountRemaining > 0. CHECK không âm nằm ở prisma/constraints.sql (Prisma DSL
+/// không diễn đạt được CHECK).
+model CreditGrant {
+  id              String                @id @default(cuid())
+  userId          String
+  /// Credit luôn thuộc đúng một product — không có credit universal (D5).
+  productId       String
+  sourceType      CreditGrantSourceType
+  /// subscriptionId / paymentId / campaignId / adminUserId tuỳ sourceType.
+  sourceRef       String?
+  amountGranted   Int
+  amountRemaining Int
+  /// Subscription credit hết hạn theo reset; add-on null; gift/promo có hạn.
+  expiresAt       DateTime?
+  /// Thứ tự tiêu điều khiển bằng data thay vì code (thay A3).
+  priority        Int                   @default(100)
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  product         Product               @relation(fields: [productId], references: [id])
+  user            User                  @relation(fields: [userId], references: [id])
+  transactions    CreditTransaction[]
+
+  @@index([userId, productId])
 }
 
 model AddonPackage {
@@ -134,6 +192,11 @@ model Invoice {
   paidAt            DateTime?
   createdAt         DateTime        @default(now())
   billingReason     String?
+  /// EXPAND: snapshot giá tại thời điểm charge (§8, D10). Row bất biến theo Stripe sub ID
+  /// nhưng KHÔNG bất biến theo pricing (đổi chu kỳ monthly↔yearly đổi pricingOptionId),
+  /// nên "invoice này theo giá nào" phải đọc từ chính Invoice. PR3 (Dev B) populate.
+  pricingOptionId   String?
+  pricingOption     PricingOption?  @relation(fields: [pricingOptionId], references: [id])
   subscription      Subscription    @relation(fields: [subscriptionId], references: [id])
   payments          Payment[]
 }
@@ -182,9 +245,16 @@ model CreditTransaction {
   referenceType  ReferenceType?
   referenceId    String?
   createdAt      DateTime              @default(now())
+  /// Constraint quan trọng nhất hệ thống – không đụng (§13.6).
   idempotencyKey String?               @unique
   userId         String
+  /// EXPAND: nullable ở PR1 vì implementation cũ vẫn ghi transaction không có grant.
+  /// Spec muốn NOT NULL — siết ở PR4 sau khi PR2 chuyển xong mọi đường ghi.
+  grantId        String?
+  grant          CreditGrant?          @relation(fields: [grantId], references: [id])
   user           User                  @relation(fields: [userId], references: [id])
+
+  @@index([grantId])
 }
 
 model SubscriptionEvent {
@@ -239,13 +309,18 @@ model CreditPolicy {
 }
 
 model Product {
-  id        String   @id @default(cuid())
-  code      String   @unique
-  name      String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  plans     Plan[]
+  id                            String        @id @default(cuid())
+  code                          String        @unique
+  name                          String
+  isActive                      Boolean       @default(true)
+  createdAt                     DateTime      @default(now())
+  updatedAt                     DateTime      @updatedAt
+  /// Add-on credit của product này có cần một sub live mới tiêu được không (D7).
+  /// AI = true: rớt về Free thì add-on grant đóng băng – không tiêu được, không mất.
+  /// Đưa vào PR1 (không phải Bước 5) để PR2 viết gate freeze một lần, khỏi rework.
+  addonRequiresLiveSubscription Boolean       @default(true)
+  creditGrants                  CreditGrant[]
+  plans                         Plan[]
 }
 
 enum WebhookEventStatus {
@@ -327,4 +402,21 @@ enum SubscriptionEventType {
 enum ResetInterval {
   MONTHLY
   EVERY_N_DAYS
+}
+
+/// Nguồn gốc của một CreditGrant (§4). Không có TRIAL – D12 bỏ trial hoàn toàn.
+enum CreditGrantSourceType {
+  SUBSCRIPTION
+  ADDON
+  GIFT
+  PROMOTION
+  ADMIN
+}
+
+/// Mở đường cho Enterprise (hoá đơn tay) và là mode của row Free (thay A10).
+/// CHECK `(billingMode='PROVIDER') = (providerSubscriptionId IS NOT NULL)` ở constraints.sql.
+enum BillingMode {
+  PROVIDER
+  MANUAL
+  NONE
 }
