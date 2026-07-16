@@ -18,11 +18,13 @@
     "prisma:studio": "prisma studio",
     "prisma:push": "prisma db push",
     "db:sync": "prisma db seed",
+    "db:doctor": "ts-node -r dotenv/config prisma/doctor.ts",
     "db:reset": "prisma migrate reset --force && prisma db seed",
     "db:verify": "prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code"
   },
   "//scripts": {
     "db:sync": "Dựng/đồng bộ catalog, chạy nhiều lần được, KHÔNG xoá dữ liệu.",
+    "db:doctor": "Báo các invariant catalog mà DB không tự giữ được (Plan thiếu CreditPolicy...). Chỉ đọc; thêm `-- --fix` để xoá phần chắc chắn an toàn. Exit 1 khi có vi phạm mức chặn.",
     "db:reset": "Người mới clone chạy cái này. Xoá sạch DB rồi dựng lại từ migration + seed. prisma migrate reset của Prisma 7 KHÔNG còn tự chạy seed (cờ --skip-seed đã bị gỡ), nên phải nối db seed thủ công.",
     "db:verify": "Lịch sử migration có replay ra đúng schema.prisma không. Chạy trước khi push; CI cũng chạy đúng lệnh này."
   },
