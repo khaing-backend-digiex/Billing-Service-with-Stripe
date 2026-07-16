@@ -2,7 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
-import { PaymentService } from "../../payment.service";
+import { PaymentRecordService } from "../../payment-record.service";
 import { CreditService } from "../../../credits/credit.service";
 import { creditKey } from "../../../credits/credit.types";
 import { STRIPE_METADATA_KEY } from "../../../common/constants/stripe.constants";
@@ -13,7 +13,7 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly paymentService: PaymentService,
+    private readonly paymentService: PaymentRecordService,
     private readonly creditService: CreditService,
   ) {}
 

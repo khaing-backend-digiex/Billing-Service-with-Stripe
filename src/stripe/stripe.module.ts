@@ -18,8 +18,8 @@ import { WebhookStrategyFactory } from "./webhook/strategies/webhook-strategy.fa
 import { FreePlanDowngradeService } from "./webhook/free-plan-downgrade.service";
 import { SubscriptionSyncService } from "./sync/subscription-sync.service";
 import { PaidInvoiceSyncService } from "./sync/paid-invoice-sync.service";
-import { InvoiceService } from "./invoice.service";
-import { PaymentService } from "./payment.service";
+import { InvoiceRecordService } from "./invoice-record.service";
+import { PaymentRecordService } from "./payment-record.service";
 import { PaymentMethodSyncService } from "./sync/payment-method-sync.service";
 import { CreditsModule } from "../credits/credits.module";
 
@@ -34,8 +34,8 @@ import { CreditsModule } from "../credits/credits.module";
     FreePlanDowngradeService,
     SubscriptionSyncService,
     PaidInvoiceSyncService,
-    InvoiceService,
-    PaymentService,
+    InvoiceRecordService,
+    PaymentRecordService,
     PaymentMethodSyncService,
     InvoicePaidStrategy,
     InvoicePaymentFailedStrategy,

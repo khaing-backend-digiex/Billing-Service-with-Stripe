@@ -5,8 +5,8 @@ import {
 } from "@prisma/client";
 import { FreePlanReconciliationCron } from "../src/cron/free-plan-reconciliation.cron";
 import { PaidInvoiceSyncService } from "../src/stripe/sync/paid-invoice-sync.service";
-import { InvoiceService } from "../src/stripe/invoice.service";
-import { PaymentService } from "../src/stripe/payment.service";
+import { InvoiceRecordService } from "../src/stripe/invoice-record.service";
+import { PaymentRecordService } from "../src/stripe/payment-record.service";
 import { StripeAdapter } from "../src/stripe/adapter/stripe.adapter";
 import { CreditService } from "../src/credits/credit.service";
 import { CreditRepository } from "../src/credits/credit.repository";
@@ -50,8 +50,8 @@ describe("FreePlanReconciliationCron – missing settlement (real DB, Stripe moc
       new PaidInvoiceSyncService(
         ctx.prisma,
         pricingServiceStub as any,
-        new InvoiceService(ctx.prisma),
-        new PaymentService(ctx.prisma),
+        new InvoiceRecordService(ctx.prisma),
+        new PaymentRecordService(ctx.prisma),
         creditService,
       ),
       ctx.prisma,

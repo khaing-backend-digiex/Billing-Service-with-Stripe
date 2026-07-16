@@ -9,8 +9,8 @@ import { SetupIntentStrategy } from "../src/stripe/webhook/strategies/setup-inte
 import { PaymentIntentFailedStrategy } from "../src/stripe/webhook/strategies/payment-intent-failed.strategy";
 import { InvoicePaymentActionRequiredStrategy } from "../src/stripe/webhook/strategies/invoice-payment-action-required.strategy";
 import { PaymentMethodSyncService } from "../src/stripe/sync/payment-method-sync.service";
-import { InvoiceService } from "../src/stripe/invoice.service";
-import { PaymentService } from "../src/stripe/payment.service";
+import { InvoiceRecordService } from "../src/stripe/invoice-record.service";
+import { PaymentRecordService } from "../src/stripe/payment-record.service";
 import { StripeAdapter } from "../src/stripe/adapter/stripe.adapter";
 import {
   TestContext,
@@ -215,7 +215,7 @@ describe("Payment method & off-session webhooks (real DB, Stripe mocked)", () =>
 
   // ───────────────────────── payment_intent.payment_failed ─────────────────────────
   describe("payment_intent.payment_failed", () => {
-    const strategy = () => new PaymentIntentFailedStrategy(new PaymentService(ctx.prisma));
+    const strategy = () => new PaymentIntentFailedStrategy(new PaymentRecordService(ctx.prisma));
 
     it("rescues a Payment stuck in PENDING", async () => {
       const user = await ctx.createUser();
@@ -306,7 +306,7 @@ describe("Payment method & off-session webhooks (real DB, Stripe mocked)", () =>
     const strategy = () =>
       new InvoicePaymentActionRequiredStrategy(
         ctx.prisma,
-        new InvoiceService(ctx.prisma),
+        new InvoiceRecordService(ctx.prisma),
         stripeServiceMock as any,
       );
 
