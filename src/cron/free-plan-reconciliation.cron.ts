@@ -71,35 +71,47 @@ export class FreePlanReconciliationCron {
   }
 
   private async reconcileMissingSettlement(): Promise<void> {
-    const candidates = await this.prisma.subscription.findMany({
-      where: {
-        status: SubscriptionStatus.ACTIVE,
-        providerSubscriptionId: { not: null },
-        currentPeriodStart: { lt: new Date(Date.now() - GRACE_MS) },
-        pricingOption: { plan: { creditPolicy: { creditAmount: { gt: 0 } } } },
-      },
-      take: BATCH_SIZE,
-    });
-
-    if (candidates.length === 0) return;
-
-    const grants = await this.prisma.creditTransaction.findMany({
-      where: {
-        type: CreditTransactionType.RENEWAL,
-        referenceType: ReferenceType.SUBSCRIPTION,
-        referenceId: { in: candidates.map((s) => s.id) },
-      },
-      select: { referenceId: true, createdAt: true },
-    });
-
-    const stuck = candidates.filter(
-      (sub) =>
-        !grants.some(
-          (grant) =>
-            grant.referenceId === sub.id &&
-            grant.createdAt >= sub.currentPeriodStart,
-        ),
-    );
+    // Bằng chứng "đã cấp credit cho kỳ này" là SỔ, không phải số dư. Điều kiện sổ phải nằm
+    // TRONG query, không được lọc sau khi đã take() — nếu không cron chết đói.
+    //
+    // Bản cũ take(50) trên bộ lọc số dư rồi mới đối chiếu sổ: người tiêu hết credit (số dư
+    // 0 nhưng CÓ bút toán) là false positive vĩnh viễn, luôn chiếm chỗ trong batch. Dev A
+    // đã bỏ điều kiện `subscriptionCreditsRemaining = 0` (đúng — cột đó chết ở PR4), nhưng
+    // vì bộ lọc sổ vẫn nằm sau take() nên việc bỏ đó làm mọi sub ACTIVE quá grace đều
+    // thành candidate: rộng hơn trước, và sub kẹt thật càng khó lọt vào 50 chỗ. Không có
+    // orderBy nên thứ tự còn do DB quyết.
+    //
+    // NOT EXISTS giữ nguyên định nghĩa "kẹt" cũ (không có bút toán RENEWAL nào từ đầu kỳ
+    // hiện tại) — chỉ đổi chỗ lọc, không đổi business rule.
+    //
+    // Phải là raw SQL: điều kiện sổ so `referenceId` với id của CHÍNH sub đang xét và
+    // `createdAt` với `currentPeriodStart` của chính nó. Prisma không tham chiếu chéo cột
+    // của hàng ngoài trong nested filter được.
+    //
+    // TODO(C6): khi PR2 chuyển xong mọi đường ghi sang CreditGrant, đổi NOT EXISTS sang
+    // CreditGrant(SUBSCRIPTION, sourceRef = s.id) của kỳ hiện tại. Giữ CreditTransaction ở
+    // đây vì hiện nó vẫn là sổ được ghi.
+    const stuck = await this.prisma.$queryRaw<
+      { id: string; providerSubscriptionId: string }[]
+    >`
+      SELECT s.id, s."providerSubscriptionId"
+      FROM "Subscription" s
+      JOIN "PricingOption" po ON po.id = s."pricingOptionId"
+      JOIN "CreditPolicy" cp ON cp."planId" = po."planId"
+      WHERE s.status = ${SubscriptionStatus.ACTIVE}::"SubscriptionStatus"
+        AND s."providerSubscriptionId" IS NOT NULL
+        AND s."currentPeriodStart" < ${new Date(Date.now() - GRACE_MS)}
+        AND cp."creditAmount" > 0
+        AND NOT EXISTS (
+          SELECT 1 FROM "CreditTransaction" ct
+          WHERE ct."referenceId" = s.id
+            AND ct.type = ${CreditTransactionType.RENEWAL}::"CreditTransactionType"
+            AND ct."referenceType" = ${ReferenceType.SUBSCRIPTION}::"ReferenceType"
+            AND ct."createdAt" >= s."currentPeriodStart"
+        )
+      ORDER BY s."currentPeriodStart" ASC
+      LIMIT ${BATCH_SIZE}
+    `;
 
     if (stuck.length === 0) return;
 

@@ -2,18 +2,6 @@ import { Pool } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 
-/**
- * Kiểm các invariant của catalog mà DB KHÔNG tự giữ được.
- *
- *   npm run db:doctor         -> chỉ báo cáo, không sửa gì. Có vi phạm thì exit 1.
- *   npm run db:doctor -- --fix -> xoá những thứ chắc chắn an toàn (xem SAFE_TO_DELETE).
- *
- * Vì sao là script chứ không phải constraint: "mọi Plan phải có CreditPolicy" là quan hệ
- * 1-1 optional theo chiều Plan -> CreditPolicy. Không có cột nào trên Plan để ép NOT NULL,
- * và Prisma không diễn đạt được CHECK/trigger. Ép bằng trigger thì được, nhưng nó chặn cả
- * đường tạo hợp lệ (tạo Plan xong mới tạo policy trong cùng transaction). Nên: script +
- * báo động, chạy trong CI hoặc tay — đừng cố nhét vào schema.
- */
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
@@ -21,11 +9,9 @@ const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
 const FIX = process.argv.includes('--fix');
 
 interface Finding {
-  /** true = chặn (dữ liệu đang sai), false = cảnh báo (sẽ sai khi hệ thống lớn hơn). */
   blocking: boolean;
   title: string;
   detail: string[];
-  /** Vì sao nó quan trọng — cái này mới là thứ người đọc log cần. */
   why: string;
 }
 

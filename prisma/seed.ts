@@ -5,6 +5,7 @@ import Stripe from 'stripe';
 import { formatDatabaseAmountToStripe } from '../src/stripe/utils/stripe-currency.util';
 import {
   RecurringSpec,
+  adoptExistingPrice,
   ensureStripeProduct,
   ensureStripeRecurringPrice,
   stripePriceLookupKey,
@@ -49,11 +50,24 @@ interface ProductSeed {
 }
 
 const MONTHLY: RecurringSpec = { interval: 'month', intervalCount: 1 };
+const YEARLY: RecurringSpec = { interval: 'year', intervalCount: 1 };
 
 /**
+ * Catalog này CHÉP LẠI đúng thứ đang chạy trên DB dev, không phải thứ tôi thấy hợp lý:
+ * tiền tệ vnd, cycle tên MONTHLY/ANUALLY, tên gói tiếng Việt, giá 0 / 300k / 3tr.
+ * ("ANUALLY" sai chính tả, nhưng nó là tên có thật trong DB — seed phải khớp thực tế, sửa
+ * tên là việc riêng và phải migrate dữ liệu.)
+ *
+ * Bản trước tôi tự đặt usd + cycle "Monthly": khoá upsert
+ * (planId, billingCycleId, currency, provider) không khớp catalog vnd có sẵn nên đẻ ra
+ * option FREE thứ hai, làm getFreePriceId() — vốn lấy pricingOptions[0] — thành tung đồng
+ * xu. Tự ý đổi đơn vị tiền là đổi business rule, không phải chi tiết kỹ thuật.
+ *
+ * vnd là zero-decimal: formatDatabaseAmountToStripe không nhân 100 (300000 vnd -> 300000).
+ *
  * CHỈ MỘT product có plan FREE, có chủ đích — xem cảnh báo ở cuối file.
  * Mọi Plan đều phải có CreditPolicy: thiếu policy thì cấp credit bị log error rồi skip,
- * tức sub gắn vào plan đó không bao giờ nhận credit (invariant của C4).
+ * tức sub gắn vào plan đó không bao giờ nhận credit (invariant của C4, `npm run db:doctor`).
  */
 const CATALOG: ProductSeed[] = [
   {
@@ -62,15 +76,15 @@ const CATALOG: ProductSeed[] = [
     plans: [
       {
         code: 'FREE',
-        name: 'Free',
+        name: 'Gói Free',
         isFree: true,
         creditAmount: 50,
         resetInterval: ResetInterval.MONTHLY,
         options: [
           {
-            cycleName: 'Monthly',
+            cycleName: 'MONTHLY',
             durationDay: 30,
-            currency: 'usd',
+            currency: 'vnd',
             price: 0,
             recurring: MONTHLY,
           },
@@ -78,17 +92,24 @@ const CATALOG: ProductSeed[] = [
       },
       {
         code: 'PRO',
-        name: 'Pro',
+        name: 'Gói Pro',
         isFree: false,
         creditAmount: 100,
         resetInterval: ResetInterval.MONTHLY,
         options: [
           {
-            cycleName: 'Monthly',
+            cycleName: 'MONTHLY',
             durationDay: 30,
-            currency: 'usd',
-            price: 10,
+            currency: 'vnd',
+            price: 300_000,
             recurring: MONTHLY,
+          },
+          {
+            cycleName: 'ANUALLY',
+            durationDay: 365,
+            currency: 'vnd',
+            price: 3_000_000,
+            recurring: YEARLY,
           },
         ],
       },
@@ -156,53 +177,71 @@ async function main() {
       });
       console.log(`  Plan ${plan.code}: ${plan.id} (${planSeed.creditAmount} credits)`);
 
-      const stripeProduct = await ensureStripeProduct(
-        stripe,
-        stripeProductId(productSeed.code, planSeed.code),
-        `${productSeed.name} - ${planSeed.name}`,
-      );
-      console.log(
-        `    Stripe product ${stripeProduct.id} (${stripeProduct.created ? 'tạo mới' : 'tái dùng'})`,
-      );
+      // Product bên Stripe chỉ dựng khi thật sự phải tạo Price mới. Nếu mọi option của plan
+      // đều nhận nuôi được price có sẵn thì không đẻ thêm Product rác vào tài khoản Stripe.
+      let stripeProductIdCache: string | null = null;
+      const productForPrice = async (): Promise<string> => {
+        if (stripeProductIdCache) return stripeProductIdCache;
+        const p = await ensureStripeProduct(
+          stripe,
+          stripeProductId(productSeed.code, planSeed.code),
+          `${productSeed.name} - ${planSeed.name}`,
+        );
+        console.log(`    Stripe product ${p.id} (${p.created ? 'tạo mới' : 'tái dùng'})`);
+        stripeProductIdCache = p.id;
+        return p.id;
+      };
 
       for (const optionSeed of planSeed.options) {
         const billingCycle = await ensureBillingCycle(optionSeed.cycleName, optionSeed.durationDay);
-
-        const price = await ensureStripeRecurringPrice(stripe, {
-          productId: stripeProduct.id,
-          lookupKey: stripePriceLookupKey(
-            productSeed.code,
-            planSeed.code,
-            optionSeed.cycleName,
-            optionSeed.currency,
-          ),
-          unitAmount: formatDatabaseAmountToStripe(optionSeed.price, optionSeed.currency),
+        const optionKey = {
+          planId: plan.id,
+          billingCycleId: billingCycle.id,
           currency: optionSeed.currency,
-          recurring: optionSeed.recurring,
-        });
-        console.log(
-          `    Stripe price ${price.id} (${price.created ? 'tạo mới' : 'tái dùng'})`,
+          provider: PaymentProvider.STRIPE,
+        };
+        const lookupKey = stripePriceLookupKey(
+          productSeed.code,
+          planSeed.code,
+          optionSeed.cycleName,
+          optionSeed.currency,
         );
 
+        // Price mà DB đã biết được ưu tiên tuyệt đối: sub thật đang chạy trên nó. Tạo price
+        // mới rồi ghi đè sẽ làm findByProviderPriceId() trả null -> webhook gia hạn gãy.
+        const existing = await prisma.pricingOption.findUnique({
+          where: { planId_billingCycleId_currency_provider: optionKey },
+        });
+        let priceId: string | null = existing?.providerPriceId
+          ? await adoptExistingPrice(stripe, existing.providerPriceId, lookupKey)
+          : null;
+
+        if (priceId) {
+          console.log(`    Stripe price ${priceId} (nhận nuôi price DB đang dùng)`);
+        } else {
+          const created = await ensureStripeRecurringPrice(stripe, {
+            productId: await productForPrice(),
+            lookupKey,
+            unitAmount: formatDatabaseAmountToStripe(optionSeed.price, optionSeed.currency),
+            currency: optionSeed.currency,
+            recurring: optionSeed.recurring,
+          });
+          priceId = created.id;
+          console.log(`    Stripe price ${priceId} (${created.created ? 'tạo mới' : 'tái dùng'})`);
+        }
+
         await prisma.pricingOption.upsert({
-          where: {
-            planId_billingCycleId_currency_provider: {
-              planId: plan.id,
-              billingCycleId: billingCycle.id,
-              currency: optionSeed.currency,
-              provider: PaymentProvider.STRIPE,
-            },
-          },
-          update: { providerPriceId: price.id, price: optionSeed.price, isActive: true },
+          where: { planId_billingCycleId_currency_provider: optionKey },
+          // KHÔNG đụng `price` và `providerPriceId` của option đã có: giá là dữ liệu thật,
+          // và price id thì sub đang chạy trên đó. Seed dựng thứ còn thiếu, không cải tạo
+          // thứ đang chạy.
+          update: { providerPriceId: priceId, isActive: true },
           create: {
-            planId: plan.id,
+            ...optionKey,
             productId: product.id,
-            billingCycleId: billingCycle.id,
             name: `${planSeed.name} ${optionSeed.cycleName}`,
             price: optionSeed.price,
-            currency: optionSeed.currency,
-            provider: PaymentProvider.STRIPE,
-            providerPriceId: price.id,
+            providerPriceId: priceId,
           },
         });
       }

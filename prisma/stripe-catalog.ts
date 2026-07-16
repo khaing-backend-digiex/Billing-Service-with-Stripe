@@ -42,6 +42,41 @@ export function stripePriceLookupKey(
     .replace(/[^a-z0-9_]/g, '_');
 }
 
+/**
+ * Nhận nuôi một Price đã có sẵn trong DB thay vì tạo cái mới.
+ *
+ * Đây là ca brownfield, và nó là ca NGUY HIỂM NHẤT: DB dev đã có catalog dựng tay từ
+ * trước, với providerPriceId mà sub thật đang chạy trên đó. Nếu seed cứ tạo price mới rồi
+ * upsert đè lên providerPriceId, DB sẽ trỏ sang price mới trong khi sub trên Stripe vẫn
+ * chạy price cũ — findByProviderPriceId() trả null và webhook gia hạn gãy cho toàn bộ số
+ * sub đó. Nên: price nào DB đã biết thì TÁI DÙNG, chỉ đóng thêm lookup_key lên nó để lần
+ * sau tra được. Không bao giờ ghi đè.
+ *
+ * Trả null nếu price không còn dùng được (bị xoá/archive trên Stripe) — lúc đó caller mới
+ * được tạo mới.
+ */
+export async function adoptExistingPrice(
+  stripe: Stripe,
+  priceId: string,
+  lookupKey: string,
+): Promise<string | null> {
+  let price: Stripe.Price;
+  try {
+    price = await stripe.prices.retrieve(priceId);
+  } catch (error) {
+    if (error instanceof Stripe.errors.StripeError && error.code === 'resource_missing') {
+      return null;
+    }
+    throw error;
+  }
+  if (!price.active) return null;
+
+  if (price.lookup_key !== lookupKey) {
+    await stripe.prices.update(price.id, { lookup_key: lookupKey, transfer_lookup_key: true });
+  }
+  return price.id;
+}
+
 async function retrieveProduct(stripe: Stripe, id: string): Promise<Stripe.Product | null> {
   try {
     return await stripe.products.retrieve(id);
