@@ -1,6 +1,7 @@
 import { Injectable, InternalServerErrorException, Inject } from "@nestjs/common";
 import { PrismaService } from "../database/prisma.service";
 import { ConfigService } from "@nestjs/config";
+import {PaymentProvider} from "@prisma/client"
 import { formatDatabaseAmountToStripe } from "../stripe/utils/stripe-currency.util";
 import { IPaymentAdapter } from "../payments/types/payment-adapter.interface";
 
@@ -70,7 +71,7 @@ export class PricingService {
           name: data.name,
           price: data.price,
           currency: data.currency,
-          provider: "STRIPE",
+          provider: PaymentProvider.STRIPE,
           providerPriceId: priceId,
         },
       });
@@ -104,7 +105,7 @@ export class PricingService {
           credits: data.credits,
           price: data.price,
           currency: data.currency,
-          provider: "STRIPE",
+          provider: PaymentProvider.STRIPE,
           providerPriceId: priceId,
         },
       });
