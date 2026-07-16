@@ -30,14 +30,14 @@ describe("CreditResetCronService (real DB)", () => {
     await cron.handleCreditReset();
 
     const after = await ctx.prisma.subscription.findUniqueOrThrow({ where: { id: sub.id } });
-    expect(after.subscriptionCreditsRemaining).toBe(ctx.plan.renewalCredits);
+    expect(after.subscriptionCreditsRemaining).toBe(ctx.plan.creditPolicy.creditAmount);
     expect(after.nextCreditResetAt.getTime()).toBeGreaterThan(Date.now());
 
     const txs = await ctx.prisma.creditTransaction.findMany({
       where: { userId: user.id, type: CreditTransactionType.RENEWAL },
     });
     expect(txs).toHaveLength(1);
-    expect(txs[0].amount).toBe(ctx.plan.renewalCredits);
+    expect(txs[0].amount).toBe(ctx.plan.creditPolicy.creditAmount);
 
     const events = await ctx.prisma.subscriptionEvent.findMany({
       where: { subscriptionId: sub.id, type: SubscriptionEventType.RENEWED },
@@ -62,7 +62,7 @@ describe("CreditResetCronService (real DB)", () => {
     expect(txs).toHaveLength(1);
 
     const after = await ctx.prisma.subscription.findUniqueOrThrow({ where: { id: sub.id } });
-    expect(after.subscriptionCreditsRemaining).toBe(ctx.plan.renewalCredits);
+    expect(after.subscriptionCreditsRemaining).toBe(ctx.plan.creditPolicy.creditAmount);
   });
 
   it("grants exactly once when two runs execute concurrently (optimistic lock)", async () => {

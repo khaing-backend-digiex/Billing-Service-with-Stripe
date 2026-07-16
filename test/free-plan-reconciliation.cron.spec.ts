@@ -20,7 +20,7 @@ describe("FreePlanReconciliationCron – missing settlement (real DB, Stripe moc
     findByProviderPriceId: (priceId: string) =>
       ctx.prisma.pricingOption.findFirst({
         where: { providerPriceId: priceId },
-        include: { plan: true },
+        include: { plan: { include: { creditPolicy: true } } },
       }),
   };
 
@@ -100,13 +100,13 @@ describe("FreePlanReconciliationCron – missing settlement (real DB, Stripe moc
     const after = await ctx.prisma.subscription.findUniqueOrThrow({
       where: { id: sub.id },
     });
-    expect(after.subscriptionCreditsRemaining).toBe(ctx.freePlan.renewalCredits);
+    expect(after.subscriptionCreditsRemaining).toBe(ctx.freePlan.creditPolicy.creditAmount);
 
     const grants = await ctx.prisma.creditTransaction.findMany({
       where: { userId: user.id, type: CreditTransactionType.RENEWAL },
     });
     expect(grants).toHaveLength(1);
-    expect(grants[0].amount).toBe(ctx.freePlan.renewalCredits);
+    expect(grants[0].amount).toBe(ctx.freePlan.creditPolicy.creditAmount);
   });
 
   it("is idempotent: a second run does not grant credits again", async () => {
@@ -157,7 +157,7 @@ describe("FreePlanReconciliationCron – missing settlement (real DB, Stripe moc
       data: {
         userId: user.id,
         type: CreditTransactionType.RENEWAL,
-        amount: ctx.freePlan.renewalCredits,
+        amount: ctx.freePlan.creditPolicy.creditAmount,
         description: "already granted",
         referenceType: ReferenceType.SUBSCRIPTION,
         referenceId: sub.id,
