@@ -1,14 +1,13 @@
 import {
   AllocationSource,
   AllocationResult,
-  CreditBucket,
 } from './credit.types';
 
 export function allocateCredits(
   sources: AllocationSource[],
   amount: number,
 ): AllocationResult {
-  const allocations: { bucket: CreditBucket; amount: number }[] = [];
+  const allocations: { grantId: string; sourceType: any; amount: number }[] = [];
   let remaining = amount;
 
   for (const source of sources) {
@@ -16,7 +15,7 @@ export function allocateCredits(
 
     const take = Math.min(remaining, source.available);
     if (take > 0) {
-      allocations.push({ bucket: source.bucket, amount: take });
+      allocations.push({ grantId: source.grantId, sourceType: source.sourceType, amount: take });
       remaining -= take;
     }
   }

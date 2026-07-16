@@ -128,7 +128,7 @@ export class StripeService {
 
   async getFreePriceId(): Promise<string | null> {
     const freePlan = await this.prisma.plan.findFirst({
-      where: { code: PLAN_CODES.FREE },
+      where: { isFree: true },
       include: { pricingOptions: true },
     });
     return freePlan?.pricingOptions[0]?.providerPriceId ?? null;

@@ -1,23 +1,29 @@
 import { Injectable } from "@nestjs/common";
-import { CreditBucket, isAddonUsable } from "./credit.types";
+import { isAddonUsable } from "./credit.types";
 import { PrismaService } from "../database/prisma.service";
-import { CreditTransactionType, ReferenceType, SubscriptionStatus } from "@prisma/client";
+import { CreditTransactionType, CreditGrantSourceType, SubscriptionStatus, ReferenceType } from "@prisma/client";
 
 type TxClient = Parameters<Parameters<PrismaService["$transaction"]>[0]>[0];
 
 export interface TransactionEntry {
   type: CreditTransactionType;
-  bucket: CreditBucket;
+  grantId: string;
   amount: number;
   description: string;
+  referenceType?: ReferenceType;
   referenceId?: string;
   idempotencyKey: string;
 }
 
+export interface LockedGrant {
+  id: string;
+  sourceType: CreditGrantSourceType;
+  amountRemaining: number;
+}
+
 export interface LockedBalances {
-  subscriptionRemaining: number;
-  addonCredits: number;
-  isActive: boolean;
+  grants: LockedGrant[];
+  addonIsActive: boolean;
 }
 
 @Injectable()
@@ -30,7 +36,6 @@ export class CreditRepository {
     entry: TransactionEntry,
     tx: TxClient,
   ): Promise<boolean> {
-    // Check for existing transaction to avoid P2002 transaction poisoning
     if (entry.idempotencyKey) {
       const existing = await tx.creditTransaction.findUnique({
         where: { idempotencyKey: entry.idempotencyKey },
@@ -41,31 +46,23 @@ export class CreditRepository {
       }
     }
 
-    // 1. Update balance
-    if (entry.bucket === ReferenceType.SUBSCRIPTION) {
-      await tx.subscription.update({
-        where: { userId },
-        data: {
-          subscriptionCreditsRemaining: { increment: delta },
-        },
-      });
-    } else {
-      await tx.creditWallet.update({
-        where: { userId },
-        data: {
-          addonCredits: { increment: delta },
-        },
-      });
-    }
+    // Update grant balance
+    await tx.creditGrant.update({
+      where: { id: entry.grantId },
+      data: {
+        amountRemaining: { increment: delta },
+      },
+    });
 
-    // 2. log transaction
+    // Log transaction
     await tx.creditTransaction.create({
       data: {
         userId,
+        grantId: entry.grantId,
         type: entry.type,
         amount: entry.amount,
         description: entry.description,
-        referenceType: entry.bucket,
+        referenceType: entry.referenceType,
         referenceId: entry.referenceId,
         idempotencyKey: entry.idempotencyKey,
       },
@@ -74,11 +71,13 @@ export class CreditRepository {
     return true;
   }
 
-  async lockForConsume(userId: String, tx: TxClient): Promise<LockedBalances> {
+  async lockForConsume(userId: string, productId: string, tx: TxClient): Promise<LockedBalances> {
+    // We lock the single subscription to derive freeze status.
+    // (In Step 3, this will also filter by productId once the Subscription model becomes multi-product).
     const subRows = await tx.$queryRaw<
-      [{ subscriptionCreditsRemaining: number; status: SubscriptionStatus; planCode: string }] | []
+      [{ status: SubscriptionStatus; planCode: string }] | []
     >`
-      SELECT s."subscriptionCreditsRemaining", s."status", p."code" AS "planCode"
+      SELECT s."status", p."code" AS "planCode"
       FROM "Subscription" s
       JOIN "PricingOption" po ON po."id" = s."pricingOptionId"
       JOIN "Plan" p ON p."id" = po."planId"
@@ -87,30 +86,39 @@ export class CreditRepository {
     `;
     const sub = subRows[0] ?? null;
 
-    // Lock wallet row
-    const walletRows = await tx.$queryRaw<[{ addonCredits: number }] | []>`
-      SELECT "addonCredits"
-      FROM "CreditWallet"
+    // Lock relevant grants
+    const grantRows = await tx.$queryRaw<
+      [{ id: string; sourceType: CreditGrantSourceType; amountRemaining: number }]
+    >`
+      SELECT "id", "sourceType", "amountRemaining"
+      FROM "CreditGrant"
       WHERE "userId" = ${userId}
+        AND "productId" = ${productId}
+        AND "amountRemaining" > 0
+        AND ("expiresAt" IS NULL OR "expiresAt" > NOW())
+      ORDER BY "priority" ASC, "expiresAt" ASC NULLS LAST, "id" ASC
       FOR UPDATE
     `;
 
-    const wallet = walletRows[0] ?? null;
-
     return {
-      subscriptionRemaining: sub?.subscriptionCreditsRemaining ?? 0,
-      addonCredits: wallet?.addonCredits ?? 0,
-      isActive: isAddonUsable(sub?.planCode, sub?.status),
+      grants: grantRows || [],
+      addonIsActive: isAddonUsable(sub?.planCode, sub?.status),
     };
   }
 
-  async lockForRevokeSubscription(userId: String, tx: TxClient): Promise<number> {
-    const rows = await tx.$queryRaw<[{ subscriptionCreditsRemaining: number }] | []>`
-      SELECT "subscriptionCreditsRemaining"
-      FROM "Subscription"
+  async lockForRevokeSubscription(userId: string, productId: string, tx: TxClient): Promise<LockedGrant[]> {
+    const grantRows = await tx.$queryRaw<
+      [{ id: string; sourceType: CreditGrantSourceType; amountRemaining: number }]
+    >`
+      SELECT "id", "sourceType", "amountRemaining"
+      FROM "CreditGrant"
       WHERE "userId" = ${userId}
+        AND "productId" = ${productId}
+        AND "sourceType" = 'SUBSCRIPTION'
+        AND "amountRemaining" > 0
+      ORDER BY "priority" ASC, "expiresAt" ASC NULLS LAST, "id" ASC
       FOR UPDATE
     `;
-    return rows[0]?.subscriptionCreditsRemaining ?? 0;
+    return grantRows || [];
   }
 }

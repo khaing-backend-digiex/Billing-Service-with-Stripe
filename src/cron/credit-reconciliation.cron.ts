@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../database/prisma.service';
-import { ReferenceType } from '@prisma/client';
 
 @Injectable()
 export class CreditReconciliationCron {
@@ -13,65 +12,32 @@ export class CreditReconciliationCron {
   async run() {
     this.logger.log('Starting daily credit reconciliation check...');
     
-    // Get all users who have subscriptions or credit wallets
-    const users = await this.prisma.user.findMany({
-      select: { id: true },
-      where: {
-        OR: [
-          { subscription: { isNot: null } },
-          { creditWallet: { isNot: null } },
-        ]
-      }
+    // Get all grants
+    const grants = await this.prisma.creditGrant.findMany({
+      select: { id: true, userId: true, amountRemaining: true }
     });
 
-    for (const user of users) {
-      await this.reconcileUser(user.id);
+    for (const grant of grants) {
+      await this.reconcileGrant(grant.id, grant.userId, grant.amountRemaining);
     }
     
     this.logger.log('Finished daily credit reconciliation check.');
   }
 
-  private async reconcileUser(userId: string) {
-    // 1. Get current balances
-    const sub = await this.prisma.subscription.findUnique({
-      where: { userId },
-      select: { subscriptionCreditsRemaining: true }
-    });
-    const wallet = await this.prisma.creditWallet.findUnique({
-      where: { userId },
-      select: { addonCredits: true }
-    });
-
-    const currentSubBalance = sub?.subscriptionCreditsRemaining ?? 0;
-    const currentAddonBalance = wallet?.addonCredits ?? 0;
-
-    if (currentSubBalance < 0) {
-      this.logger.error(`[ALARM] User ${userId} has negative subscription balance: ${currentSubBalance}`);
-    }
-    if (currentAddonBalance < 0) {
-      this.logger.error(`[ALARM] User ${userId} has negative addon balance: ${currentAddonBalance}`);
+  private async reconcileGrant(grantId: string, userId: string, amountRemaining: number) {
+    if (amountRemaining < 0) {
+      this.logger.error(`[ALARM] User ${userId} has negative balance on grant ${grantId}: ${amountRemaining}`);
     }
 
-    // 2. Sum up all transactions for SUBSCRIPTION bucket
-    const subTxs = await this.prisma.creditTransaction.aggregate({
+    const txs = await this.prisma.creditTransaction.aggregate({
       _sum: { amount: true },
-      where: { userId, referenceType: ReferenceType.SUBSCRIPTION }
+      where: { grantId }
     });
-    const subTxSum = subTxs._sum.amount ?? 0;
+    
+    const txSum = txs._sum.amount ?? 0;
 
-    if (subTxSum !== currentSubBalance) {
-      this.logger.error(`[ALARM] User ${userId} subscription balance mismatch! DB Balance: ${currentSubBalance}, TX Sum: ${subTxSum}`);
-    }
-
-    // 3. Sum up all transactions for ADDON_PURCHASE bucket
-    const addonTxs = await this.prisma.creditTransaction.aggregate({
-      _sum: { amount: true },
-      where: { userId, referenceType: ReferenceType.ADDON_PURCHASE }
-    });
-    const addonTxSum = addonTxs._sum.amount ?? 0;
-
-    if (addonTxSum !== currentAddonBalance) {
-      this.logger.error(`[ALARM] User ${userId} addon balance mismatch! DB Balance: ${currentAddonBalance}, TX Sum: ${addonTxSum}`);
+    if (txSum !== amountRemaining) {
+      this.logger.error(`[ALARM] User ${userId} grant ${grantId} balance mismatch! DB Balance: ${amountRemaining}, TX Sum: ${txSum}`);
     }
   }
 }

@@ -19,10 +19,11 @@ export class CreditsController {
   async consumeCredits(@Req() req: any, @Body() dto: ConsumeCreditsDto) {
     const result = await this.creditService.consume({
       userId: req.user.id,
+      productId: dto.productId,
       amount: dto.amount,
       referenceId: dto.referenceId ?? 'api-consume',
       description: dto.description ?? 'API Consume',
-      idempotencyKey: creditKey.consume(req.user.id, dto.idempotencyKey),
+      idempotencyKey: creditKey.consume(req.user.id, dto.productId, dto.idempotencyKey),
     });
 
     return new ApiResponse(

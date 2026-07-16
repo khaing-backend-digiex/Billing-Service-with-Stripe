@@ -1,13 +1,13 @@
-import { ReferenceType, SubscriptionStatus } from '@prisma/client';
+import { CreditGrantSourceType, SubscriptionStatus } from '@prisma/client';
 import { PLAN_CODES } from '../common/constants/plan.constants';
-
-export type CreditBucket = typeof ReferenceType.SUBSCRIPTION | typeof ReferenceType.ADDON_PURCHASE;
 
 export const ADDON_LIVE_STATUSES: SubscriptionStatus[] = [
   SubscriptionStatus.ACTIVE,
   SubscriptionStatus.TRIALING,
 ];
 
+// In a real implementation this should check the specific Product.addonRequiresLiveSubscription flag,
+// but for now we follow the existing logic structure mapped to the new parameters.
 export const isAddonUsable = (
   planCode: string | null | undefined,
   status: SubscriptionStatus | null | undefined,
@@ -19,14 +19,17 @@ export const isAddonUsable = (
 
 export interface GrantSubscriptionCmd {
   userId: string;
+  productId: string;
   amount: number;
   description: string;
   referenceId: string;
   idempotencyKey: string;
+  expiresAt?: Date;
 }
 
 export interface RevokeSubscriptionCmd {
   userId: string;
+  productId: string;
   description: string;
   referenceId: string;
   idempotencyKey: string;
@@ -34,23 +37,28 @@ export interface RevokeSubscriptionCmd {
 
 export interface ResetSubscriptionCmd {
   userId: string;
+  productId: string;
   amount: number;
   grantDescription: string;
   revokeDescription: string;
   referenceId: string;
   idempotencyKey: string;
+  expiresAt?: Date;
 }
 
 export interface GrantAddonCmd {
   userId: string;
+  productId: string;
   amount: number;
   description: string;
   referenceId: string;
   idempotencyKey: string;
+  expiresAt?: Date;
 }
 
 export interface ConsumeCmd {
   userId: string;
+  productId: string;
   amount: number;
   description: string;
   referenceId: string;
@@ -59,33 +67,28 @@ export interface ConsumeCmd {
 
 export interface AdjustCmd {
   userId: string;
-  bucket: CreditBucket;
+  productId: string;
+  sourceType: CreditGrantSourceType;
   amount: number;
   description: string;
   idempotencyKey: string;
 }
 
-export interface CreditBalance {
-  subscription: number;
-  addon: number;
-  addonActive: boolean;
-  total: number;
-}
-
 export interface ConsumeResult {
-  fromSubscription: number;
-  fromAddon: number;
+  allocations: { sourceType: CreditGrantSourceType; amount: number; grantId: string }[];
+  totalAllocated: number;
   remainingSubscription: number;
   remainingAddon: number;
 }
 
 export interface AllocationSource {
-  bucket: CreditBucket;
+  grantId: string;
+  sourceType: CreditGrantSourceType;
   available: number;
 }
 
 export interface AllocationResult {
-  allocations: { bucket: CreditBucket; amount: number }[];
+  allocations: { grantId: string; sourceType: CreditGrantSourceType; amount: number }[];
   totalAllocated: number;
   shortfall: number;
 }
@@ -126,9 +129,9 @@ export const creditKey = {
     join(KEY_SCOPE.SUBSCRIPTION, subscriptionId, KEY_ACTION.REVOKE, providerSubscriptionId),
   addonPurchase: (providerPaymentId: string) =>
     join(KEY_SCOPE.PAYMENT_INTENT, providerPaymentId),
-  consume: (userId: string, requestId: string) =>
-    join(KEY_SCOPE.REQUEST, userId, requestId, KEY_ACTION.CONSUME),
+  consume: (userId: string, productId: string, requestId: string) =>
+    join(KEY_SCOPE.REQUEST, userId, productId, requestId, KEY_ACTION.CONSUME),
   revokeStep: (baseKey: string) => join(baseKey, KEY_ACTION.REVOKE),
   grantStep: (baseKey: string) => join(baseKey, KEY_ACTION.GRANT),
-  bucketStep: (baseKey: string, bucket: string) => join(baseKey, bucket),
+  grantStepItem: (baseKey: string, grantId: string) => join(baseKey, grantId),
 } as const;

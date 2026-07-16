@@ -9,6 +9,10 @@ export class ConsumeCreditsDto {
   @Transform(({ value }) => parseInt(value, 10))
   amount!: number;
 
+  @IsNotEmpty()
+  @IsString()
+  productId!: string;
+
   @IsOptional()
   @IsString()
   referenceId?: string;

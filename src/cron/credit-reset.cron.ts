@@ -95,6 +95,7 @@ export class CreditResetCronService {
           await this.creditService.resetSubscriptionAllowance(
             {
               userId: subscription.userId,
+              productId: plan.productId,
               amount: plan.creditPolicy?.creditAmount ?? 0,
               grantDescription: `Credits reset – ${plan.name} (monthly cycle)`,
               revokeDescription: `Unused credits expired before monthly reset – ${plan.name}`,

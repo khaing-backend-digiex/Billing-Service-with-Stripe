@@ -80,7 +80,7 @@ export class PaidInvoiceSyncService {
       return;
     }
 
-    const plan = pricingOption.plan as any;
+    const plan = pricingOption.plan;
     const periodStart = new Date(paidInvoice.periodStart * 1000);
     const periodEnd = new Date(paidInvoice.periodEnd * 1000);
     const resetMonths = plan.creditPolicy?.resetInterval === 'MONTHLY' 
@@ -167,6 +167,7 @@ export class PaidInvoiceSyncService {
         await this.creditService.revokeSubscriptionCredits(
           {
             userId: subscription.userId,
+            productId: plan.productId,
             description: `Unused credits expired before renewal`,
             referenceId: invoice.id,
             idempotencyKey: `revoke_sub_${invoice.id}`,
@@ -177,6 +178,7 @@ export class PaidInvoiceSyncService {
         await this.creditService.grantSubscriptionAllowance(
           {
             userId: subscription.userId,
+            productId: plan.productId,
             amount: plan.creditPolicy?.creditAmount ?? 0,
             description,
             referenceId: invoice.id,

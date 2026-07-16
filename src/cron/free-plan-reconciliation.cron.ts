@@ -75,7 +75,6 @@ export class FreePlanReconciliationCron {
       where: {
         status: SubscriptionStatus.ACTIVE,
         providerSubscriptionId: { not: null },
-        subscriptionCreditsRemaining: 0,
         currentPeriodStart: { lt: new Date(Date.now() - GRACE_MS) },
         pricingOption: { plan: { creditPolicy: { creditAmount: { gt: 0 } } } },
       },

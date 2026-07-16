@@ -82,7 +82,6 @@ export class InvoicePaidStrategy implements WebhookStrategy {
         pricingOptionId: pricingOption.id,
         currentPeriodStart: periodStart,
         currentPeriodEnd: periodEnd,
-        subscriptionCreditsRemaining: 0,
         nextCreditResetAt: periodEnd,
         provider: PaymentProvider.STRIPE,
         providerSubscriptionId: stripeSubscriptionId,

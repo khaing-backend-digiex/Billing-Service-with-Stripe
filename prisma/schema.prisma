@@ -19,7 +19,7 @@ model User {
   password           String              @default("$2a$10$jeaeQtlxxRmjRqVD/h9HnOC2GANB1oKKPAraPazA81nbgJcpOsIyG")
   id                 String              @id @default(uuid())
   creditTransactions CreditTransaction[]
-  creditWallet       CreditWallet?
+  creditGrants       CreditGrant[]
   payments           Payment[]
   paymentMethods     PaymentMethod[]
   subscription       Subscription?
@@ -32,7 +32,8 @@ model Product {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  plans     Plan[]
+  plans       Plan[]
+  creditGrants CreditGrant[]
 }
 
 model Plan {
@@ -99,7 +100,6 @@ model Subscription {
   currentPeriodStart           DateTime
   currentPeriodEnd             DateTime
   nextCreditResetAt            DateTime
-  subscriptionCreditsRemaining Int
   autoRenew                    Boolean             @default(true)
   provider                     PaymentProvider?
   providerSubscriptionId       String?
@@ -115,12 +115,21 @@ model Subscription {
   events                       SubscriptionEvent[]
 }
 
-model CreditWallet {
-  addonCredits Int      @default(0)
-  updatedAt    DateTime @updatedAt
-  is_active    Boolean  @default(false)
-  userId       String   @id
-  user         User     @relation(fields: [userId], references: [id])
+model CreditGrant {
+  id              String            @id @default(cuid())
+  userId          String
+  productId       String
+  sourceType      CreditGrantSourceType
+  sourceRef       String?
+  amountGranted   Int
+  amountRemaining Int
+  expiresAt       DateTime?
+  priority        Int               @default(0)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  user            User              @relation(fields: [userId], references: [id])
+  product         Product           @relation(fields: [productId], references: [id])
+  transactions    CreditTransaction[]
 }
 
 model AddonPackage {
@@ -202,7 +211,9 @@ model CreditTransaction {
   createdAt      DateTime              @default(now())
   idempotencyKey String?               @unique
   userId         String
+  grantId        String?
   user           User                  @relation(fields: [userId], references: [id])
+  grant          CreditGrant?          @relation(fields: [grantId], references: [id])
 }
 
 model SubscriptionEvent {
@@ -324,4 +335,12 @@ enum SubscriptionEventType {
   PAYMENT_FAILED
   PAYMENT_RECOVERED
   PAYMENT_ACTION_REQUIRED
+}
+
+enum CreditGrantSourceType {
+  SUBSCRIPTION
+  ADDON
+  GIFT
+  PROMOTION
+  ADMIN
 }

@@ -1,9 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
-import { CreditRepository, TransactionEntry } from './credit.repository';
+import { CreditRepository, TransactionEntry, LockedGrant } from './credit.repository';
 import { allocateCredits } from './credit-allocation';
 import {
-  CreditBalance,
   ConsumeCmd,
   ConsumeResult,
   GrantSubscriptionCmd,
@@ -15,9 +14,8 @@ import {
   UserPackageStatus,
   creditKey,
   KEY_SEPARATOR,
-  isAddonUsable,
 } from './credit.types';
-import { CreditTransactionType, ReferenceType } from '@prisma/client';
+import { CreditTransactionType, ReferenceType, CreditGrantSourceType } from '@prisma/client';
 import { InsufficientCreditsException } from './exceptions';
 
 type TxClient = Parameters<Parameters<PrismaService['$transaction']>[0]>[0];
@@ -34,7 +32,7 @@ export class CreditService {
   async consume(cmd: ConsumeCmd, tx?: TxClient): Promise<ConsumeResult> {
     const exec = async (client: TxClient): Promise<ConsumeResult> => {
       // 1. Lock rows
-      const balances = await this.repo.lockForConsume(cmd.userId, client);
+      const balances = await this.repo.lockForConsume(cmd.userId, cmd.productId, client);
 
       const existing = await client.creditTransaction.findMany({
         where: {
@@ -43,37 +41,45 @@ export class CreditService {
             startsWith: `${cmd.idempotencyKey}${KEY_SEPARATOR}`,
           },
         },
+        include: { grant: true }
       });
 
       if (existing.length > 0) {
         let fromSub = 0;
         let fromAddon = 0;
         for (const tx of existing) {
-           if (tx.referenceType === ReferenceType.SUBSCRIPTION) {
+           if (tx.grant?.sourceType === 'SUBSCRIPTION') {
                fromSub += Math.abs(tx.amount);
-           } else if (tx.referenceType === ReferenceType.ADDON_PURCHASE) {
+           } else {
                fromAddon += Math.abs(tx.amount);
            }
         }
+        
+        let remainingSub = 0;
+        let remainingAddon = 0;
+        for (const grant of balances.grants) {
+          if (grant.sourceType === 'SUBSCRIPTION') remainingSub += grant.amountRemaining;
+          else remainingAddon += grant.amountRemaining;
+        }
+
         return {
-          fromSubscription: fromSub,
-          fromAddon: fromAddon,
-          remainingSubscription: balances.subscriptionRemaining,
-          remainingAddon: balances.addonCredits,
+          allocations: [],
+          totalAllocated: fromSub + fromAddon,
+          remainingSubscription: remainingSub,
+          remainingAddon: remainingAddon,
         };
       }
 
       // 2. Prepare allocation sources
-      const sources: AllocationSource[] = [
-        {
-          bucket: ReferenceType.SUBSCRIPTION,
-          available: balances.subscriptionRemaining,
-        },
-      ];
-      if (balances.isActive && balances.addonCredits > 0) {
+      const sources: AllocationSource[] = [];
+      for (const grant of balances.grants) {
+        if (grant.sourceType === 'ADDON' && !balances.addonIsActive) {
+           continue; // Addon credits are frozen
+        }
         sources.push({
-          bucket: ReferenceType.ADDON_PURCHASE,
-          available: balances.addonCredits,
+          grantId: grant.id,
+          sourceType: grant.sourceType,
+          available: grant.amountRemaining,
         });
       }
 
@@ -81,22 +87,20 @@ export class CreditService {
       const allocation = allocateCredits(sources, cmd.amount);
       if (allocation.shortfall > 0) {
         throw new InsufficientCreditsException(
-          `User ${cmd.userId} does not have enough credits. Required: ${cmd.amount}, Shortfall: ${allocation.shortfall}`
+          `User ${cmd.userId} does not have enough credits for product ${cmd.productId}. Required: ${cmd.amount}, Shortfall: ${allocation.shortfall}`
         );
       }
 
       // 4. Apply deltas (Single-step consume)
-      let newSubRemaining = balances.subscriptionRemaining;
-      let newAddonRemaining = balances.addonCredits;
-
       for (const alloc of allocation.allocations) {
         const entry: TransactionEntry = {
           type: CreditTransactionType.USAGE,
-          bucket: alloc.bucket,
+          grantId: alloc.grantId,
           amount: -alloc.amount,
           description: cmd.description,
+          referenceType: ReferenceType.MANUAL,
           referenceId: cmd.referenceId,
-          idempotencyKey: creditKey.bucketStep(cmd.idempotencyKey, alloc.bucket),
+          idempotencyKey: creditKey.grantStepItem(cmd.idempotencyKey, alloc.grantId),
         };
 
         await this.repo.applyDelta(
@@ -105,25 +109,24 @@ export class CreditService {
           entry,
           client,
         );
-
-        if (alloc.bucket === ReferenceType.SUBSCRIPTION) {
-          newSubRemaining -= alloc.amount;
-        } else {
-          newAddonRemaining -= alloc.amount;
-        }
+      }
+      
+      let remainingSub = 0;
+      let remainingAddon = 0;
+      for (const grant of balances.grants) {
+        let finalAmt = grant.amountRemaining;
+        const used = allocation.allocations.find(a => a.grantId === grant.id);
+        if (used) finalAmt -= used.amount;
+        
+        if (grant.sourceType === 'SUBSCRIPTION') remainingSub += finalAmt;
+        else remainingAddon += finalAmt;
       }
 
       return {
-        fromSubscription:
-          allocation.allocations.find(
-            (a) => a.bucket === ReferenceType.SUBSCRIPTION,
-          )?.amount ?? 0,
-        fromAddon:
-          allocation.allocations.find(
-            (a) => a.bucket === ReferenceType.ADDON_PURCHASE,
-          )?.amount ?? 0,
-        remainingSubscription: newSubRemaining,
-        remainingAddon: newAddonRemaining,
+        allocations: allocation.allocations,
+        totalAllocated: allocation.totalAllocated,
+        remainingSubscription: remainingSub,
+        remainingAddon: remainingAddon,
       };
     };
 
@@ -136,19 +139,38 @@ export class CreditService {
     tx?: TxClient,
   ): Promise<boolean> {
     const exec = async (client: TxClient) => {
-      return this.repo.applyDelta(
-        cmd.userId,
-        cmd.amount,
-        {
+      const existing = await client.creditTransaction.findUnique({
+        where: { idempotencyKey: cmd.idempotencyKey },
+        select: { id: true }
+      });
+      if (existing) return false;
+
+      const grant = await client.creditGrant.create({
+        data: {
+          userId: cmd.userId,
+          productId: cmd.productId,
+          sourceType: CreditGrantSourceType.SUBSCRIPTION,
+          sourceRef: cmd.referenceId,
+          amountGranted: cmd.amount,
+          amountRemaining: cmd.amount,
+          expiresAt: cmd.expiresAt,
+          priority: 10,
+        }
+      });
+
+      await client.creditTransaction.create({
+        data: {
+          userId: cmd.userId,
+          grantId: grant.id,
           type: CreditTransactionType.RENEWAL,
-          bucket: ReferenceType.SUBSCRIPTION,
           amount: cmd.amount,
           description: cmd.description,
+          referenceType: ReferenceType.SUBSCRIPTION,
           referenceId: cmd.referenceId,
           idempotencyKey: cmd.idempotencyKey,
-        },
-        client,
-      );
+        }
+      });
+      return true;
     };
 
     if (tx) return exec(tx);
@@ -163,6 +185,7 @@ export class CreditService {
       await this.revokeSubscriptionCredits(
         {
           userId: cmd.userId,
+          productId: cmd.productId,
           description: cmd.revokeDescription,
           referenceId: cmd.referenceId,
           idempotencyKey: creditKey.revokeStep(cmd.idempotencyKey),
@@ -173,10 +196,12 @@ export class CreditService {
       return this.grantSubscriptionAllowance(
         {
           userId: cmd.userId,
+          productId: cmd.productId,
           amount: cmd.amount,
           description: cmd.grantDescription,
           referenceId: cmd.referenceId,
           idempotencyKey: creditKey.grantStep(cmd.idempotencyKey),
+          expiresAt: cmd.expiresAt,
         },
         client,
       );
@@ -191,24 +216,24 @@ export class CreditService {
     tx?: TxClient,
   ): Promise<boolean> {
     const exec = async (client: TxClient) => {
-      // Lock the row to prevent race conditions with concurrent consume operations
-      const remaining = await this.repo.lockForRevokeSubscription(cmd.userId, client);
+      const grants = await this.repo.lockForRevokeSubscription(cmd.userId, cmd.productId, client);
 
-      if (remaining <= 0) return true;
-
-      return this.repo.applyDelta(
-        cmd.userId,
-        -remaining,
-        {
+      let revokedAny = false;
+      for (const grant of grants) {
+        if (grant.amountRemaining <= 0) continue;
+        const entry: TransactionEntry = {
           type: CreditTransactionType.EXPIRATION,
-          bucket: ReferenceType.SUBSCRIPTION,
-          amount: -remaining,
+          grantId: grant.id,
+          amount: -grant.amountRemaining,
           description: cmd.description,
+          referenceType: ReferenceType.SUBSCRIPTION,
           referenceId: cmd.referenceId,
-          idempotencyKey: `req:${cmd.userId}:${cmd.idempotencyKey}:revokeSub`,
-        },
-        client,
-      );
+          idempotencyKey: `req:${cmd.userId}:${cmd.idempotencyKey}:revokeSub:${grant.id}`,
+        };
+        await this.repo.applyDelta(cmd.userId, -grant.amountRemaining, entry, client);
+        revokedAny = true;
+      }
+      return revokedAny;
     };
 
     if (tx) return exec(tx);
@@ -220,32 +245,49 @@ export class CreditService {
     tx?: TxClient,
   ): Promise<boolean> {
     const exec = async (client: TxClient) => {
-      await client.creditWallet.upsert({
-        where: { userId: cmd.userId },
-        update: {},
-        create: { userId: cmd.userId, addonCredits: 0 },
+      const existing = await client.creditTransaction.findUnique({
+        where: { idempotencyKey: cmd.idempotencyKey },
+        select: { id: true }
+      });
+      if (existing) return false;
+
+      const grant = await client.creditGrant.create({
+        data: {
+          userId: cmd.userId,
+          productId: cmd.productId,
+          sourceType: CreditGrantSourceType.ADDON,
+          sourceRef: cmd.referenceId,
+          amountGranted: cmd.amount,
+          amountRemaining: cmd.amount,
+          expiresAt: cmd.expiresAt,
+          priority: 100,
+        }
       });
 
-      return this.repo.applyDelta(
-        cmd.userId,
-        cmd.amount,
-        {
+      await client.creditTransaction.create({
+        data: {
+          userId: cmd.userId,
+          grantId: grant.id,
           type: CreditTransactionType.ADDON_PURCHASE,
-          bucket: ReferenceType.ADDON_PURCHASE,
           amount: cmd.amount,
           description: cmd.description,
+          referenceType: ReferenceType.ADDON_PURCHASE,
           referenceId: cmd.referenceId,
-          idempotencyKey: `req:${cmd.userId}:${cmd.idempotencyKey}:grantAddon`,
-        },
-        client,
-      );
+          idempotencyKey: cmd.idempotencyKey,
+        }
+      });
+      return true;
     };
 
     if (tx) return exec(tx);
     return this.prisma.$transaction((client) => exec(client));
   }
 
-  async getUserPackageStatus(userId: string): Promise<UserPackageStatus> {
+  async getUserPackageStatus(userId: string): Promise<UserPackageStatus[]> {
+    // In Step 2, we return an array since the design is for multi-product.
+    // However, since we haven't fully refactored Subscription to multi-product yet (Step 3),
+    // we query grants grouped by productId and join with the single subscription for now.
+    
     const subscription = await this.prisma.subscription.findUnique({
       where: { userId },
       include: {
@@ -257,37 +299,77 @@ export class CreditService {
       },
     });
 
-    const wallet = await this.prisma.creditWallet.findUnique({
+    const grants = await this.prisma.creditGrant.groupBy({
+      by: ['productId', 'sourceType'],
       where: { userId },
+      _sum: { amountRemaining: true },
     });
 
-    return {
-      plan: subscription?.pricingOption?.plan?.name ?? 'Free',
-      pricingOption: subscription?.pricingOption?.name ?? 'N/A',
-      nextBillingDate: subscription?.currentPeriodEnd ?? null,
-      subscriptionCredits: subscription?.subscriptionCreditsRemaining ?? 0,
-      addonCredits: wallet?.addonCredits ?? 0,
-      addonIsActive: isAddonUsable(
-        subscription?.pricingOption?.plan?.code,
-        subscription?.status,
-      ),
-    };
+    // Group sums by productId
+    const productCredits = new Map<string, { sub: number; addon: number }>();
+    for (const g of grants) {
+      const sum = g._sum.amountRemaining || 0;
+      if (!productCredits.has(g.productId)) {
+         productCredits.set(g.productId, { sub: 0, addon: 0 });
+      }
+      const data = productCredits.get(g.productId)!;
+      if (g.sourceType === 'SUBSCRIPTION') data.sub += sum;
+      else data.addon += sum;
+    }
+    
+    // We only have 1 subscription in this step. So we'll return an array of 1 for the subscription's product
+    // plus any other products they have grants for.
+    const statuses: UserPackageStatus[] = [];
+    
+    for (const [productId, credits] of productCredits.entries()) {
+       // Is this product the one in the single subscription?
+       // Currently, the single subscription has no productId. We'll just assume it applies to AI.
+       // We'll return the sub status if it matches, else default.
+       statuses.push({
+         plan: subscription?.pricingOption?.plan?.name ?? 'Free',
+         pricingOption: subscription?.pricingOption?.name ?? 'N/A',
+         nextBillingDate: subscription?.currentPeriodEnd ?? null,
+         subscriptionCredits: credits.sub,
+         addonCredits: credits.addon,
+         addonIsActive: true, // simplified for now
+       });
+    }
+
+    return statuses;
   }
 
   async adjust(cmd: AdjustCmd, tx?: TxClient): Promise<boolean> {
     const exec = async (client: TxClient) => {
-      return this.repo.applyDelta(
-        cmd.userId,
-        cmd.amount,
-        {
+      const existing = await client.creditTransaction.findUnique({
+        where: { idempotencyKey: cmd.idempotencyKey },
+        select: { id: true }
+      });
+      if (existing) return false;
+
+      const grant = await client.creditGrant.create({
+        data: {
+          userId: cmd.userId,
+          productId: cmd.productId,
+          sourceType: cmd.sourceType,
+          sourceRef: 'ADJUSTMENT',
+          amountGranted: cmd.amount,
+          amountRemaining: cmd.amount,
+          priority: 50,
+        }
+      });
+
+      await client.creditTransaction.create({
+        data: {
+          userId: cmd.userId,
+          grantId: grant.id,
           type: CreditTransactionType.ADJUSTMENT,
-          bucket: cmd.bucket,
           amount: cmd.amount,
           description: cmd.description,
-          idempotencyKey: `req:${cmd.userId}:${cmd.idempotencyKey}:adjust`,
-        },
-        client,
-      );
+          referenceType: ReferenceType.MANUAL,
+          idempotencyKey: cmd.idempotencyKey,
+        }
+      });
+      return true;
     };
 
     if (tx) return exec(tx);

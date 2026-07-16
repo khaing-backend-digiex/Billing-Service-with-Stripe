@@ -105,7 +105,6 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
         where: { id: subscription.id },
         data: {
           status: isUpdate ? undefined : SubscriptionStatus.PAST_DUE,
-          subscriptionCreditsRemaining: isUpdate ? undefined : 0,
         },
       });
 

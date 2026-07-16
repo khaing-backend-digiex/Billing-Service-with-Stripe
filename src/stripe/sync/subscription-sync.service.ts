@@ -79,7 +79,6 @@ export class SubscriptionSyncService {
           status,
           currentPeriodStart,
           currentPeriodEnd,
-          subscriptionCreditsRemaining: 0,
           nextCreditResetAt: currentPeriodEnd,
           trialStart,
           trialEnd,

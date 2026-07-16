@@ -64,7 +64,8 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
         await this.creditService.revokeSubscriptionCredits(
           {
             userId: subscription.userId,
-            description: "Credits forfeited – subscription cancelled",
+            productId: subscription.pricingOption.productId,
+            description: `Subscription deleted: ${subscription.id}`,
             referenceId: subscription.id,
             idempotencyKey: creditKey.subscriptionRevoke(subscription.id, sub.id),
           },
