@@ -139,6 +139,7 @@ Phản biện: giữ plan Free là được, nhưng logic không được so sá
 
 - Unique `(planId, billingCycleId, currency, provider)` — không có 2 SKU trùng nghĩa cùng active.
 - `providerPriceId` unique per provider.
+- **`productId` denormalize từ `plan.productId`** (để làm mắt xích cho FK kép của Subscription, §13.1) — **phải enforce khớp bằng composite FK lên Plan**: `PricingOption(planId, productId) → Plan(id, productId)` (Plan cần `@@unique([id, productId])`), **không** dùng FK đơn `productId → Product`. FK đơn chỉ check "product có thật" nên không chặn được ca `PricingOption { planId: AI_Pro, productId: OCR }` (OCR là product thật → FK đơn vẫn pass → data lệch); composite FK thì từ chối vì không có Plan nào `(id=AI_Pro, productId=OCR)`. Vì đã validate xuyên Plan, **không cần** relation trực tiếp `product Product` (thêm chỉ để navigate, thừa về toàn vẹn).
 
 PricingOption **không** chứa business rule credit — chỉ là giá.
 
@@ -248,9 +249,9 @@ Mọi loại tiêu qua **một đường consume duy nhất** nhờ `priority` +
 
 **Bước 1 — Catalog: thêm Product + tách CreditPolicy** (`prisma/schema.prisma`)
 - [ ] Thêm model `Product` (`code`, `name`, `isActive`); seed đúng 1 row `AI` (D6).
-- [ ] Thêm `Plan.productId` (FK → Product) + `Plan.isFree: Boolean` (thay so-sánh `PLAN_CODES`, A5); unique `Plan(productId, code)`.
+- [ ] Thêm `Plan.productId` (FK → Product) + `Plan.isFree: Boolean` (thay so-sánh `PLAN_CODES`, A5); unique `Plan(productId, code)` + **unique `Plan(id, productId)`** (target cho composite FK của PricingOption).
 - [ ] Bỏ `Plan.renewalCredits` / `Plan.resetIntervalDay` → model mới `CreditPolicy` 1-1 với Plan: `creditAmount`, `resetInterval` (`MONTHLY` | `EVERY_N_DAYS` + `intervalDays`) — xóa heuristic `resetIntervalDay / 30` (A7).
-- [ ] `PricingOption`: thêm unique `(planId, billingCycleId, currency, provider)` + unique `(provider, providerPriceId)`; thêm unique `(id, productId)` để phục vụ FK kép ở Bước 3.
+- [ ] `PricingOption`: thêm `productId` với **composite FK `plan @relation(fields: [planId, productId], references: [id, productId])`** — KHÔNG dùng FK đơn `planId` + FK đơn `productId → Product` (không chặn được lệch product, §7/§13.1). Thêm unique `(planId, billingCycleId, currency, provider)` + unique `(provider, providerPriceId)` + unique `(id, productId)` (target cho FK kép của Subscription, Bước 3).
 - [ ] Cập nhật `pricing.service.ts` + các DTO `create-plan.dto.ts` / `create-pricing-option.dto.ts` theo shape mới.
 
 **Bước 2 — Entitlement: CreditGrant thay CreditWallet** (`src/credits/*`)
@@ -288,7 +289,15 @@ Mọi loại tiêu qua **một đường consume duy nhất** nhờ `priority` +
 
 ## 13. Business rule enforce bằng DB constraint
 
-1. **Một sub live per user per product**: `CREATE UNIQUE INDEX ... ON "Subscription"(userId, productId) WHERE status IN ('ACTIVE','PAST_DUE')`. Live-set chỉ còn 2 status: `INCOMPLETE` không bao giờ ghi local (row chỉ tạo khi `invoice.paid` đầu tiên — §8), `TRIALING` không dùng (D12), `PAUSED` loại khỏi live-set và không viết lifecycle cho đến khi có nhu cầu thật (nhất quán D6). Phải denormalize `productId` vào Subscription vì Postgres không index xuyên join; chống lệch denormalize bằng FK kép: unique `(id, productId)` trên PricingOption + FK `Subscription(pricingOptionId, productId) → PricingOption(id, productId)`.
+1. **Một sub live per user per product**: `CREATE UNIQUE INDEX ... ON "Subscription"(userId, productId) WHERE status IN ('ACTIVE','PAST_DUE')`. Live-set chỉ còn 2 status: `INCOMPLETE` không bao giờ ghi local (row chỉ tạo khi `invoice.paid` đầu tiên — §8), `TRIALING` không dùng (D12), `PAUSED` loại khỏi live-set và không viết lifecycle cho đến khi có nhu cầu thật (nhất quán D6). Phải denormalize `productId` vào Subscription vì Postgres không index xuyên join. `productId` được denormalize **cả xuống PricingOption lẫn Subscription**, nên phải chống lệch bằng **chuỗi composite FK ở từng hop** (không dùng FK đơn `productId → Product` — FK đơn chỉ check product có thật, không ép productId khớp Plan):
+
+```
+Plan            @@unique([id, productId])
+PricingOption   FK (planId, productId) → Plan(id, productId)          + @@unique([id, productId])
+Subscription    FK (pricingOptionId, productId) → PricingOption(id, productId)
+```
+
+Nhờ vậy productId không thể lệch ở bất kỳ tầng nào: Plan là nguồn sự thật, PricingOption bị ép theo Plan, Subscription bị ép theo PricingOption. **Lưu ý implement (Prisma)**: quan hệ `PricingOption.plan` phải là composite `@relation(fields: [planId, productId], references: [id, productId])` chứ không phải FK đơn `planId` — FK đơn để productId tự do là đúng lỗ hổng cần tránh.
 2. **Không âm credit**: `CHECK (amountRemaining >= 0)` và `CHECK (amountRemaining <= amountGranted)` trên CreditGrant — tuyến phòng thủ cuối sau lock logic.
 3. **Stripe mapping duy nhất**: unique `(provider, providerSubscriptionId)`; unique `(provider, providerPriceId)` trên PricingOption; unique `providerInvoiceId` (đã có); unique `providerPaymentId` (đã có). Với Model B: `providerSubscriptionId` immutable sau khi set (enforce ở application/trigger).
 4. **billingMode nhất quán**: `CHECK ((billingMode = 'PROVIDER') = (providerSubscriptionId IS NOT NULL))`.
@@ -342,4 +351,4 @@ Mọi loại tiêu qua **một đường consume duy nhất** nhờ `priority` +
 | D10 | Upgrade giữa kỳ | Tách 2 khái niệm: **tier change** không tồn tại (catalog chỉ FREE/PRO; Free → Pro là mua Stripe sub mới); **cycle change** (PRO monthly ↔ yearly) là flow được hỗ trợ — update price trên cùng Stripe sub với proration, không cấp lại credit giữa kỳ, credit cấp ở invoice kỳ sau; Invoice snapshot `pricingOptionId` giữ history đúng (§8) | **Đã chốt 2026-07-16** |
 | D11 | Refund | **Không refund** gói/add-on đã mua — khỏi cần flow clawback credit; nếu tương lai business cần thì thiết kế riêng khi đó | **Đã chốt 2026-07-16** |
 | D12 | Trial | **Bỏ hoàn toàn** — không trial cho plan nào; không có cột `trialStart`/`trialEnd`, bỏ sourceType `TRIAL`, không dùng Stripe trial (§11) | **Đã chốt 2026-07-16** |
-
+| D13 | Add-on model | AddonPackage chỉ là one-time purchase. Nếu sau này cần recurring add-on thì biểu diễn bằng Plan + PricingOption + Subscription, không tạo model mới. |

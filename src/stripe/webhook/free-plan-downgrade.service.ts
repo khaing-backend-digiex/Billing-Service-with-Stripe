@@ -9,6 +9,7 @@ import {
 import { PrismaService } from "../../database/prisma.service";
 import { StripeService } from "../stripe.service";
 import { addCalendarMonths } from "../../common/utils/date.util";
+import { nextCreditResetFrom } from "../../credits/credit-policy.util";
 
 type SubscriptionWithPricing = Subscription & { pricingOption: PricingOption };
 
@@ -62,7 +63,7 @@ export class FreePlanDowngradeService {
 
     const freePricingOption = await this.prisma.pricingOption.findFirst({
       where: { providerPriceId: freePriceId },
-      include: { plan: true },
+      include: { plan: { include: { creditPolicy: true } } },
     });
 
     const freeItem = freeSub.items[0];
@@ -73,14 +74,15 @@ export class FreePlanDowngradeService {
       ? new Date(freeItem.currentPeriodEnd * 1000)
       : addCalendarMonths(periodStart, 1);
 
-    await this.prisma.$transaction(async (tx) => {
-      if (freePricingOption) {
-        const freePlan = freePricingOption.plan;
-        const resetMonths = Math.max(
-          1,
-          Math.round(freePlan.resetIntervalDay / 30),
-        );
+    const freePolicy = freePricingOption?.plan.creditPolicy ?? null;
+    if (freePricingOption && !freePolicy) {
+      this.logger.error(
+        `Free plan ${freePricingOption.plan.id} has no CreditPolicy – subscription ${subscription.id} not repointed to free pricing`,
+      );
+    }
 
+    await this.prisma.$transaction(async (tx) => {
+      if (freePricingOption && freePolicy) {
         await tx.subscription.update({
           where: { id: subscription.id },
           data: {
@@ -89,7 +91,7 @@ export class FreePlanDowngradeService {
             providerSubscriptionId: freeSub.id,
             currentPeriodStart: periodStart,
             currentPeriodEnd: periodEnd,
-            nextCreditResetAt: addCalendarMonths(periodStart, resetMonths),
+            nextCreditResetAt: nextCreditResetFrom(periodStart, freePolicy),
             cancelledAt: null,
           },
         });

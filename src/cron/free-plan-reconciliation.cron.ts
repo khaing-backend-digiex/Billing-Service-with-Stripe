@@ -77,7 +77,7 @@ export class FreePlanReconciliationCron {
         providerSubscriptionId: { not: null },
         subscriptionCreditsRemaining: 0,
         currentPeriodStart: { lt: new Date(Date.now() - GRACE_MS) },
-        pricingOption: { plan: { renewalCredits: { gt: 0 } } },
+        pricingOption: { plan: { creditPolicy: { creditAmount: { gt: 0 } } } },
       },
       take: BATCH_SIZE,
     });

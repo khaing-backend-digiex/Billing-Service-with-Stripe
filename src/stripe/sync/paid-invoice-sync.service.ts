@@ -10,10 +10,9 @@ import { PricingService } from "../../pricing/pricing.service";
 import { InvoiceRecordService } from "../invoice-record.service";
 import { PaymentRecordService } from "../payment-record.service";
 import { PaymentInvoice } from "../../payments/types/payment.types";
-import { addCalendarMonths } from "../../common/utils/date.util";
-import { PLAN_CODES } from "../../common/constants/plan.constants";
 import { CreditService } from "../../credits/credit.service";
 import { creditKey } from "../../credits/credit.types";
+import { nextCreditResetFrom } from "../../credits/credit-policy.util";
 
 @Injectable()
 export class PaidInvoiceSyncService {
@@ -81,10 +80,17 @@ export class PaidInvoiceSyncService {
     }
 
     const plan = pricingOption.plan;
+    const policy = plan.creditPolicy;
+    if (!policy) {
+      this.logger.error(
+        `Plan ${plan.id} (${plan.name}) has no CreditPolicy – refusing to settle invoice ${paidInvoice.id}`,
+      );
+      return;
+    }
+
     const periodStart = new Date(paidInvoice.periodStart * 1000);
     const periodEnd = new Date(paidInvoice.periodEnd * 1000);
-    const resetMonths = Math.max(1, Math.round(plan.resetIntervalDay / 30));
-    const nextCreditResetAt = addCalendarMonths(periodStart, resetMonths);
+    const nextCreditResetAt = nextCreditResetFrom(periodStart, policy);
 
     const stripeSubscriptionId =
       paidInvoice.subscriptionId ?? lineToUse?.subscriptionId ?? null;
@@ -175,7 +181,7 @@ export class PaidInvoiceSyncService {
         await this.creditService.grantSubscriptionAllowance(
           {
             userId: subscription.userId,
-            amount: plan.renewalCredits,
+            amount: policy.creditAmount,
             description,
             referenceId: invoice.id,
             idempotencyKey: `grant_sub_${invoice.id}`,
@@ -194,7 +200,7 @@ export class PaidInvoiceSyncService {
           type: eventType,
           metadata: {
             stripeInvoiceId: paidInvoice.id,
-            creditsGranted: plan.renewalCredits,
+            creditsGranted: policy.creditAmount,
             billingReason: paidInvoice.billingReason ?? null,
             periodStart: periodStart.toISOString(),
             periodEnd: periodEnd.toISOString(),
@@ -203,7 +209,7 @@ export class PaidInvoiceSyncService {
       });
 
       this.logger.log(
-        `Credits granted: subscription=${subscription.id} +${plan.renewalCredits} (${plan.name}, ${paidInvoice.billingReason})`,
+        `Credits granted: subscription=${subscription.id} +${policy.creditAmount} (${plan.name}, ${paidInvoice.billingReason})`,
       );
     });
   }

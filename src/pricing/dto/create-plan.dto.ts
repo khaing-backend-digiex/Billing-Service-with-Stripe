@@ -1,8 +1,47 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNumber, Min } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsString,
+  IsNumber,
+  IsBoolean,
+  IsEnum,
+  IsInt,
+  IsOptional,
+  Min,
+  ValidateNested,
+} from 'class-validator';
+import { Type } from 'class-transformer';
+import { ResetInterval } from '@prisma/client';
+
+export class CreditPolicyDto {
+  @ApiProperty({ description: 'Credits granted each reset period', example: 100 })
+  @IsNumber()
+  @Min(0)
+  creditAmount: number;
+
+  @ApiProperty({
+    description: 'How often credits reset',
+    enum: ResetInterval,
+    example: ResetInterval.MONTHLY,
+  })
+  @IsEnum(ResetInterval)
+  resetInterval: ResetInterval;
+
+  @ApiPropertyOptional({
+    description: 'Required when resetInterval is EVERY_N_DAYS',
+    example: 45,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  intervalDays?: number;
+}
 
 export class CreatePlanDto {
-  @ApiProperty({ description: 'The unique code for the plan', example: 'PRO' })
+  @ApiProperty({ description: 'The ID of the product this plan belongs to' })
+  @IsString()
+  productId: string;
+
+  @ApiProperty({ description: 'Plan code, unique within the product', example: 'PRO' })
   @IsString()
   code: string;
 
@@ -10,13 +49,13 @@ export class CreatePlanDto {
   @IsString()
   name: string;
 
-  @ApiProperty({ description: 'Credits given upon renewal', example: 100 })
-  @IsNumber()
-  @Min(0)
-  renewalCredits: number;
+  @ApiPropertyOptional({ description: 'Whether this is the free tier of the product' })
+  @IsOptional()
+  @IsBoolean()
+  isFree?: boolean;
 
-  @ApiProperty({ description: 'Reset interval in days', example: 30 })
-  @IsNumber()
-  @Min(1)
-  resetIntervalDay: number;
+  @ApiProperty({ description: 'Credit entitlement policy for this plan', type: CreditPolicyDto })
+  @ValidateNested()
+  @Type(() => CreditPolicyDto)
+  creditPolicy: CreditPolicyDto;
 }

@@ -13,7 +13,6 @@ import {
 } from "../payments/types/payment.types";
 import { PrismaService } from "../database/prisma.service";
 import { AddonPackage, SubscriptionStatus } from "@prisma/client";
-import { PLAN_CODES } from "../common/constants/plan.constants";
 import { STRIPE_METADATA_KEY } from "../common/constants/stripe.constants";
 import { formatDatabaseAmountToStripe } from "./utils/stripe-currency.util";
 
@@ -127,8 +126,11 @@ export class StripeService {
   }
 
   async getFreePriceId(): Promise<string | null> {
-    const freePlan = await this.prisma.plan.findUnique({
-      where: { code: PLAN_CODES.FREE },
+    // `Plan.code` không còn unique một mình (giờ là `@@unique([productId, code])`).
+    // Phạm vi hiện tại chỉ có product AI nên đúng một plan `isFree`; khi thêm product
+    // thứ hai, hàm này phải nhận `productId`.
+    const freePlan = await this.prisma.plan.findFirst({
+      where: { isFree: true },
       include: { pricingOptions: true },
     });
     return freePlan?.pricingOptions[0]?.providerPriceId ?? null;

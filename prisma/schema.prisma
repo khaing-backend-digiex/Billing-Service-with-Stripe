@@ -26,15 +26,20 @@ model User {
 }
 
 model Plan {
-  id               String          @id @default(cuid())
-  code             String          @unique
-  name             String
-  renewalCredits   Int
-  resetIntervalDay Int
-  isActive         Boolean         @default(true)
-  createdAt        DateTime        @default(now())
-  updatedAt        DateTime        @updatedAt
-  pricingOptions   PricingOption[]
+  id             String          @id @default(cuid())
+  code           String
+  name           String
+  isActive       Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  isFree         Boolean         @default(false)
+  productId      String
+  creditPolicy   CreditPolicy?
+  product        Product         @relation(fields: [productId], references: [id])
+  pricingOptions PricingOption[]
+
+  @@unique([productId, code])
+  @@unique([id, productId])
 }
 
 model BillingCycle {
@@ -55,11 +60,18 @@ model PricingOption {
   providerPriceId       String?
   isActive              Boolean             @default(true)
   createdAt             DateTime            @default(now())
+  productId             String
   billingCycle          BillingCycle        @relation(fields: [billingCycleId], references: [id])
-  plan                  Plan                @relation(fields: [planId], references: [id])
+  // Composite FK, không phải FK đơn `planId`: FK đơn để `productId` tự do, cho phép
+  // PricingOption { planId: AI_Pro, productId: OCR } lọt qua (OCR là product có thật).
+  plan                  Plan                @relation(fields: [planId, productId], references: [id, productId])
   subscriptions         Subscription[]
   subscriptionEventsNew SubscriptionEvent[] @relation("NewPricing")
   subscriptionEventsOld SubscriptionEvent[] @relation("OldPricing")
+
+  @@unique([id, productId])
+  @@unique([planId, billingCycleId, currency, provider])
+  @@unique([provider, providerPriceId])
 }
 
 model Subscription {
@@ -148,13 +160,13 @@ model PaymentMethod {
   provider                PaymentProvider
   providerPaymentMethodId String          @unique
   isDefault               Boolean         @default(false)
+  metadata                Json?
+  createdAt               DateTime        @default(now())
   brand                   String?
-  last4                   String?
   expMonth                Int?
   expYear                 Int?
   fingerprint             String?
-  metadata                Json?
-  createdAt               DateTime        @default(now())
+  last4                   String?
   updatedAt               DateTime        @updatedAt
   userId                  String
   user                    User            @relation(fields: [userId], references: [id])
@@ -213,6 +225,27 @@ model CleanupTask {
   updatedAt DateTime          @updatedAt
 
   @@unique([type, target])
+}
+
+model CreditPolicy {
+  id            String        @id @default(cuid())
+  planId        String        @unique
+  creditAmount  Int
+  resetInterval ResetInterval
+  intervalDays  Int?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  plan          Plan          @relation(fields: [planId], references: [id])
+}
+
+model Product {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  plans     Plan[]
 }
 
 enum WebhookEventStatus {
@@ -289,4 +322,9 @@ enum SubscriptionEventType {
   PAYMENT_FAILED
   PAYMENT_RECOVERED
   PAYMENT_ACTION_REQUIRED
+}
+
+enum ResetInterval {
+  MONTHLY
+  EVERY_N_DAYS
 }

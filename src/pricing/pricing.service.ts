@@ -1,4 +1,11 @@
-import { Injectable, InternalServerErrorException, Inject } from "@nestjs/common";
+import {
+  Injectable,
+  InternalServerErrorException,
+  BadRequestException,
+  NotFoundException,
+  Inject,
+} from "@nestjs/common";
+import { ResetInterval } from "@prisma/client";
 import { PrismaService } from "../database/prisma.service";
 import { ConfigService } from "@nestjs/config";
 import { formatDatabaseAmountToStripe } from "../stripe/utils/stripe-currency.util";
@@ -20,12 +27,53 @@ export class PricingService {
     private readonly adapter: IPaymentAdapter,
   ) {}
 
-  async createPlan(data: { code: string; name: string; renewalCredits: number; resetIntervalDay: number }) {
-    return this.prisma.plan.create({ data });
+  async createPlan(data: {
+    productId: string;
+    code: string;
+    name: string;
+    isFree?: boolean;
+    creditPolicy: {
+      creditAmount: number;
+      resetInterval: ResetInterval;
+      intervalDays?: number | null;
+    };
+  }) {
+    const product = await this.prisma.product.findUnique({
+      where: { id: data.productId },
+    });
+    if (!product) throw new NotFoundException("Product not found");
+
+    if (
+      data.creditPolicy.resetInterval === ResetInterval.EVERY_N_DAYS &&
+      !data.creditPolicy.intervalDays
+    ) {
+      throw new BadRequestException(
+        "intervalDays is required when resetInterval is EVERY_N_DAYS",
+      );
+    }
+
+    return this.prisma.plan.create({
+      data: {
+        productId: data.productId,
+        code: data.code,
+        name: data.name,
+        isFree: data.isFree ?? false,
+        creditPolicy: {
+          create: {
+            creditAmount: data.creditPolicy.creditAmount,
+            resetInterval: data.creditPolicy.resetInterval,
+            intervalDays: data.creditPolicy.intervalDays ?? null,
+          },
+        },
+      },
+      include: { creditPolicy: true },
+    });
   }
 
   async getPlans() {
-    return this.prisma.plan.findMany({ include: { pricingOptions: true } });
+    return this.prisma.plan.findMany({
+      include: { pricingOptions: true, creditPolicy: true },
+    });
   }
 
   async createBillingCycle(data: { name: string; durationDay: number }) {
@@ -54,10 +102,11 @@ export class PricingService {
         intervalCount = billingCycle.durationDay / 7;
       }
 
-      const productId = await this.adapter.createProduct(`${plan.name} - ${billingCycle.name}`);
+      // Stripe Product ≈ Plan phía mình, không phải `Product` nội bộ (§5).
+      const stripeProductId = await this.adapter.createProduct(`${plan.name} - ${billingCycle.name}`);
 
       const priceId = await this.adapter.createRecurringPrice(
-        productId,
+        stripeProductId,
         formatDatabaseAmountToStripe(data.price, data.currency),
         data.currency,
         { interval, intervalCount }
@@ -66,6 +115,9 @@ export class PricingService {
       return await this.prisma.pricingOption.create({
         data: {
           planId: data.planId,
+          // Derive từ plan, không nhận từ client: composite FK
+          // (planId, productId) → Plan(id, productId) sẽ từ chối mọi giá trị lệch.
+          productId: plan.productId,
           billingCycleId: data.billingCycleId,
           name: data.name,
           price: data.price,
@@ -83,16 +135,16 @@ export class PricingService {
   async findByProviderPriceId(priceId: string) {
     return this.prisma.pricingOption.findFirst({
       where: { providerPriceId: priceId },
-      include: { plan: true },
+      include: { plan: { include: { creditPolicy: true } } },
     });
   }
 
   async createAddonPackage(data: { code: string; name: string; credits: number; price: number; currency: string }) {
     try {
-      const productId = await this.adapter.createProduct(data.name);
+      const stripeProductId = await this.adapter.createProduct(data.name);
 
       const priceId = await this.adapter.createOneTimePrice(
-        productId,
+        stripeProductId,
         formatDatabaseAmountToStripe(data.price, data.currency),
         data.currency
       );

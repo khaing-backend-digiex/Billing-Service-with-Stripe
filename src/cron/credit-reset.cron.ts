@@ -7,9 +7,9 @@ import {
   SubscriptionEventType,
 } from "@prisma/client";
 import { PrismaService } from "../database/prisma.service";
-import { addCalendarMonths } from "../common/utils/date.util";
 import { CreditService } from "../credits/credit.service";
 import { creditKey } from "../credits/credit.types";
+import { nextCreditResetFrom } from "../credits/credit-policy.util";
 
 @Injectable()
 export class CreditResetCronService {
@@ -34,7 +34,7 @@ export class CreditResetCronService {
       include: {
         pricingOption: {
           include: {
-            plan: true,
+            plan: { include: { creditPolicy: true } },
           },
         },
       },
@@ -51,14 +51,19 @@ export class CreditResetCronService {
 
     for (const subscription of subscriptions) {
       const plan = subscription.pricingOption.plan;
-      const resetMonths = Math.max(1, Math.round(plan.resetIntervalDay / 30));
-      let newNextReset = addCalendarMonths(
-        subscription.nextCreditResetAt,
-        resetMonths,
-      );
+      const policy = plan.creditPolicy;
+
+      if (!policy) {
+        this.logger.error(
+          `Skipping subscription ${subscription.id}: plan ${plan.id} (${plan.name}) has no CreditPolicy – cannot resolve credit amount`,
+        );
+        continue;
+      }
+
+      let newNextReset = nextCreditResetFrom(subscription.nextCreditResetAt, policy);
 
       while (newNextReset <= now) {
-        newNextReset = addCalendarMonths(newNextReset, resetMonths);
+        newNextReset = nextCreditResetFrom(newNextReset, policy);
       }
 
       if (newNextReset > subscription.currentPeriodEnd) {
@@ -96,7 +101,7 @@ export class CreditResetCronService {
           await this.creditService.resetSubscriptionAllowance(
             {
               userId: subscription.userId,
-              amount: plan.renewalCredits,
+              amount: policy.creditAmount,
               grantDescription: `Credits reset – ${plan.name} (monthly cycle)`,
               revokeDescription: `Unused credits expired before monthly reset – ${plan.name}`,
               referenceId: subscription.id,
@@ -114,7 +119,7 @@ export class CreditResetCronService {
               type: SubscriptionEventType.RENEWED,
               metadata: {
                 reason: "cron_credit_reset",
-                creditsGranted: plan.renewalCredits,
+                creditsGranted: policy.creditAmount,
                 nextResetAt: newNextReset.toISOString(),
               },
             },
@@ -125,7 +130,7 @@ export class CreditResetCronService {
 
         if (didReset) {
           this.logger.log(
-            `Reset credits for subscription ${subscription.id}: +${plan.renewalCredits} credits, next reset: ${newNextReset.toISOString()}`,
+            `Reset credits for subscription ${subscription.id}: +${policy.creditAmount} credits, next reset: ${newNextReset.toISOString()}`,
           );
         }
       } catch (error) {
