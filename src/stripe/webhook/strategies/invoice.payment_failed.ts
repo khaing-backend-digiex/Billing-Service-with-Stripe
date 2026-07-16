@@ -149,7 +149,7 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
       `(retries: ${retriesUsed}/${MAX_RETRY_ATTEMPTS}, window exceeded: ${windowExceeded}) – downgrading to free`,
     );
 
-    const freePlan = await this.prisma.plan.findUnique({
+    const freePlan = await this.prisma.plan.findFirst({
       where: { code: PLAN_CODES.FREE
        },
       include: { pricingOptions: true },

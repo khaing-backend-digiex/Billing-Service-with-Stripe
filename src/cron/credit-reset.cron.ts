@@ -34,7 +34,9 @@ export class CreditResetCronService {
       include: {
         pricingOption: {
           include: {
-            plan: true,
+            plan: {
+              include: { creditPolicy: true }
+            },
           },
         },
       },
@@ -50,8 +52,10 @@ export class CreditResetCronService {
     );
 
     for (const subscription of subscriptions) {
-      const plan = subscription.pricingOption.plan;
-      const resetMonths = Math.max(1, Math.round(plan.resetIntervalDay / 30));
+      const plan = subscription.pricingOption.plan as any;
+      const resetMonths = plan.creditPolicy?.resetInterval === 'MONTHLY' 
+        ? 1 
+        : Math.max(1, Math.round((plan.creditPolicy?.intervalDays || 30) / 30));
       let newNextReset = addCalendarMonths(
         subscription.nextCreditResetAt,
         resetMonths,
@@ -91,7 +95,7 @@ export class CreditResetCronService {
           await this.creditService.resetSubscriptionAllowance(
             {
               userId: subscription.userId,
-              amount: plan.renewalCredits,
+              amount: plan.creditPolicy?.creditAmount ?? 0,
               grantDescription: `Credits reset – ${plan.name} (monthly cycle)`,
               revokeDescription: `Unused credits expired before monthly reset – ${plan.name}`,
               referenceId: subscription.id,
@@ -109,7 +113,7 @@ export class CreditResetCronService {
               type: SubscriptionEventType.RENEWED,
               metadata: {
                 reason: "cron_credit_reset",
-                creditsGranted: plan.renewalCredits,
+                creditsGranted: plan.creditPolicy?.creditAmount ?? 0,
                 nextResetAt: newNextReset.toISOString(),
               },
             },
@@ -120,7 +124,7 @@ export class CreditResetCronService {
 
         if (didReset) {
           this.logger.log(
-            `Reset credits for subscription ${subscription.id}: +${plan.renewalCredits} credits, next reset: ${newNextReset.toISOString()}`,
+            `Reset credits for subscription ${subscription.id}: +${plan.creditPolicy?.creditAmount ?? 0} credits, next reset: ${newNextReset.toISOString()}`,
           );
         }
       } catch (error) {

@@ -80,10 +80,12 @@ export class PaidInvoiceSyncService {
       return;
     }
 
-    const plan = pricingOption.plan;
+    const plan = pricingOption.plan as any;
     const periodStart = new Date(paidInvoice.periodStart * 1000);
     const periodEnd = new Date(paidInvoice.periodEnd * 1000);
-    const resetMonths = Math.max(1, Math.round(plan.resetIntervalDay / 30));
+    const resetMonths = plan.creditPolicy?.resetInterval === 'MONTHLY' 
+      ? 1 
+      : Math.max(1, Math.round((plan.creditPolicy?.intervalDays || 30) / 30));
     const nextCreditResetAt = addCalendarMonths(periodStart, resetMonths);
 
     const stripeSubscriptionId =
@@ -175,7 +177,7 @@ export class PaidInvoiceSyncService {
         await this.creditService.grantSubscriptionAllowance(
           {
             userId: subscription.userId,
-            amount: plan.renewalCredits,
+            amount: plan.creditPolicy?.creditAmount ?? 0,
             description,
             referenceId: invoice.id,
             idempotencyKey: `grant_sub_${invoice.id}`,
@@ -190,7 +192,7 @@ export class PaidInvoiceSyncService {
           type: eventType,
           metadata: {
             stripeInvoiceId: paidInvoice.id,
-            creditsGranted: plan.renewalCredits,
+            creditsGranted: plan.creditPolicy?.creditAmount ?? 0,
             billingReason: paidInvoice.billingReason ?? null,
             periodStart: periodStart.toISOString(),
             periodEnd: periodEnd.toISOString(),
@@ -199,7 +201,7 @@ export class PaidInvoiceSyncService {
       });
 
       this.logger.log(
-        `Credits granted: subscription=${subscription.id} +${plan.renewalCredits} (${plan.name}, ${paidInvoice.billingReason})`,
+        `Credits granted: subscription=${subscription.id} +${plan.creditPolicy?.creditAmount ?? 0} (${plan.name}, ${paidInvoice.billingReason})`,
       );
     });
   }

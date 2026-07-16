@@ -21,8 +21,30 @@ export class PricingService {
     private readonly adapter: IPaymentAdapter,
   ) {}
 
-  async createPlan(data: { code: string; name: string; renewalCredits: number; resetIntervalDay: number }) {
-    return this.prisma.plan.create({ data });
+  async createPlan(data: { 
+    productId: string; 
+    code: string; 
+    name: string; 
+    isFree?: boolean; 
+    creditAmount: number; 
+    resetInterval: 'MONTHLY' | 'EVERY_N_DAYS'; 
+    intervalDays?: number 
+  }) {
+    return this.prisma.plan.create({ 
+      data: {
+        productId: data.productId,
+        code: data.code,
+        name: data.name,
+        isFree: data.isFree,
+        creditPolicy: {
+          create: {
+            creditAmount: data.creditAmount,
+            resetInterval: data.resetInterval,
+            intervalDays: data.intervalDays,
+          }
+        }
+      } 
+    });
   }
 
   async getPlans() {
@@ -33,7 +55,7 @@ export class PricingService {
     return this.prisma.billingCycle.create({ data });
   }
 
-  async createPricingOption(data: { planId: string; billingCycleId: string; name: string; price: number; currency: string }) {
+  async createPricingOption(data: { planId: string; productId: string; billingCycleId: string; name: string; price: number; currency: string }) {
     try {
       const plan = await this.prisma.plan.findUnique({ where: { id: data.planId } });
       if (!plan) throw new Error("Plan not found");
@@ -67,6 +89,7 @@ export class PricingService {
       return await this.prisma.pricingOption.create({
         data: {
           planId: data.planId,
+          productId: data.productId,
           billingCycleId: data.billingCycleId,
           name: data.name,
           price: data.price,
@@ -84,7 +107,7 @@ export class PricingService {
   async findByProviderPriceId(priceId: string) {
     return this.prisma.pricingOption.findFirst({
       where: { providerPriceId: priceId },
-      include: { plan: true },
+      include: { plan: { include: { creditPolicy: true } } },
     });
   }
 

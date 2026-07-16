@@ -6,6 +6,10 @@ export class CreatePricingOptionDto {
   @IsString()
   planId!: string;
 
+  @ApiProperty({ description: 'The ID of the product' })
+  @IsString()
+  productId!: string;
+
   @ApiProperty({ description: 'The ID of the billing cycle' })
   @IsString()
   billingCycleId!: string;

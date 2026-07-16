@@ -1,7 +1,12 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNumber, Min } from 'class-validator';
+import { IsString, IsNumber, Min, IsBoolean, IsEnum, IsOptional } from 'class-validator';
+import { ResetInterval } from '@prisma/client';
 
 export class CreatePlanDto {
+  @ApiProperty({ description: 'The ID of the product' })
+  @IsString()
+  productId!: string;
+
   @ApiProperty({ description: 'The unique code for the plan', example: 'PRO' })
   @IsString()
   code!: string;
@@ -10,13 +15,23 @@ export class CreatePlanDto {
   @IsString()
   name!: string;
 
+  @ApiProperty({ description: 'Whether this is a free plan', example: false, required: false })
+  @IsOptional()
+  @IsBoolean()
+  isFree?: boolean;
+
   @ApiProperty({ description: 'Credits given upon renewal', example: 100 })
   @IsNumber()
   @Min(0)
-  renewalCredits!: number;
+  creditAmount!: number;
 
-  @ApiProperty({ description: 'Reset interval in days', example: 30 })
+  @ApiProperty({ description: 'Reset interval type (MONTHLY or EVERY_N_DAYS)', enum: ResetInterval })
+  @IsEnum(ResetInterval)
+  resetInterval!: ResetInterval;
+
+  @ApiProperty({ description: 'Interval in days if EVERY_N_DAYS', required: false })
+  @IsOptional()
   @IsNumber()
   @Min(1)
-  resetIntervalDay!: number;
+  intervalDays?: number;
 }

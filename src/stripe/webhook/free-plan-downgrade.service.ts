@@ -62,7 +62,7 @@ export class FreePlanDowngradeService {
 
     const freePricingOption = await this.prisma.pricingOption.findFirst({
       where: { providerPriceId: freePriceId },
-      include: { plan: true },
+      include: { plan: { include: { creditPolicy: true } } },
     });
 
     const freeItem = freeSub.items[0];
@@ -75,11 +75,10 @@ export class FreePlanDowngradeService {
 
     await this.prisma.$transaction(async (tx) => {
       if (freePricingOption) {
-        const freePlan = freePricingOption.plan;
-        const resetMonths = Math.max(
-          1,
-          Math.round(freePlan.resetIntervalDay / 30),
-        );
+        const freePlan = freePricingOption.plan as any;
+        const resetMonths = freePlan.creditPolicy?.resetInterval === 'MONTHLY' 
+          ? 1 
+          : Math.max(1, Math.round((freePlan.creditPolicy?.intervalDays || 30) / 30));
 
         await tx.subscription.update({
           where: { id: subscription.id },
