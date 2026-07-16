@@ -1,0 +1,145 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, multi-subscripton]
+
+# Huỷ run cũ khi push liên tiếp vào cùng một PR.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# CỐ Ý CHƯA CÓ JOB `test` (C2, Sprint 1). Đây không phải thiếu sót — `npm test` hiện
+# KHÔNG an toàn để chạy song song trên CI:
+#
+#   1. Test chạy trên Neon DB dùng chung. Hai PR chạy cùng lúc sẽ đá nhau, và cleanup của
+#      suite này xoá dữ liệu của suite kia. Test cũng đã phụ thuộc state toàn cục sẵn:
+#      free-plan-reconciliation.cron.spec đang đỏ vì 69 sub rác trong DB vượt `take: 50`
+#      của cron, đẩy sub của chính test ra khỏi batch (chờ C4 dọn).
+#   2. Test gọi Stripe THẬT (log có "Deleted Stripe customer cus_..."). CI chạy nó nghĩa là
+#      mỗi PR đụng vào tài khoản Stripe thật.
+#
+# Bật lên cần một trong hai, quyết ở Sprint 2 chứ đừng bật đại:
+#   - Neon branch ephemeral mỗi PR (mỗi run một DB riêng — đúng hướng nhất), hoặc
+#   - concurrency group serialize toàn repo (đơn giản, nhưng CI xếp hàng và vẫn đụng Stripe).
+#
+# Tới lúc đó: TEST VẪN CHẠY TAY (`npm test` trước khi mở PR). Hai job dưới đây không thay
+# thế test — chúng bắt lớp lỗi khác, và không cần secret nên chạy được cả trên PR từ fork.
+
+jobs:
+  # Không secret, không DB. Bắt lớp lỗi "client stale": tsc xanh trong khi schema và code
+  # đã lệch, vì node_modules/.prisma/client còn là bản cũ. Đã cắn hai lần khi làm PR1.
+  # `prisma generate` ở đây sinh client TỪ schema trong PR, nên lệch là đỏ ngay.
+  verify:
+    name: generate + typecheck + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Thứ tự là mấu chốt, đừng đảo: generate phải chạy TRƯỚC tsc.
+      - name: prisma generate
+        run: npx prisma generate
+
+      - name: tsc --noEmit
+        run: npx tsc --noEmit
+
+      - name: build
+        run: npm run build
+
+  # Bắt lớp lỗi mà `migrate status` mù hoàn toàn: status chỉ so _prisma_migrations với thư
+  # mục migrations, KHÔNG bao giờ so DB với schema. Nó báo "up to date" trong suốt thời gian
+  # lịch sử migration replay ra sai schema (User.id ra SERIAL trong khi schema khai String)
+  # — bug thật, tìm thấy ngày 2026-07-16, sửa ở 9c8a0f5.
+  #
+  # `--from-migrations` replay toàn bộ lịch sử vào shadow DB rồi so với schema.prisma. Nên
+  # job này bắt cả hai thứ: migration SQL chạy có lỗi, và lịch sử ra khác schema.
+  #
+  # Cần Postgres nhưng KHÔNG cần secret: postgres service container, không đụng Neon,
+  # không đụng Stripe. Vì vậy nó chạy được trên PR từ fork.
+  schema:
+    name: migration history matches schema
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Prisma tự xoá/tạo lại nội dung shadow DB. Ở đây là container ephemeral nên vô hại.
+      SHADOW_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/prisma_shadow
+      # prisma.config.ts đọc DATABASE_URL cho datasource. `migrate diff --from-migrations`
+      # không chạm tới nó, nhưng config phải resolve được nên vẫn phải có giá trị hợp lệ.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # cần lịch sử để so migration đã có với PR
+
+      # Migration đã merge là bất biến. Prisma chốt checksum = sha256 bytes của
+      # migration.sql; sửa file sau khi applied làm mọi môi trường đã chạy nó khoá cứng
+      # ("migration was modified after it was applied") và `migrate dev` không chạy nữa.
+      #
+      # Đây là NGUYÊN NHÂN GỐC của bug 9c8a0f5: một cú squash làm rỗng hai migration
+      # change_user_id_to_uuid mà không gộp nội dung vào baseline. Hai job kia bắt hậu quả;
+      # step này chặn hành vi. Không cần DB, không cần secret.
+      # Baseline lại lịch sử (xoá migration cũ, thay bằng 0_baseline) là thao tác hợp lệ và
+      # Prisma có tài liệu cho nó — nhưng nó khoá cứng mọi môi trường đã chạy lịch sử cũ.
+      # Nên nó phải là quyết định có người bấm nút: gắn label `migration-baseline` vào PR.
+      # Lần trước nó lọt im lặng, và đó chính là lý do có 9c8a0f5.
+      - name: no edits to already-merged migrations
+        if: >-
+          github.event_name == 'pull_request' &&
+          !contains(github.event.pull_request.labels.*.name, 'migration-baseline')
+        run: |
+          base="origin/${{ github.base_ref }}"
+          # --no-renames: xoá-rồi-thêm bị đoán nhầm thành rename (init -> 0_baseline khớp
+          # 79%), làm báo cáo sai sự thật. Ta muốn thấy đúng chữ D.
+          changed=$(git diff --no-renames --diff-filter=MD --name-status "$base"...HEAD -- prisma/migrations/)
+          if [ -n "$changed" ]; then
+            echo "::error::Migration đã merge bị sửa hoặc xoá. Prisma chốt checksum = sha256"
+            echo "::error::bytes của migration.sql, nên sửa file đã applied làm mọi môi"
+            echo "::error::trường đã chạy nó khoá cứng. Thêm migration MỚI thay vì sửa file"
+            echo "::error::cũ (xem 9c8a0f5). Nếu đây là baseline có chủ đích: gắn label"
+            echo "::error::'migration-baseline' vào PR."
+            echo "$changed"
+            exit 1
+          fi
+          echo "OK: prisma/migrations chỉ có file thêm mới."
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: create shadow database
+        run: psql "$DATABASE_URL" -c 'CREATE DATABASE prisma_shadow;'
+
+      # --exit-code: rỗng = 0, có diff = 2, lỗi = 1. Khác 0 là job đỏ.
+      - name: migration history replays to exactly schema.prisma
+        run: |
+          npx prisma migrate diff \
+            --from-migrations prisma/migrations \
+            --to-schema prisma/schema.prisma \
+            --exit-code
