@@ -11,7 +11,7 @@ import {
 } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
-import { InvoiceService } from "../../invoice.service";
+import { InvoiceRecordService } from "../../invoice-record.service";
 import { StripeService } from "../../stripe.service";
 import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
 import { PLAN_CODES } from "@/common/constants/plan.constants";

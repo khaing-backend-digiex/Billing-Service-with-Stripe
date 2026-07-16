@@ -13,8 +13,8 @@ export interface RecordPaymentInput {
 }
 
 @Injectable()
-export class PaymentService {
-  private readonly logger = new Logger(PaymentService.name);
+export class PaymentRecordService {
+  private readonly logger = new Logger(PaymentRecordService.name);
 
   constructor(private readonly prisma: PrismaService) {}
 

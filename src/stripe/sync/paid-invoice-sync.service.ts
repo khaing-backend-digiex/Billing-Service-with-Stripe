@@ -7,8 +7,8 @@ import {
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
 import { PricingService } from "../../pricing/pricing.service";
-import { InvoiceService } from "../invoice.service";
-import { PaymentService } from "../payment.service";
+import { InvoiceRecordService } from "../invoice-record.service";
+import { PaymentRecordService } from "../payment-record.service";
 import { PaymentInvoice } from "../../payments/types/payment.types";
 import { addCalendarMonths } from "../../common/utils/date.util";
 import { PLAN_CODES } from "../../common/constants/plan.constants";
@@ -22,8 +22,8 @@ export class PaidInvoiceSyncService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly pricingService: PricingService,
-    private readonly invoiceService: InvoiceService,
-    private readonly paymentService: PaymentService,
+    private readonly invoiceService: InvoiceRecordService,
+    private readonly paymentService: PaymentRecordService,
     private readonly creditService: CreditService,
   ) {}
 

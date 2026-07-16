@@ -5,6 +5,7 @@ import {
 } from "@nestjs/common";
 import { PrismaService } from "../database/prisma.service";
 import { User } from "@prisma/client";
+import { randomUUID } from "crypto";
 
 @Injectable()
 export class UsersService {

@@ -15,8 +15,8 @@ import { CustomerSubscriptionUpdatedStrategy } from "../src/stripe/webhook/strat
 import { CustomerSubscriptionDeletedStrategy } from "../src/stripe/webhook/strategies/customer.subscription.deleted";
 import { PaymentIntentSucceededStrategy } from "../src/stripe/webhook/strategies/payment-intent-succeeded.strategy";
 import { PaidInvoiceSyncService } from "../src/stripe/sync/paid-invoice-sync.service";
-import { InvoiceService } from "../src/stripe/invoice.service";
-import { PaymentService } from "../src/stripe/payment.service";
+import { InvoiceRecordService } from "../src/stripe/invoice-record.service";
+import { PaymentRecordService } from "../src/stripe/payment-record.service";
 import { FreePlanDowngradeService } from "../src/stripe/webhook/free-plan-downgrade.service";
 import { SubscriptionSyncService } from "../src/stripe/sync/subscription-sync.service";
 import { StripeAdapter } from "../src/stripe/adapter/stripe.adapter";
@@ -68,8 +68,8 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       new PaidInvoiceSyncService(
         ctx.prisma,
         pricingServiceStub as any,
-        new InvoiceService(ctx.prisma),
-        new PaymentService(ctx.prisma),
+        new InvoiceRecordService(ctx.prisma),
+        new PaymentRecordService(ctx.prisma),
         creditService,
       );
     const strategy = () =>
@@ -278,7 +278,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       new InvoicePaymentFailedStrategy(
         ctx.prisma,
         stripeServiceMock as any,
-        new InvoiceService(ctx.prisma),
+        new InvoiceRecordService(ctx.prisma),
       );
 
     it("records retry info, sets PAST_DUE; does not cancel on first failure", async () => {
@@ -448,8 +448,8 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
         new PaidInvoiceSyncService(
           ctx.prisma,
           pricingServiceStub as any,
-          new InvoiceService(ctx.prisma),
-          new PaymentService(ctx.prisma),
+          new InvoiceRecordService(ctx.prisma),
+          new PaymentRecordService(ctx.prisma),
           creditService,
         ),
         stripeServiceMock as any,
@@ -579,7 +579,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
     const strategy = () =>
       new PaymentIntentSucceededStrategy(
         ctx.prisma,
-        new PaymentService(ctx.prisma),
+        new PaymentRecordService(ctx.prisma),
         creditService,
       );
 

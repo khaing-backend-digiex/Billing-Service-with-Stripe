@@ -1,7 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
 import { WebhookStrategy } from "./webhook-strategy.interface";
-import { PaymentService } from "../../payment.service";
+import { PaymentRecordService } from "../../payment-record.service";
 import {
   STRIPE_METADATA_KEY,
   STRIPE_WEBHOOK_EVENT,
@@ -12,7 +12,7 @@ import {
 export class PaymentIntentFailedStrategy implements WebhookStrategy {
   private readonly logger = new Logger(PaymentIntentFailedStrategy.name);
 
-  constructor(private readonly paymentService: PaymentService) {}
+  constructor(private readonly paymentService: PaymentRecordService) {}
 
   canHandle(eventType: string): boolean {
     return eventType === STRIPE_WEBHOOK_EVENT.PAYMENT_INTENT_PAYMENT_FAILED;
