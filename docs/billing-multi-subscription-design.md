@@ -53,7 +53,7 @@ AddonPackage → Payment → grantAddonCredits
 | A8 | Trial chỉ là 2 timestamp trên Subscription, không có model grant riêng | `trialStart/trialEnd` |
 | A9 | Grant thủ công (admin/gift) chỉ là `ADJUSTMENT` transaction, không expiry, không nguồn gốc | `CreditService.adjust` |
 | A10 | Mọi subscription đều phải có Stripe subscription phía sau | Không có khái niệm billing mode nội bộ; Enterprise/Trial không qua Stripe không biểu diễn được |
-| A11 | Idempotency key scope theo user là đủ | `creditKey.consume(userId, requestId)` — vẫn ổn, nhưng các key `sub:{subscriptionId}` cần giữ nguyên ngữ nghĩa khi có nhiều sub |
+| A11 | Idempotency key scope theo user là đủ | `creditKey.consume(userId, requestId)` — **không còn đủ khi consume có chiều product** (fix M7): key phải thêm productId từ Phase 0 (`req:{userId}:{productId}:{requestId}:consume`), nếu không hai product dùng chung requestId sẽ dedupe nhầm — request thứ hai không bị trừ credit. Các key `sub:{subscriptionId}` giữ nguyên ngữ nghĩa |
 
 ## 3. Domain model mới (tổng quan)
 
@@ -78,7 +78,7 @@ Tách thành **3 bounded context**:
 └─────────────────────────────────────────────────────────┘
 ```
 
-Nguyên tắc trung tâm: **Billing trả lời "user đang trả tiền cho cái gì" (Stripe là source of truth); Entitlement trả lời "user được dùng bao nhiêu" (business rule riêng)**. Hai context nối một chiều qua webhook events — chính thức hóa triết lý hiện tại.
+Nguyên tắc trung tâm: **Billing trả lời "user đang trả tiền cho cái gì" (Stripe là source of truth); Entitlement trả lời "user được dùng bao nhiêu" (business rule riêng)**. Hai context nối một chiều qua webhook events (chiều **ghi**; riêng gate consume được phép *đọc* trạng thái sub đồng bộ trong cùng transaction — xem cơ chế freeze §9) — chính thức hóa triết lý hiện tại.
 
 ## 4. Entity relationship mới
 
@@ -109,7 +109,7 @@ Subscription 1──n CreditGrant (grant loại SUBSCRIPTION trỏ về sub sinh
 | `expiresAt` (nullable) | Subscription credits hết hạn theo reset; add-on null (hoặc theo policy); gift/promo có hạn |
 | `priority` | Điều khiển thứ tự tiêu bằng data thay vì code (thay A3) |
 
-**Consume** trở thành: lock các grant còn hiệu lực của (user, product) theo thứ tự `priority ASC, expiresAt ASC NULLS LAST, id ASC`, drain lần lượt, ghi transaction cho từng grant. Thuật toán `allocateCredits` hiện tại giữ nguyên, chỉ đổi nguồn từ 2 bucket cứng thành n grant.
+**Consume** trở thành: lock các grant còn hiệu lực của (user, product) theo thứ tự `priority ASC, expiresAt ASC NULLS LAST, id ASC` — chỉ lock grant có `amountRemaining > 0` (grant cạn không vào lock-set, tránh consume path lock ngày càng nhiều row khi grant tích lũy — fix m5), drain lần lượt, ghi transaction cho từng grant. Thuật toán `allocateCredits` hiện tại giữ nguyên, chỉ đổi nguồn từ 2 bucket cứng thành n grant. Idempotency key consume **thêm chiều product**: `req:{userId}:{productId}:{requestId}:consume` (fix A11/M7).
 
 ## 5. Product — có, và là gốc của Catalog
 
@@ -175,17 +175,22 @@ Nếu mỗi lần đổi gói tạo row mới **và Free cũng là row**, chuỗ
 
 1. Row map 1-1 vĩnh viễn với Stripe Subscription ID → xóa được toàn bộ logic "repoint" (`shouldRepoint`/`isStale` trong `paid-invoice-sync.service.ts` là code bù đắp cho việc slot model lệch pha với Stripe).
 2. Invoice/Payment lịch sử trỏ về đúng hợp đồng sinh ra nó, không bị "viết đè quá khứ" khi slot đổi giá.
-3. Đúng webhook-as-source-of-truth: `customer.subscription.created` = tạo row, `deleted` = terminal row. Mapping 1-1, không trạng thái lai.
-4. **Free là row để history tường minh**: toàn bộ lịch sử gói của user đọc thẳng từ bảng Subscription bằng một query, không phải compose từ `SubscriptionEvent` + khoảng trống giữa các row trả tiền. Lợi ích kèm theo: `nextCreditResetAt` cho free credit vẫn neo trên row → cron reset credit đi **một đường duy nhất** cho cả Free lẫn trả tiền, không cần cron grant riêng theo User.
+3. Đúng webhook-as-source-of-truth: row trả tiền được tạo bởi **`invoice.paid` đầu tiên** (`billing_reason = subscription_create`) — tiền thật mới sinh row; `customer.subscription.deleted` = terminal row. Sub `incomplete` phía Stripe (checkout đang dở / bị 3DS bỏ ngang) **không tạo row local** — tránh đá vào partial unique index khi row Free đang live, và checkout bỏ dở không để lại rác (fix C1, phương án "row theo tiền thật"; khớp luôn với code hiện tại vốn upsert row trong `invoice-paid.strategy`).
+4. **Free là row để history tường minh**: toàn bộ lịch sử gói của user đọc thẳng từ bảng Subscription bằng một query, không phải compose từ `SubscriptionEvent` + khoảng trống giữa các row trả tiền. Lợi ích kèm theo (nói chính xác — fix m2): `nextCreditResetAt` cho free credit vẫn neo trên row → cron reset hiện có phục vụ luôn Free bằng chung một cơ chế với yearly-plan-monthly-reset; sub monthly trả tiền vẫn grant qua `invoice.paid` như hiện tại — vẫn là hai đường grant (webhook + cron), nhưng không phải viết thêm cron grant riêng neo theo User.
 
 **Lifecycle row Free** (quy tắc "luôn đúng 1 live, còn lại inactive"):
 
 - User mới (hoặc lần đầu chạm một product) → tạo row Free `ACTIVE`, `billingMode = NONE`, `providerSubscriptionId = null`.
-- Free → Pro: row Free chuyển `EXPIRED` (terminal), row Pro mới tạo từ webhook `customer.subscription.created`.
-- Pro → hủy/hết hạn: row Pro chuyển `CANCELLED`/`EXPIRED` (terminal), tạo **row Free mới** `ACTIVE` — không revive row Free cũ, giữ nguyên tắc "row là contract instance, đã terminal thì bất biến".
+- **Khởi tạo row Free** (spec tường minh — các cột NOT NULL, fix m1): `currentPeriodStart` = thời điểm tạo row; `nextCreditResetAt` = start + resetInterval của CreditPolicy plan Free; `currentPeriodEnd` = `nextCreditResetAt` (với Free, "period" chính là cửa sổ reset credit); cron reset đẩy cả ba mốc mỗi kỳ. Idempotency của grant free vẫn neo `sub:{id}:reset:{nextCreditResetAt}` như hiện tại.
+- Free → Pro: **`invoice.paid` đầu tiên** (`billing_reason = subscription_create`) là sự kiện tạo row Pro — trong **một DB transaction**: expire row Free (`EXPIRED`) + insert row Pro `ACTIVE` + grant credit (fix C1 atomicity). Checkout bỏ dở (sub `incomplete`/`incomplete_expired`) không đụng DB — row Free còn nguyên.
+- Pro → hủy/hết hạn: row Pro chuyển `CANCELLED` (terminal, từ `customer.subscription.deleted`) + tạo **row Free mới** `ACTIVE` trong cùng transaction — không revive row Free cũ, giữ nguyên tắc "row là contract instance, đã terminal thì bất biến".
+- **Webhook tolerance — out-of-order (fix C4)**: Stripe không đảm bảo thứ tự delivery. Mọi handler phải chịu được "row chưa/không tồn tại": `updated`/`deleted` cho sub chưa có row local → ignore + log, không throw (khác `paid-invoice-sync.service.ts:38` hiện tại — trong Model B "row chưa tồn tại" là tình huống thường xuyên, không phải lỗi); `invoice.paid` tự upsert row theo unique `(provider, providerSubscriptionId)` nên không phụ thuộc event `created` đến trước.
+- **Race tạo row Free (fix m6)**: webhook `deleted` (có retry) và reconciliation cron đều có thể tạo row Free — partial unique index chặn bản sao; handler phải coi unique-violation là **success** (idempotent), không được fail webhook.
 - Invariant: mỗi user × product có **đúng 1 row live** — partial unique index (§13) áp dụng cho cả Free. `free-plan-reconciliation.cron` giữ lại làm lưới an toàn cho invariant này, generalize theo product.
 
-**Ranh giới quan trọng**: upgrade/downgrade tier trong cùng một Stripe subscription (đổi price qua proration — flow `upgradeSubscriptionTier` hiện tại) vẫn là *update trên cùng row*, vì Stripe sub ID không đổi. Với row trả tiền: **row mới khi và chỉ khi Stripe subscription mới**; với row Free: row mới khi user rơi về free. Sau khi set, `providerSubscriptionId` là immutable (row Free không bao giờ set).
+**Ranh giới quan trọng**: đổi price trong cùng một Stripe subscription (proration — với catalog hiện tại chỉ còn trường hợp đổi chu kỳ PRO monthly ↔ yearly, D10) vẫn là *update trên cùng row*, vì Stripe sub ID không đổi. Với row trả tiền: **row mới khi và chỉ khi Stripe subscription mới**; với row Free: row mới khi user rơi về free. Sau khi set, `providerSubscriptionId` là immutable (row Free không bao giờ set). **Tuyên bố bất biến, nói chính xác (fix M5)**: row bất biến theo Stripe sub ID, *không* bất biến theo pricing (`pricingOptionId` đổi khi đổi chu kỳ) — vì vậy **Invoice lưu snapshot `pricingOptionId`** tại thời điểm charge, để "invoice này theo giá nào" trả lời được từ chính Invoice, không phải reconstruct từ SubscriptionEvent.
+
+**Reactivation — đổi ý sau khi hủy gia hạn (fix M6)**: trước khi hết kỳ, un-cancel = set `cancel_at_period_end = false` trên **cùng** Stripe sub → cùng row local, `autoRenew` về true qua webhook `updated` — không row mới, không checkout mới. API mua gói bắt buộc check "đã có sub live cùng product": nếu có → điều hướng sang reactivate (hoặc đổi chu kỳ), **không** tạo Stripe sub thứ hai (sẽ vỡ partial unique index và user bị charge trên sub không hiển thị trong app).
 
 Kịch bản Free → Pro → hủy với thiết kế này: Free ACTIVE → Free EXPIRED + Pro ACTIVE → Pro CANCELLED + Free mới ACTIVE. Tổng cộng **3 row, toàn bộ là lịch sử chuyển gói tường minh**.
 
@@ -205,6 +210,10 @@ Thay bằng **CreditGrant** (§4). "Wallet" vẫn tồn tại như **khái niệ
 **Phản biện business rule `isAddonUsable`**: user đã trả tiền mua add-on credits nhưng bị khóa khi rơi về Free — dễ gây khiếu nại, bản chất là dùng add-on làm đòn bẩy giữ subscription. Nếu vẫn giữ, biến nó thành **policy tường minh trên Product** (`addonRequiresLiveSubscription: boolean`) và định nghĩa lại theo product: add-on credits của AI cần sub AI live, không liên quan sub OCR. Khi bị khóa, credit nên **đóng băng** (grant còn đó, không tiêu được) chứ không expire.
 
 **Đã chốt (2026-07-16, D7)**: giữ rule theo đúng hướng này — AI có `addonRequiresLiveSubscription = true`. User rớt về Free AI thì add-on grant **đóng băng**: không tiêu được, không mất, không expire; tự khả dụng lại khi có sub AI trả tiền live.
+
+*(Ghi chú sau review 2026-07-16: phản biện "khóa add-on đã trả tiền dễ gây khiếu nại" giữ nguyên giá trị cảnh báo, nhưng business đã cân nhắc và quyết giữ cả D7 lẫn freeze-all trong PAST_DUE (D9) làm đòn bẩy thu tiền — xem §14.2.)*
+
+**Cơ chế freeze (chốt kỹ thuật — fix M1)**: freeze là **derive-at-read**, không có cờ `frozen` trên grant. Transaction consume lock các grant **và đọc status của sub live cùng product trong cùng DB transaction** (như `lockForConsume` hiện tại join sang Subscription) — luôn nhất quán, không có race webhook/cache, không có trạng thái freeze "trễ vài giây". Hệ quả phải thừa nhận trung thực: gate consume của Entitlement **đọc đồng bộ** trạng thái Subscription — ranh giới §3 chính xác là "ghi một chiều qua webhook; đọc-để-gate là join trong DB, cấm ghi ngược". Không dùng event-driven flag (cờ frozen cập nhật qua webhook) ở quy mô hiện tại: phải xử lý ordering/replay/reconciliation cho cái cờ đó — không đáng.
 
 ## 10. Add-on Subscription vs One-time Add-on
 
@@ -240,14 +249,13 @@ Mọi loại tiêu qua **một đường consume duy nhất** nhờ `priority` +
 2. Thêm `Subscription.productId` (backfill), `billingMode = PROVIDER` default.
 3. Tạo bảng `CreditGrant` + thêm `CreditTransaction.grantId` nullable.
 
-**Phase 1 — Backfill ledger** (batch, lock từng user):
-- Mỗi Subscription có `subscriptionCreditsRemaining > 0` → 1 CreditGrant `SUBSCRIPTION` với `amountRemaining` = số dư, `expiresAt = nextCreditResetAt`.
-- Mỗi CreditWallet có `addonCredits > 0` → 1 CreditGrant `ADDON`, không expiry.
-- Đối chiếu: `SUM(grants) == SUM(cột cũ)` per user trước khi sang phase sau.
-
-**Phase 2 — Chuyển writer/reader:**
-- `CreditRepository` đổi sang đọc/ghi CreditGrant; giai đoạn chuyển tiếp dual-write cột cũ + grant trong cùng transaction, kèm cron reconcile so lệch (pattern reconciliation đã có sẵn).
+**Phase 1 — Bật dual-write TRƯỚC** (fix C3 — dual-write phải có trước backfill; backfill trước thì mọi write giữa hai bước gây drift chắc chắn):
+- Mọi writer (`CreditRepository.applyDelta`, webhook sync, cron reset) ghi **cả cột cũ lẫn CreditGrant trong cùng transaction**. User chưa có grant → writer tự tạo grant khớp số dư tại thời điểm ghi (lazy-migrate, lock từng user).
 - Webhook sync (`paid-invoice-sync`) đổi từ "update cột" sang "expire grant cũ + tạo grant mới" — idempotency key giữ format `grant_sub_{invoiceId}` nên webhook replay từ trước migration vẫn an toàn.
+
+**Phase 2 — Backfill phần còn lại + chuyển reader:**
+- Backfill batch cho user chưa bị writer chạm tới (idempotent — skip user đã có grant): sub có `subscriptionCreditsRemaining > 0` → 1 CreditGrant `SUBSCRIPTION` (`expiresAt = nextCreditResetAt`); CreditWallet có `addonCredits > 0` → 1 CreditGrant `ADDON`, không expiry.
+- Đối chiếu `SUM(grants) == SUM(cột cũ)` per user bằng cron reconcile (pattern đã có sẵn); sạch thì chuyển reader của `CreditRepository` sang CreditGrant.
 
 **Phase 3 — Nhả constraint 1-1** *(point-of-no-return về API)*:
 - Drop `Subscription.userId @unique`, tạo partial unique index (§13).
@@ -262,7 +270,7 @@ Backward compatibility: user cũ chỉ có product AI; endpoint cũ trả "subsc
 
 ## 13. Business rule enforce bằng DB constraint
 
-1. **Một sub live per user per product**: `CREATE UNIQUE INDEX ... ON "Subscription"(userId, productId) WHERE status IN ('ACTIVE','TRIALING','PAST_DUE','INCOMPLETE','PAUSED')`. Phải denormalize `productId` vào Subscription vì Postgres không index xuyên join.
+1. **Một sub live per user per product**: `CREATE UNIQUE INDEX ... ON "Subscription"(userId, productId) WHERE status IN ('ACTIVE','PAST_DUE')`. Live-set chỉ còn 2 status (fix C1): `INCOMPLETE` không bao giờ ghi local (row chỉ tạo khi `invoice.paid` đầu tiên — §8), `TRIALING` không dùng (D12), `PAUSED` loại khỏi live-set và không viết lifecycle cho đến khi có nhu cầu thật (nhất quán D6). Phải denormalize `productId` vào Subscription vì Postgres không index xuyên join; chống lệch denormalize (fix m3) bằng FK kép: unique `(id, productId)` trên PricingOption + FK `Subscription(pricingOptionId, productId) → PricingOption(id, productId)`.
 2. **Không âm credit**: `CHECK (amountRemaining >= 0)` và `CHECK (amountRemaining <= amountGranted)` trên CreditGrant — tuyến phòng thủ cuối sau lock logic.
 3. **Stripe mapping duy nhất**: unique `(provider, providerSubscriptionId)`; unique `(provider, providerPriceId)` trên PricingOption; unique `providerInvoiceId` (đã có); unique `providerPaymentId` (đã có). Với Model B: `providerSubscriptionId` immutable sau khi set (enforce ở application/trigger).
 4. **billingMode nhất quán**: `CHECK ((billingMode = 'PROVIDER') = (providerSubscriptionId IS NOT NULL))`.
@@ -283,7 +291,7 @@ Backward compatibility: user cũ chỉ có product AI; endpoint cũ trả "subsc
 
 ### 14.1. Free tier: row (đã chốt 2026-07-16) — không dùng fallback
 
-**Free là một subscription row.** Phương án fallback ("không có sub live = hưởng free tier") từng được đề xuất để tránh row Free tích lũy khi chuyển gói, nhưng bị bác vì mục tiêu chính của multi-row là **history tường minh**: chuỗi Free → Pro → Free đọc thẳng từ bảng Subscription, không phải suy từ khoảng trống giữa các row trả tiền. Lợi ích kèm theo: `nextCreditResetAt` neo trên row Free → một đường cron reset credit duy nhất cho mọi tier, không cần cron grant free credit theo User. Chi phí chấp nhận: giữ reconciliation cron, và row Free là ngoại lệ của mapping Stripe (`billingMode = NONE`, không `providerSubscriptionId` — xem §8).
+**Free là một subscription row.** Phương án fallback ("không có sub live = hưởng free tier") từng được đề xuất để tránh row Free tích lũy khi chuyển gói, nhưng bị bác vì mục tiêu chính của multi-row là **history tường minh**: chuỗi Free → Pro → Free đọc thẳng từ bảng Subscription, không phải suy từ khoảng trống giữa các row trả tiền. Lợi ích kèm theo: `nextCreditResetAt` neo trên row Free → cron reset hiện có phục vụ luôn Free (chung cơ chế với yearly-reset; monthly trả tiền vẫn grant qua webhook — fix m2), không cần cron grant free credit riêng neo theo User. Chi phí chấp nhận: giữ reconciliation cron, và row Free là ngoại lệ của mapping Stripe (`billingMode = NONE`, không `providerSubscriptionId` — xem §8).
 
 **Phạm vi hiện tại (D6)**: Free plan chỉ tồn tại cho product **AI** — mỗi user có đúng 1 row Free (AI) khi không có sub AI trả tiền. Product tương lai (OCR/Storage) có free tier hay không sẽ quyết định khi làm product đó; không tạo sẵn row Free cho product chưa ra mắt.
 
@@ -292,11 +300,36 @@ Backward compatibility: user cũ chỉ có product AI; endpoint cũ trả "subsc
 **Hủy gói — hai đường, ngữ nghĩa khác nhau:**
 
 - **Hủy gia hạn** (mặc định, map `cancel_at_period_end = true` phía Stripe): subscription và credit subscription **sống đến hết `currentPeriodEnd`** — user đã trả tiền cho cả kỳ. Cuối kỳ, webhook `customer.subscription.deleted` → row chuyển `CANCELLED` (terminal), credit subscription còn lại expire, tạo row Free mới, add-on credit đóng băng (D7).
-- **Hủy ngay** (cancel immediately): **mất gói tại chỗ** — Stripe sub hủy ngay, row terminal ngay, credit subscription expire ngay, rớt về Free ngay. Không hoàn tiền phần kỳ còn lại (D11: không refund).
+- **Hủy ngay** (cancel immediately): **mất gói tại chỗ** — Stripe sub hủy ngay, row terminal ngay, credit subscription expire ngay, rớt về Free ngay. Không hoàn tiền phần kỳ còn lại (D11: không refund). **Vẫn mở cho user tự thao tác** (xác nhận 2026-07-16 sau review): UI bắt buộc confirm hai bước với cảnh báo tường minh "mất toàn bộ credit còn lại + không hoàn tiền phần kỳ đã trả" — user được quyền chọn, nhưng không thể chọn nhầm.
 
 **Dunning (PAST_DUE) — ân hạn 3 ngày:**
 
-- Invoice gia hạn charge thất bại → sub chuyển `PAST_DUE`; retry **3 lần trong 3 ngày (mỗi ngày 1 lần)** — cấu hình retry schedule phía Stripe, mirror trạng thái qua webhook `invoice.payment_failed` (đếm `attempts` trên Invoice như hiện tại).
-- Trong ân hạn: **đóng băng toàn bộ credit** — cả credit subscription lẫn add-on đều không tiêu được (grant còn nguyên, không mất, không expire). Consume của product đó chỉ được phép khi sub live ở trạng thái `ACTIVE`. *Lưu ý: đây là thay đổi so với hành vi hiện tại — code hiện nay vẫn cho tiêu subscription credit khi `PAST_DUE`.*
-- Retry lần 3 thất bại (hết ngày 3) → row chuyển terminal (`EXPIRED`), tạo row Free mới, credit subscription còn lại expire, add-on tiếp tục đóng băng (D7). Thanh toán thành công giữa chừng → về `ACTIVE`, **mở băng ngay** toàn bộ credit, chu kỳ tiếp tục bình thường.
+- Invoice gia hạn charge thất bại → sub chuyển `PAST_DUE`; retry **3 lần trong 3 ngày (mỗi ngày 1 lần)** — toàn bộ là **cấu hình dunning phía Stripe** (retry schedule + hành động sau retry cuối = cancel subscription). Local chỉ mirror qua webhook `invoice.payment_failed` (đếm `attempts` trên Invoice như hiện tại). **Không có timer nội bộ** cho `billingMode = PROVIDER` — một nguồn authority duy nhất, đúng webhook-as-source-of-truth; cron hết hạn nội bộ chỉ dùng cho `MANUAL`/`NONE` (fix C2).
+- Trong ân hạn: **đóng băng toàn bộ credit** — cả credit subscription lẫn add-on đều không tiêu được (grant còn nguyên, không mất, không expire). Consume của product đó chỉ được phép khi sub live ở trạng thái `ACTIVE`. *Lưu ý: đây là thay đổi so với hành vi hiện tại — code hiện nay vẫn cho tiêu subscription credit khi `PAST_DUE`.* **Đóng băng cả add-on là quyết định thương mại có chủ đích** (xác nhận lại 2026-07-16 sau review): dùng freeze làm đòn bẩy thu tiền, chấp nhận rủi ro khiếu nại từ khách đã mua add-on đứt (phản biện ở §9 đã được cân nhắc và bác).
+- Hết retry → **Stripe cancel subscription** → webhook `customer.subscription.deleted` là sự kiện **duy nhất** chuyển row sang terminal (`CANCELLED`) + tạo row Free mới; credit subscription còn lại expire, add-on theo D7. Local không bao giờ terminal row trước Stripe — nếu retry muộn thành công (thẻ được mở khóa trước khi Stripe cancel), `invoice.paid` đến → về `ACTIVE`, **mở băng ngay**; không tồn tại nhánh "local đã rớt Free nhưng Stripe vẫn charge tiền" (fix C2).
+
+## 15. Kiến trúc 5 năm
+
+1. **Ba context (§3) giữ ranh giới cứng**: module NestJS riêng, giao tiếp qua service interface + domain event, không import chéo Prisma model. Sau này cần tách service thì cắt theo đường này.
+2. **Entitlement layer là API nội bộ duy nhất** mà các product service (AI, OCR...) gọi: `checkAndConsume(userId, productCode, amount, idempotencyKey)` và `getEntitlements(userId, productCode)`. Product service không bao giờ nhìn thấy Subscription/Stripe — đổi pricing model, thêm provider, usage-based về sau không lan ra ngoài billing.
+3. **Hoàn thiện `PaymentAdapter`**: thêm provider mới (VNPay/MoMo...) chỉ là adapter + webhook mapper mới, domain không đổi.
+4. **Đường tiến hóa đã chừa sẵn**: usage-based billing = thêm `UsageRecord` đổ vào consume pipeline; seat-based = `entitlementType=SEAT`; credit per-product đã có chiều `productId`; grant expiry đã có sẵn cho mọi chương trình marketing.
+5. **Cố tình KHÔNG làm bây giờ** (YAGNI có chủ đích, cập nhật theo quyết định 2026-07-16): multi-currency wallet; tax engine riêng (Stripe Tax lo); `BillingAccount`/organization billing (D4: không có kế hoạch B2B); `entitlementType` + nhánh Quota/Seat (D6: chỉ thêm khi làm Storage/seat thật); credit universal dùng chéo product (D5: credit luôn per product); product OCR/Storage (D6: chỉ seed AI).
+
+## 16. Các quyết định — trạng thái
+
+| # | Quyết định | Nội dung đã chốt | Trạng thái |
+|---|-----------|---------|-----------|
+| D1 | Stripe: một Stripe Subscription per product, hay gộp items? | Một Stripe Subscription riêng per product; thẻ lưu sẵn tự trừ từng sub nên không cần gộp hóa đơn (§8) | **Đã chốt 2026-07-16** |
+| D2 | Free tier: row hay fallback? | **Row** — Free là subscription row; luôn 1 row live, row cũ terminal giữ history (§8, §14.1) | **Đã chốt 2026-07-16** |
+| D3 | Row semantics: slot (A) hay contract instance (B)? | Model B — row trả tiền mới khi và chỉ khi Stripe subscription mới; row Free mới khi user rơi về free | **Đã chốt 2026-07-16** |
+| D4 | `BillingAccount` từ Phase 0? | Không — không có kế hoạch B2B/team billing | **Đã chốt 2026-07-16** |
+| D5 | Credit universal hay per product? | Per product — add-on là SKU riêng của từng product (1000 credit AI, 1000GB Storage...); `CreditGrant.productId` bắt buộc | **Đã chốt 2026-07-16** |
+| D6 | Phạm vi product hiện tại | Chỉ AI; Free plan chỉ cho AI; không build trước cho OCR/Storage (`entitlementType`, nhánh Quota... chỉ thêm khi cần) | **Đã chốt 2026-07-16** |
+| D7 | Add-on credits khi rớt về Free | Đóng băng — không tiêu được, không mất, không expire; mở lại khi có sub trả tiền live (`addonRequiresLiveSubscription = true` cho AI, §9) | **Đã chốt 2026-07-16** |
+| D8 | Hủy giữa kỳ | Hủy gia hạn: sống + tiêu credit đến hết kỳ rồi rớt Free. Hủy ngay: terminal ngay, credit expire ngay, rớt Free ngay — user vẫn được tự hủy ngay nhưng UI phải confirm hai bước cảnh báo mất credit + không refund (§14.2) | **Đã chốt 2026-07-16** |
+| D9 | Dunning PAST_DUE | Ân hạn 3 ngày, retry 3 lần (1 lần/ngày) — cấu hình phía Stripe, hành động cuối = Stripe cancel sub, local terminal qua webhook `deleted` (§14.2); **trong ân hạn đóng băng toàn bộ credit** (cả subscription lẫn add-on); trả tiền thành công → mở băng ngay | **Đã chốt 2026-07-16** |
+| D10 | Upgrade giữa kỳ | Tách 2 khái niệm: **tier change** không tồn tại (catalog chỉ FREE/PRO; Free → Pro là mua Stripe sub mới); **cycle change** (PRO monthly ↔ yearly) là flow được hỗ trợ — update price trên cùng Stripe sub với proration, không cấp lại credit giữa kỳ, credit cấp ở invoice kỳ sau; Invoice snapshot `pricingOptionId` giữ history đúng (§8) | **Đã chốt 2026-07-16** |
+| D11 | Refund | **Không refund** gói/add-on đã mua — khỏi cần flow clawback credit; nếu tương lai business cần thì thiết kế riêng khi đó | **Đã chốt 2026-07-16** |
+| D12 | Trial | **Bỏ hoàn toàn** — không trial cho plan nào; drop `trialStart`/`trialEnd` (Phase 4), bỏ sourceType `TRIAL`, không dùng Stripe trial (§11) | **Đã chốt 2026-07-16** |
 
