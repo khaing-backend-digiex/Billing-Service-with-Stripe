@@ -2,6 +2,7 @@ import Stripe from "stripe";
 import {
   AddonPackage,
   BillingCycle,
+  CreditGrantSourceType,
   CreditPolicy,
   PaymentProvider,
   Plan,
@@ -17,6 +18,13 @@ import { PrismaService } from "../../src/database/prisma.service";
 export const rand = () => Math.random().toString(36).slice(2, 10);
 
 type PlanWithPolicy = Plan & { creditPolicy: CreditPolicy };
+
+/** Một nhánh catalog độc lập: Product → Plan (+CreditPolicy) → PricingOption. */
+export interface CatalogTree {
+  product: Product;
+  plan: PlanWithPolicy;
+  pricingOption: PricingOption;
+}
 
 export class TestContext {
   readonly runId = `${Date.now().toString(36)}${rand()}`;
@@ -155,6 +163,13 @@ export class TestContext {
     });
   }
 
+  /**
+   * `productId` và `billingMode` truyền qua `overrides` như mọi cột khác.
+   *
+   * Lưu ý CHECK `Subscription_billing_mode_check`: `billingMode = 'NONE'` (row Free) hoặc
+   * `MANUAL` bắt buộc `providerSubscriptionId: null`, nếu không DB từ chối. Mặc định ở đây
+   * là PROVIDER + có providerSubscriptionId nên nhất quán sẵn.
+   */
   async createSubscription(
     userId: string,
     overrides: Partial<Prisma.SubscriptionUncheckedCreateInput> = {},
@@ -163,6 +178,7 @@ export class TestContext {
       data: {
         userId,
         pricingOptionId: this.basicOption.id,
+        productId: this.product.id,
         status: SubscriptionStatus.ACTIVE,
         currentPeriodStart: new Date(Date.now() - 86_400_000),
         currentPeriodEnd: new Date(Date.now() + 29 * 86_400_000),
@@ -175,6 +191,66 @@ export class TestContext {
     });
   }
 
+  /**
+   * Grant mặc định là ADDON: CHECK `CreditGrant_source_ref_check` bắt buộc
+   * `sourceType = 'SUBSCRIPTION'` phải có `sourceRef` (id của sub sinh ra nó).
+   *
+   * `amountRemaining` mặc định bằng `amountGranted` (grant chưa tiêu).
+   */
+  async createGrant(
+    userId: string,
+    overrides: Partial<Prisma.CreditGrantUncheckedCreateInput> = {},
+  ) {
+    const amountGranted = overrides.amountGranted ?? 100;
+    return this.prisma.creditGrant.create({
+      data: {
+        userId,
+        productId: this.product.id,
+        sourceType: CreditGrantSourceType.ADDON,
+        amountGranted,
+        amountRemaining: overrides.amountRemaining ?? amountGranted,
+        ...overrides,
+      },
+    });
+  }
+
+  /**
+   * Nhánh catalog thứ hai (product khác) để test đa product: consume theo chiều product,
+   * "1 sub live per user PER PRODUCT", credit của product này không tiêu được cho product kia.
+   *
+   * Tạo lười — chỉ suite nào cần mới gọi, không bắt mọi suite trả giá seed.
+   */
+  async createCatalogTree(label: string): Promise<CatalogTree> {
+    const suffix = `${label}_${this.runId}`;
+    const product = await this.prisma.product.create({
+      data: { code: `TEST_PRODUCT_${suffix}`, name: `Test Product ${suffix}` },
+    });
+    const plan = (await this.prisma.plan.create({
+      data: {
+        productId: product.id,
+        code: `TEST_${suffix}`,
+        name: `Test Plan ${suffix}`,
+        creditPolicy: {
+          create: { creditAmount: 100, resetInterval: ResetInterval.MONTHLY },
+        },
+      },
+      include: { creditPolicy: true },
+    })) as PlanWithPolicy;
+    const pricingOption = await this.prisma.pricingOption.create({
+      data: {
+        planId: plan.id,
+        productId: product.id,
+        billingCycleId: this.billingCycle.id,
+        name: `Test Option ${suffix}`,
+        price: 10,
+        currency: "usd",
+        provider: PaymentProvider.STRIPE,
+        providerPriceId: `price_test_${suffix}`,
+      },
+    });
+    return { product, plan, pricingOption };
+  }
+
   async cleanup(): Promise<void> {
     const { prisma, userIds } = this;
     try {
@@ -184,7 +260,9 @@ export class TestContext {
           select: { id: true },
         });
         const subIds = subs.map((s) => s.id);
+        // CreditTransaction.grantId → CreditGrant: con phải xoá trước cha.
         await prisma.creditTransaction.deleteMany({ where: { userId: { in: userIds } } });
+        await prisma.creditGrant.deleteMany({ where: { userId: { in: userIds } } });
         await prisma.subscriptionEvent.deleteMany({ where: { subscriptionId: { in: subIds } } });
         await prisma.payment.deleteMany({ where: { userId: { in: userIds } } });
         await prisma.invoice.deleteMany({ where: { subscriptionId: { in: subIds } } });
