@@ -9,7 +9,6 @@ import { CreditTransactionType, SubscriptionStatus, User } from '@prisma/client'
 describe('CreditsController (e2e)', () => {
   let app: INestApplication;
   let jwtService: JwtService;
-  let jwtService: JwtService;
   const ctx = new TestContext();
 
   /**
@@ -60,7 +59,6 @@ describe('CreditsController (e2e)', () => {
       });
 
       const token = jwtService.sign({ sub: user.id, email: user.email, roles: ['user'] });
-      const token = jwtService.sign({ sub: user.id, email: user.email, roles: ['user'] });
       const res = await request(app.getHttpServer())
         .post('/credits/consume')
         .set('Authorization', `Bearer ${token}`)
@@ -110,7 +108,6 @@ describe('CreditsController (e2e)', () => {
         data: { userId: user.id, addonCredits: 1 },
       });
 
-      const token = jwtService.sign({ sub: user.id, email: user.email, roles: ['user'] });
       const token = jwtService.sign({ sub: user.id, email: user.email, roles: ['user'] });
       const res = await request(app.getHttpServer())
         .post('/credits/consume')

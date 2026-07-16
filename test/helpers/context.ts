@@ -2,10 +2,14 @@ import Stripe from "stripe";
 import {
   AddonPackage,
   BillingCycle,
+  CreditGrantSourceType,
+  CreditPolicy,
   PaymentProvider,
   Plan,
   PricingOption,
   Prisma,
+  Product,
+  ResetInterval,
   SubscriptionStatus,
   User,
 } from "@prisma/client";
@@ -13,14 +17,24 @@ import { PrismaService } from "../../src/database/prisma.service";
 
 export const rand = () => Math.random().toString(36).slice(2, 10);
 
+type PlanWithPolicy = Plan & { creditPolicy: CreditPolicy };
+
+/** Một nhánh catalog độc lập: Product → Plan (+CreditPolicy) → PricingOption. */
+export interface CatalogTree {
+  product: Product;
+  plan: PlanWithPolicy;
+  pricingOption: PricingOption;
+}
 
 export class TestContext {
   readonly runId = `${Date.now().toString(36)}${rand()}`;
   readonly prisma = new PrismaService();
 
-  plan!: Plan;
-  freePlan!: Plan;
+  product!: Product;
+  plan!: PlanWithPolicy;
+  freePlan!: PlanWithPolicy;
   billingCycle!: BillingCycle;
+  yearlyCycle!: BillingCycle;
   basicOption!: PricingOption;
   proOption!: PricingOption;
   freeOption!: PricingOption;
@@ -29,20 +43,33 @@ export class TestContext {
   private readonly userIds: string[] = [];
 
   async seed(): Promise<void> {
-    this.plan = await this.prisma.plan.create({
+    this.product = await this.prisma.product.create({
       data: {
-        code: `TEST_${this.runId}`,
-        name: `Test Plan ${this.runId}`,
-        renewalCredits: 100,
-        resetIntervalDay: 30,
+        code: `TEST_PRODUCT_${this.runId}`,
+        name: `Test Product ${this.runId}`,
       },
     });
+    this.plan = await this.prisma.plan.create({
+      data: {
+        productId: this.product.id,
+        code: `TEST_${this.runId}`,
+        name: `Test Plan ${this.runId}`,
+        creditPolicy: {
+          create: { creditAmount: 100, resetInterval: ResetInterval.MONTHLY },
+        },
+      },
+      include: { creditPolicy: true },
+    }) as PlanWithPolicy;
     this.billingCycle = await this.prisma.billingCycle.create({
       data: { name: `test-monthly-${this.runId}`, durationDay: 30 },
+    });
+    this.yearlyCycle = await this.prisma.billingCycle.create({
+      data: { name: `test-yearly-${this.runId}`, durationDay: 365 },
     });
     this.basicOption = await this.prisma.pricingOption.create({
       data: {
         planId: this.plan.id,
+        productId: this.product.id,
         billingCycleId: this.billingCycle.id,
         name: `Test Basic ${this.runId}`,
         price: 10,
@@ -51,10 +78,13 @@ export class TestContext {
         providerPriceId: `price_test_basic_${this.runId}`,
       },
     });
+    // Chu kỳ khác basicOption: `@@unique([planId, billingCycleId, currency, provider])`
+    // từ chối hai SKU trùng nghĩa trên cùng một plan.
     this.proOption = await this.prisma.pricingOption.create({
       data: {
         planId: this.plan.id,
-        billingCycleId: this.billingCycle.id,
+        productId: this.product.id,
+        billingCycleId: this.yearlyCycle.id,
         name: `Test Pro ${this.runId}`,
         price: 20,
         currency: "usd",
@@ -66,15 +96,20 @@ export class TestContext {
     // StripeService.getFreePriceId() được mock trong test.
     this.freePlan = await this.prisma.plan.create({
       data: {
+        productId: this.product.id,
         code: `TEST_FREE_${this.runId}`,
         name: `Test Free Plan ${this.runId}`,
-        renewalCredits: 50,
-        resetIntervalDay: 30,
+        isFree: true,
+        creditPolicy: {
+          create: { creditAmount: 50, resetInterval: ResetInterval.MONTHLY },
+        },
       },
-    });
+      include: { creditPolicy: true },
+    }) as PlanWithPolicy;
     this.freeOption = await this.prisma.pricingOption.create({
       data: {
         planId: this.freePlan.id,
+        productId: this.product.id,
         billingCycleId: this.billingCycle.id,
         name: `Test Free ${this.runId}`,
         price: 0,
@@ -128,6 +163,13 @@ export class TestContext {
     });
   }
 
+  /**
+   * `productId` và `billingMode` truyền qua `overrides` như mọi cột khác.
+   *
+   * Lưu ý CHECK `Subscription_billing_mode_check`: `billingMode = 'NONE'` (row Free) hoặc
+   * `MANUAL` bắt buộc `providerSubscriptionId: null`, nếu không DB từ chối. Mặc định ở đây
+   * là PROVIDER + có providerSubscriptionId nên nhất quán sẵn.
+   */
   async createSubscription(
     userId: string,
     overrides: Partial<Prisma.SubscriptionUncheckedCreateInput> = {},
@@ -136,6 +178,7 @@ export class TestContext {
       data: {
         userId,
         pricingOptionId: this.basicOption.id,
+        productId: this.product.id,
         status: SubscriptionStatus.ACTIVE,
         currentPeriodStart: new Date(Date.now() - 86_400_000),
         currentPeriodEnd: new Date(Date.now() + 29 * 86_400_000),
@@ -148,6 +191,66 @@ export class TestContext {
     });
   }
 
+  /**
+   * Grant mặc định là ADDON: CHECK `CreditGrant_source_ref_check` bắt buộc
+   * `sourceType = 'SUBSCRIPTION'` phải có `sourceRef` (id của sub sinh ra nó).
+   *
+   * `amountRemaining` mặc định bằng `amountGranted` (grant chưa tiêu).
+   */
+  async createGrant(
+    userId: string,
+    overrides: Partial<Prisma.CreditGrantUncheckedCreateInput> = {},
+  ) {
+    const amountGranted = overrides.amountGranted ?? 100;
+    return this.prisma.creditGrant.create({
+      data: {
+        userId,
+        productId: this.product.id,
+        sourceType: CreditGrantSourceType.ADDON,
+        amountGranted,
+        amountRemaining: overrides.amountRemaining ?? amountGranted,
+        ...overrides,
+      },
+    });
+  }
+
+  /**
+   * Nhánh catalog thứ hai (product khác) để test đa product: consume theo chiều product,
+   * "1 sub live per user PER PRODUCT", credit của product này không tiêu được cho product kia.
+   *
+   * Tạo lười — chỉ suite nào cần mới gọi, không bắt mọi suite trả giá seed.
+   */
+  async createCatalogTree(label: string): Promise<CatalogTree> {
+    const suffix = `${label}_${this.runId}`;
+    const product = await this.prisma.product.create({
+      data: { code: `TEST_PRODUCT_${suffix}`, name: `Test Product ${suffix}` },
+    });
+    const plan = (await this.prisma.plan.create({
+      data: {
+        productId: product.id,
+        code: `TEST_${suffix}`,
+        name: `Test Plan ${suffix}`,
+        creditPolicy: {
+          create: { creditAmount: 100, resetInterval: ResetInterval.MONTHLY },
+        },
+      },
+      include: { creditPolicy: true },
+    })) as PlanWithPolicy;
+    const pricingOption = await this.prisma.pricingOption.create({
+      data: {
+        planId: plan.id,
+        productId: product.id,
+        billingCycleId: this.billingCycle.id,
+        name: `Test Option ${suffix}`,
+        price: 10,
+        currency: "usd",
+        provider: PaymentProvider.STRIPE,
+        providerPriceId: `price_test_${suffix}`,
+      },
+    });
+    return { product, plan, pricingOption };
+  }
+
   async cleanup(): Promise<void> {
     const { prisma, userIds } = this;
     try {
@@ -157,7 +260,9 @@ export class TestContext {
           select: { id: true },
         });
         const subIds = subs.map((s) => s.id);
+        // CreditTransaction.grantId → CreditGrant: con phải xoá trước cha.
         await prisma.creditTransaction.deleteMany({ where: { userId: { in: userIds } } });
+        await prisma.creditGrant.deleteMany({ where: { userId: { in: userIds } } });
         await prisma.subscriptionEvent.deleteMany({ where: { subscriptionId: { in: subIds } } });
         await prisma.payment.deleteMany({ where: { userId: { in: userIds } } });
         await prisma.invoice.deleteMany({ where: { subscriptionId: { in: subIds } } });
@@ -171,7 +276,11 @@ export class TestContext {
         where: { providerPriceId: { contains: this.runId } },
       });
       await prisma.billingCycle.deleteMany({ where: { name: { contains: this.runId } } });
+      await prisma.creditPolicy.deleteMany({
+        where: { plan: { code: { contains: this.runId } } },
+      });
       await prisma.plan.deleteMany({ where: { code: { contains: this.runId } } });
+      await prisma.product.deleteMany({ where: { code: { contains: this.runId } } });
       await prisma.addonPackage.deleteMany({ where: { code: { contains: this.runId } } });
     } finally {
       await prisma.$disconnect();
