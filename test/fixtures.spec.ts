@@ -5,8 +5,9 @@ import { TestContext } from "./helpers/context";
  * Test cho chính test fixture (C1). Mục đích: A và B xây test lên `TestContext` mà không
  * phải mở `context.ts` — nên hợp đồng của nó phải được kiểm chứng ở một chỗ.
  *
- * Kiểm luôn cả các constraint ở prisma/constraints.sql thực sự chặn qua đường Prisma,
- * không chỉ qua raw SQL.
+ * Kiểm luôn cả các CHECK/partial index khai báo trong migration
+ * `20260716020000_multi_subscription_expand` thực sự chặn qua đường Prisma, không chỉ
+ * qua raw SQL.
  */
 describe("TestContext fixtures (real DB)", () => {
   const ctx = new TestContext();
@@ -146,13 +147,7 @@ describe("TestContext fixtures (real DB)", () => {
   // unique index `(userId, productId) WHERE status IN ('ACTIVE','PAST_DUE')` phải cho phép.
   it.skip("allows one live subscription per product for the same user", async () => {
     const user = await ctx.createUser();
-    const tree = await ctx.createCatalogTree("second");
-
-    await ctx.createSubscription(user.id);
-    await ctx.createSubscription(user.id, {
-      productId: tree.product.id,
-      pricingOptionId: tree.pricingOption.id,
-    });
+    await ctx.createTwoProductSubs(user.id);
 
     const subs = await ctx.prisma.subscription.findMany({ where: { userId: user.id } });
     expect(subs).toHaveLength(2);

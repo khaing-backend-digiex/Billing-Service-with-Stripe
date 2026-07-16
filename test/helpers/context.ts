@@ -251,6 +251,26 @@ export class TestContext {
     return { product, plan, pricingOption };
   }
 
+  /**
+   * Hai sub live cho cùng một user, trên hai product khác nhau — hình dạng mà
+   * multi-subscription tồn tại để phục vụ.
+   *
+   * TODO(PR3 – Dev B): hiện NÉM. `Subscription.userId @unique` chặn sub thứ hai ở tầng DB
+   * bất kể khác product. Sau khi B drop `@unique` (và `User.subscription` thành
+   * `subscriptions[]`), helper này chạy được và partial unique index
+   * `(userId, productId) WHERE status IN ('ACTIVE','PAST_DUE')` mới là thứ chặn — đúng
+   * một sub live PER PRODUCT, không phải per user.
+   */
+  async createTwoProductSubs(userId: string, label = "second") {
+    const tree = await this.createCatalogTree(label);
+    const first = await this.createSubscription(userId);
+    const second = await this.createSubscription(userId, {
+      productId: tree.product.id,
+      pricingOptionId: tree.pricingOption.id,
+    });
+    return { tree, first, second };
+  }
+
   async cleanup(): Promise<void> {
     const { prisma, userIds } = this;
     try {
