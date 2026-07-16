@@ -14,7 +14,7 @@ import { PrismaService } from "../../../database/prisma.service";
 import { InvoiceService } from "../../invoice.service";
 import { StripeService } from "../../stripe.service";
 import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
-import { PLAN_CODES } from "@/common/constants/plan.constants";
+import { CreditService } from "../../../credits/credit.service";
 
 
 const MAX_RETRY_ATTEMPTS = 3;
@@ -27,6 +27,7 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly stripeService: StripeService,
+    private readonly creditService: CreditService,
   ) { }
   private readonly invoicePaymentFailed = "invoice.payment_failed";
   canHandle(eventType: string): boolean {
@@ -149,23 +150,23 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
       `(retries: ${retriesUsed}/${MAX_RETRY_ATTEMPTS}, window exceeded: ${windowExceeded}) – downgrading to free`,
     );
 
-    const freePlan = await this.prisma.plan.findUnique({
-      where: { code: PLAN_CODES.FREE
-       },
-      include: { pricingOptions: true },
-    });
-    const freePricingOption = freePlan?.pricingOptions?.[0];
+    await this.prisma.$transaction(async (tx) => {
+      await this.creditService.revokeSubscriptionCredits(
+        {
+          userId: subscription.userId,
+          description: "Credits forfeited – payment retries exhausted",
+          referenceId: subscription.id,
+          idempotencyKey: `cancel_sub_${stripeSubscriptionId}`,
+        },
+        tx,
+      );
 
-    if (!freePricingOption?.providerPriceId) {
-      await this.stripeService.cancelSubscriptionNow(stripeSubscriptionId);
-      return;
-    }
+      await tx.invoice.update({
+        where: { id: invoice.id },
+        data: { status: InvoiceStatus.UNCOLLECTIBLE, nextRetryAt: null },
+      });
+    });
 
     await this.stripeService.cancelSubscriptionNow(stripeSubscriptionId);
-
-    await this.prisma.invoice.update({
-      where: { id: invoice.id },
-      data: { status: InvoiceStatus.UNCOLLECTIBLE, nextRetryAt: null },
-    });
   }
 }
