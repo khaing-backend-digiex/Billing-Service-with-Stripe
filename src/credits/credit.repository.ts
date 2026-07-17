@@ -30,7 +30,6 @@ export interface LockedBalances {
 
 @Injectable()
 export class CreditRepository {
-  private readonly logger = new Logger(CreditRepository.name);
   constructor(private readonly prisma: PrismaService) {}
 
   async applyDelta(
@@ -83,8 +82,9 @@ export class CreditRepository {
       FROM "Subscription" s
       JOIN "PricingOption" po ON po."id" = s."pricingOptionId"
       JOIN "Plan" p ON p."id" = po."planId"
-      WHERE s."userId" = ${userId} and s.status = ${SubscriptionStatus.ACTIVE}
+      WHERE s."userId" = ${userId} and s.status = ${SubscriptionStatus.ACTIVE} and po."productId" = ${productId}
       FOR UPDATE OF s
+      LIMIT 1
     `;
     const sub = subRows[0] ?? null;
 
@@ -101,7 +101,6 @@ export class CreditRepository {
       ORDER BY "priority" ASC, "expiresAt" ASC NULLS LAST, "id" ASC
       FOR UPDATE
     `;
-    this.logger.debug(`sub status=${sub?.status}, isFree=${sub?.isFree}`);
     return {
       grants: grantRows || [],
       addonIsActive: isAddonUsable(sub?.isFree, sub?.status),

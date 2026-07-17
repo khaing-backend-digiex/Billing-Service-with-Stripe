@@ -23,4 +23,8 @@ export class CreateAddonPackageDto {
   @ApiProperty({ description: 'Currency code', example: 'USD' })
   @IsString()
   currency!: string;
+
+  @ApiProperty({ description: 'The ID of the product this addon belongs to' })
+  @IsString()
+  productId!: string;
 }
