@@ -54,6 +54,11 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
       return;
     }
 
+    if (!addon.productId) {
+      this.logger.error(`Addon ${addon.id} has no productId. Cannot grant credits.`);
+      return;
+    }
+
     await this.prisma.$transaction(async (tx) => {
       const payment = await this.paymentService.recordSucceeded(
         {
@@ -66,15 +71,10 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
         tx,
       );
 
-      if (!addon.productId) {
-        this.logger.error(`Addon ${addon.id} has no productId. Cannot grant credits.`);
-        return;
-      }
-
       await this.creditService.grantAddonCredits(
         {
           userId,
-          productId: addon.productId,
+          productId: addon.productId!,
           amount: addon.credits,
           description: `Purchased Addon: ${addon.name}`,
           paymentId: payment.id,

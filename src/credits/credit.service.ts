@@ -71,11 +71,11 @@ export class CreditService {
           remainingAddon: remainingAddon,
         };
       }
-
+      this.logger.debug(`Locked balances for user ${cmd.userId}, product ${cmd.productId}: ${JSON.stringify(balances)}`);
       // 2. Prepare allocation sources
       const sources: AllocationSource[] = [];
       for (const grant of balances.grants) {
-        if (grant.sourceType === 'ADDON' && !balances.addonIsActive) {
+        if (grant.sourceType === CreditGrantSourceType.ADDON && !balances.addonIsActive) {
            continue; // Addon credits are frozen
         }
         sources.push({
@@ -84,7 +84,6 @@ export class CreditService {
           available: grant.amountRemaining,
         });
       }
-
       // 3. Allocate credits
       const allocation = allocateCredits(sources, cmd.amount);
       if (allocation.shortfall > 0) {
@@ -152,8 +151,6 @@ export class CreditService {
           userId: cmd.userId,
           productId: cmd.productId,
           sourceType: cmd.sourceType,
-          // Entity, không phải hoá đơn: reconcile hỏi "sub này đã được cấp cho kỳ này chưa",
-          // nên grant phải neo vào chính sub đó mới trả lời được.
           sourceRef: cmd.subscriptionId,
           amountGranted: cmd.amount,
           amountRemaining: cmd.amount,
@@ -344,8 +341,6 @@ export class CreditService {
          nextBillingDate: sub.currentPeriodEnd,
          subscriptionCredits: credits.sub,
          addonCredits: credits.addon,
-         // Cột isFree, không phải chuỗi code: getFreePriceId() quyết định free tier bằng
-         // cột, nên gate freeze phải hỏi cùng một nguồn sự thật.
          addonIsActive: isAddonUsable(sub.pricingOption.plan.isFree, sub.status),
        });
 

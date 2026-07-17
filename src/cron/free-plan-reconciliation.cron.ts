@@ -35,7 +35,7 @@ export class FreePlanReconciliationCron {
     private readonly prisma: PrismaService,
   ) { }
 
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Cron(CronExpression.EVERY_HOUR)
   async reconcile(): Promise<void> {
     await this.reconcileOnboarding();
     await this.reconcileMissingSettlement();
