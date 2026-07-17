@@ -14,8 +14,9 @@ import {
   UserPackageStatus,
   creditKey,
   KEY_SEPARATOR,
+  isAddonUsable,
 } from './credit.types';
-import { CreditTransactionType, ReferenceType, CreditGrantSourceType } from '@prisma/client';
+import { CreditTransactionType, ReferenceType, CreditGrantSourceType, SubscriptionStatus } from '@prisma/client';
 import { InsufficientCreditsException } from './exceptions';
 
 type TxClient = Parameters<Parameters<PrismaService['$transaction']>[0]>[0];
@@ -284,12 +285,12 @@ export class CreditService {
   }
 
   async getUserPackageStatus(userId: string): Promise<UserPackageStatus[]> {
-    // In Step 2, we return an array since the design is for multi-product.
-    // However, since we haven't fully refactored Subscription to multi-product yet (Step 3),
-    // we query grants grouped by productId and join with the single subscription for now.
-    
-    const subscription = await this.prisma.subscription.findUnique({
-      where: { userId },
+    // In preparation for Step 3, we fetch all active subscriptions for the user
+    const subscriptions = await this.prisma.subscription.findMany({
+      where: { 
+        userId,
+        status: SubscriptionStatus.ACTIVE 
+      },
       include: {
         pricingOption: {
           include: {
@@ -301,7 +302,14 @@ export class CreditService {
 
     const grants = await this.prisma.creditGrant.groupBy({
       by: ['productId', 'sourceType'],
-      where: { userId },
+      where: { 
+        userId,
+        amountRemaining: { gt: 0 },
+        OR: [
+          { expiresAt: null },
+          { expiresAt: { gt: new Date() } }
+        ]
+      },
       _sum: { amountRemaining: true },
     });
 
@@ -317,21 +325,36 @@ export class CreditService {
       else data.addon += sum;
     }
     
-    // We only have 1 subscription in this step. So we'll return an array of 1 for the subscription's product
-    // plus any other products they have grants for.
     const statuses: UserPackageStatus[] = [];
     
-    for (const [productId, credits] of productCredits.entries()) {
-       // Is this product the one in the single subscription?
-       // Currently, the single subscription has no productId. We'll just assume it applies to AI.
-       // We'll return the sub status if it matches, else default.
+    for (const sub of subscriptions) {
+       const productId = (sub as any).productId ?? sub.pricingOption.plan.productId;
+       const credits = productCredits.get(productId) ?? { sub: 0, addon: 0 };
+
        statuses.push({
-         plan: subscription?.pricingOption?.plan?.name ?? 'Free',
-         pricingOption: subscription?.pricingOption?.name ?? 'N/A',
-         nextBillingDate: subscription?.currentPeriodEnd ?? null,
+         productId,
+         plan: sub.pricingOption.plan.name,
+         pricingOption: sub.pricingOption.name,
+         nextBillingDate: sub.currentPeriodEnd,
          subscriptionCredits: credits.sub,
          addonCredits: credits.addon,
-         addonIsActive: true, // simplified for now
+         addonIsActive: isAddonUsable(sub.pricingOption.plan.code, sub.status),
+       });
+       
+       // Remove from map to track which products have explicit subscriptions
+       productCredits.delete(productId);
+    }
+    
+    // For any products that have credits but NO subscription row (rare/legacy)
+    for (const [productId, credits] of productCredits.entries()) {
+       statuses.push({
+         productId,
+         plan: 'Free',
+         pricingOption: 'Free',
+         nextBillingDate: null,
+         subscriptionCredits: credits.sub,
+         addonCredits: credits.addon,
+         addonIsActive: false,
        });
     }
 

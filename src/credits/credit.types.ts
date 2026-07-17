@@ -94,6 +94,7 @@ export interface AllocationResult {
 }
 
 export interface UserPackageStatus {
+  productId: string;
   plan: string;
   pricingOption: string;
   nextBillingDate: Date | null;
