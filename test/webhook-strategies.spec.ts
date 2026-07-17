@@ -1,4 +1,5 @@
 import {
+  BillingMode,
   CreditGrantSourceType,
   CreditTransactionType,
   InvoiceStatus,
@@ -184,10 +185,12 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       );
     });
 
-    // Nâng cấp Free → PRO: Stripe tạo sub MỚI. Nếu invoice.paid không dời con trỏ,
-    // hàng local vẫn trỏ vào sub Free cũ → bấm "Huỷ gói" sẽ huỷ nhầm sub Free,
-    // còn sub PRO tiếp tục thu tiền.
-    it("repoints providerSubscriptionId to the new Stripe subscription on upgrade", async () => {
+    // Nâng cấp Free → PRO: Stripe tạo sub MỚI, nên Model B tạo ROW mới và cho row Free về
+    // terminal (§8) — thay cho "repoint" của slot model mà bản cũ của test này kỳ vọng.
+    // Mối lo gốc vẫn được giữ nguyên và vẫn là điều được assert: sau khi lên gói, row LIVE
+    // của product phải trỏ vào sub PRO. Trỏ nhầm thì bấm "Huỷ gói" sẽ huỷ sub Free trong khi
+    // sub PRO tiếp tục thu tiền. Model B đáp ứng bằng row mới, không bằng việc ghi đè.
+    it("puts the paid subscription on a NEW row and expires the free one on upgrade", async () => {
       const user = await ctx.createUser();
       const oldFreeSubId = `sub_free_${rand()}`;
       const sub = await ctx.createSubscription(user.id, {
@@ -207,11 +210,23 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
         ),
       );
 
-      const after = await ctx.prisma.subscription.findUniqueOrThrow({
+      // Row Free cũ: terminal, con trỏ Stripe giữ nguyên (bất biến — nó là lịch sử).
+      const oldRow = await ctx.prisma.subscription.findUniqueOrThrow({
         where: { id: sub.id },
       });
-      expect(after.providerSubscriptionId).toBe(newPaidSubId);
-      expect(after.pricingOptionId).toBe(ctx.basicOption.id);
+      expect(oldRow.status).toBe(SubscriptionStatus.EXPIRED);
+      expect(oldRow.providerSubscriptionId).toBe(oldFreeSubId);
+      expect(oldRow.pricingOptionId).toBe(ctx.freeOption.id);
+
+      // Đúng 1 row live cho product, và nó trỏ vào sub PRO — đây là điều test gốc bảo vệ.
+      const live = await ctx.prisma.subscription.findMany({
+        where: { userId: user.id, productId: ctx.product.id, status: SubscriptionStatus.ACTIVE },
+      });
+      expect(live).toHaveLength(1);
+      expect(live[0].id).not.toBe(sub.id);
+      expect(live[0].providerSubscriptionId).toBe(newPaidSubId);
+      expect(live[0].pricingOptionId).toBe(ctx.basicOption.id);
+
       expect(await ctx.subscriptionCredits(user.id)).toBe(
         ctx.plan.creditPolicy.creditAmount,
       );
@@ -476,6 +491,59 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       expect(events).toHaveLength(1);
       expect(freePlanDowngradeMock.downgradeToFree).toHaveBeenCalledTimes(2);
     });
+
+    // D2 (sửa 2026-07-17): Free có Stripe sub thật, nên lên Pro = hủy sub Free → Stripe phát
+    // `deleted` cho chính sub Free đó. Row Free lúc này đã EXPIRED. Xử lý tiếp là hỏng nặng:
+    // revokeSubscriptionCredits quét theo (userId, productId) nên sẽ xóa credit của row Pro
+    // vừa cấp — user mất đúng số credit vừa trả tiền mua.
+    it("ignores the deleted event of a superseded (EXPIRED) subscription", async () => {
+      const user = await ctx.createUser();
+      const dead = await ctx.createSubscription(user.id, {
+        status: SubscriptionStatus.EXPIRED,
+      });
+      const live = await ctx.createSubscription(user.id, {
+        pricingOptionId: ctx.proOption.id,
+      });
+      // credit thuộc về gói đang sống — không được đụng tới
+      await ctx.createSubGrant(user.id, live.id, 100);
+
+      const payload = subscriptionPayload(user.providerCustomerId!, ctx.basicOption.providerPriceId!, {
+        id: dead.providerSubscriptionId,
+        status: "canceled",
+      });
+
+      await strategy().handle(stripeEvent("customer.subscription.deleted", payload));
+
+      expect(await ctx.subscriptionCredits(user.id)).toBe(100);
+      const after = await ctx.prisma.subscription.findUniqueOrThrow({ where: { id: live.id } });
+      expect(after.status).toBe(SubscriptionStatus.ACTIVE);
+      expect(freePlanDowngradeMock.downgradeToFree).not.toHaveBeenCalled();
+    });
+
+    // Cặp với test replay ở trên: replay VẪN thử downgrade lại — trừ khi user đã có gói live
+    // khác cho cùng product, lúc đó họ không hề rớt về free. Dựng Free lúc này đá vào partial
+    // unique index §13.1, và vì Free giờ có Stripe sub thật (D2) thì còn đẻ vòng lặp
+    // Free → cancel → Free.
+    //
+    // Row bị hủy phải để CANCELLED sẵn: index chỉ cho đúng 1 row live/(user, product), nên
+    // "row live đang bị hủy + row live khác" là trạng thái BẤT KHẢ — chỉ đường replay
+    // (row đã terminal) mới chạm được guard này.
+    it("skips the free downgrade on replay when another live subscription exists", async () => {
+      const user = await ctx.createUser();
+      const cancelled = await ctx.createSubscription(user.id, {
+        status: SubscriptionStatus.CANCELLED,
+      });
+      await ctx.createSubscription(user.id, { pricingOptionId: ctx.proOption.id });
+
+      const payload = subscriptionPayload(user.providerCustomerId!, ctx.basicOption.providerPriceId!, {
+        id: cancelled.providerSubscriptionId,
+        status: "canceled",
+      });
+
+      await strategy().handle(stripeEvent("customer.subscription.deleted", payload));
+
+      expect(freePlanDowngradeMock.downgradeToFree).not.toHaveBeenCalled();
+    });
   });
 
   // ───────────── downgrade → invoice.paid: ai là chủ sở hữu việc cấp credit ─────────────
@@ -496,6 +564,80 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
         ),
         stripeServiceMock as any,
       );
+
+    const freeStripeMock = (customerId: string, freeSubId: string) => {
+      const now = Math.floor(Date.now() / 1000);
+      return {
+        ...stripeServiceMock,
+        getFreePriceId: jest.fn().mockResolvedValue(ctx.freeOption.providerPriceId),
+        ensureFreeSubscription: jest.fn().mockResolvedValue({
+          id: freeSubId,
+          customerId,
+          status: SubscriptionStatus.ACTIVE,
+          items: [
+            {
+              priceId: ctx.freeOption.providerPriceId,
+              currentPeriodStart: now,
+              currentPeriodEnd: now + 30 * 86_400,
+            },
+          ],
+          currentPeriodStart: now,
+          currentPeriodEnd: now + 30 * 86_400,
+          cancelAtPeriodEnd: false,
+          created: now,
+        }),
+      };
+    };
+
+    // D3/Model B (§8): rớt free phải tạo ROW MỚI. Bản cũ ghi đè chính row Pro
+    // (pricingOption + providerSubscriptionId) — "repoint" mà Model B xóa bỏ: hợp đồng Pro
+    // biến mất khỏi lịch sử, và Invoice/Payment của kỳ Pro treo vào một row giờ mang nhãn Free.
+    it("creates a NEW free row and leaves the cancelled row untouched", async () => {
+      const user = await ctx.createUser();
+      const sub = await ctx.createSubscription(user.id);
+      const freeSubId = `sub_free_${rand()}`;
+
+      const deleted = new CustomerSubscriptionDeletedStrategy(
+        ctx.prisma,
+        new FreePlanDowngradeService(
+          ctx.prisma,
+          freeStripeMock(user.providerCustomerId!, freeSubId) as any,
+        ),
+        creditService,
+      );
+      const event = stripeEvent(
+        "customer.subscription.deleted",
+        subscriptionPayload(user.providerCustomerId!, ctx.basicOption.providerPriceId!, {
+          id: sub.providerSubscriptionId,
+          status: "canceled",
+        }),
+      );
+
+      await deleted.handle(event);
+
+      // Row cũ: terminal, KHÔNG bị repoint — nó là lịch sử hợp đồng Pro.
+      const old = await ctx.prisma.subscription.findUniqueOrThrow({ where: { id: sub.id } });
+      expect(old.status).toBe(SubscriptionStatus.CANCELLED);
+      expect(old.providerSubscriptionId).toBe(sub.providerSubscriptionId);
+      expect(old.pricingOptionId).toBe(ctx.basicOption.id);
+
+      // Row Free: mới tinh, map vào Stripe sub free vừa tạo.
+      const free = await ctx.prisma.subscription.findFirstOrThrow({
+        where: { userId: user.id, providerSubscriptionId: freeSubId },
+      });
+      expect(free.id).not.toBe(sub.id);
+      expect(free.status).toBe(SubscriptionStatus.ACTIVE);
+      expect(free.pricingOptionId).toBe(ctx.freeOption.id);
+      expect(free.billingMode).toBe(BillingMode.PROVIDER);
+
+      // Replay không được đẻ row Free thứ hai (partial unique index §13.1 + guard §8).
+      await deleted.handle(event);
+      expect(
+        await ctx.prisma.subscription.count({
+          where: { userId: user.id, pricingOptionId: ctx.freeOption.id },
+        }),
+      ).toBe(1);
+    });
 
     // TODO(Bước 3): test kỳ vọng KHÔNG có event CREATED khi rớt về free. Trong Model B,
     // `invoice.paid` với billing_reason=subscription_create CHÍNH LÀ sự kiện tạo row nên
