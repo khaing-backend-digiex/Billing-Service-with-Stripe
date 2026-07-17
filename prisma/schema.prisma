@@ -22,7 +22,7 @@ model User {
   creditTransactions CreditTransaction[]
   payments           Payment[]
   paymentMethods     PaymentMethod[]
-  subscription       Subscription?
+  subscriptions      Subscription[]
   creditWallets      CreditWallet[]
 }
 
@@ -39,6 +39,7 @@ model Product {
   addonRequiresLiveSubscription Boolean       @default(true)
   creditGrants                  CreditGrant[]
   plans                         Plan[]
+  addonPackages                 AddonPackage[]
 }
 
 model Plan {
@@ -139,7 +140,7 @@ model Subscription {
 
   /// @unique giữ tới PR3: bỏ bây giờ làm vỡ 27 chỗ trong src/credits (call-site mà PR2
   /// sẽ tự xoá) và ép User.subscription thành 1-n. Dev B drop ở PR3 khi đã sạch.
-  userId String @unique
+  userId String
 
   providerSubscriptionId String?
   invoices               Invoice[]
@@ -195,9 +196,11 @@ model AddonPackage {
   currency        String
   provider        PaymentProvider?
   providerPriceId String?
+  productId       String?
   isActive        Boolean          @default(true)
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
+  product         Product?         @relation(fields: [productId], references: [id])
   payments        Payment[]
 }
 

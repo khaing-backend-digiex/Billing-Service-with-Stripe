@@ -66,12 +66,15 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
         tx,
       );
 
-      const defaultProduct = await this.prisma.product.findFirst({ where: { code: 'AI' } });
+      if (!addon.productId) {
+        this.logger.error(`Addon ${addon.id} has no productId. Cannot grant credits.`);
+        return;
+      }
 
       await this.creditService.grantAddonCredits(
         {
           userId,
-          productId: defaultProduct?.id ?? addon.id,
+          productId: addon.productId,
           amount: addon.credits,
           description: `Purchased Addon: ${addon.name}`,
           referenceId: payment.id,

@@ -74,20 +74,46 @@ export class InvoicePaidStrategy implements WebhookStrategy {
     const periodStart = new Date(paidInvoice.periodStart * 1000);
     const periodEnd = new Date(paidInvoice.periodEnd * 1000);
 
-    const subscription = await this.prisma.subscription.upsert({
-      where: { userId: user.id },
-      create: {
-        userId: user.id,
-        status: SubscriptionStatus.ACTIVE,
-        pricingOptionId: pricingOption.id,
-        currentPeriodStart: periodStart,
-        currentPeriodEnd: periodEnd,
-        nextCreditResetAt: periodEnd,
-        provider: PaymentProvider.STRIPE,
-        providerSubscriptionId: stripeSubscriptionId,
-      },
-      update: {},
+    let subscription = await this.prisma.subscription.findFirst({
+      where: { providerSubscriptionId: stripeSubscriptionId }
     });
+
+    if (subscription) {
+      subscription = await this.prisma.subscription.update({
+        where: { id: subscription.id },
+        data: {
+          status: SubscriptionStatus.ACTIVE,
+          pricingOptionId: pricingOption.id,
+          currentPeriodStart: periodStart,
+          currentPeriodEnd: periodEnd,
+          nextCreditResetAt: periodEnd,
+        }
+      });
+    } else {
+      // Expire any existing live subscription for this product
+      await this.prisma.subscription.updateMany({
+        where: {
+          userId: user.id,
+          productId: pricingOption.plan.productId,
+          status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE, SubscriptionStatus.TRIALING] }
+        },
+        data: { status: SubscriptionStatus.EXPIRED }
+      });
+
+      subscription = await this.prisma.subscription.create({
+        data: {
+          userId: user.id,
+          productId: pricingOption.plan.productId,
+          status: SubscriptionStatus.ACTIVE,
+          pricingOptionId: pricingOption.id,
+          currentPeriodStart: periodStart,
+          currentPeriodEnd: periodEnd,
+          nextCreditResetAt: periodEnd,
+          provider: PaymentProvider.STRIPE,
+          providerSubscriptionId: stripeSubscriptionId,
+        }
+      });
+    }
 
     await this.paidInvoiceSync.applyPaidInvoice(paidInvoice, subscription.id);
   }

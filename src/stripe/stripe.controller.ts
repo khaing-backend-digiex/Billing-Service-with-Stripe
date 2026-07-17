@@ -79,8 +79,11 @@ export class StripeController {
     @Body() dto: PurchaseSubscriptionDto,
   ) {
     const user = await this.usersService.findById(userId);
-    const currentSubscription = await this.prisma.subscription.findUnique({
-      where: { userId },
+    const currentSubscription = await this.prisma.subscription.findFirst({
+      where: { 
+        userId,
+        status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE, SubscriptionStatus.TRIALING] }
+      },
       include: { pricingOption: true },
     });
 
@@ -141,8 +144,11 @@ export class StripeController {
   ) {
     const user = await this.usersService.findById(userId);
 
-    const currentSubscription = await this.prisma.subscription.findUnique({
-      where: { userId },
+    const currentSubscription = await this.prisma.subscription.findFirst({
+      where: { 
+        userId,
+        status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE, SubscriptionStatus.TRIALING] }
+      },
       include: { pricingOption: { include: { plan: true } } },
     });
 
