@@ -165,10 +165,6 @@ export class PaidInvoiceSyncService {
       const isUpdate = paidInvoice.billingReason === "subscription_update";
 
       if (!isUpdate) {
-        // subscriptionId là ENTITY (grant.sourceRef neo vào đây, reconcile hỏi theo nó),
-        // invoiceId là EVENT (chỉ vào sổ). idempotencyKey PHẢI giữ nguyên theo invoice: mỗi
-        // hoá đơn cấp đúng một lần. Neo key theo subscription.id thì kỳ gia hạn thứ hai
-        // trùng key kỳ đầu → không cấp credit, im lặng, mọi kỳ về sau.
         await this.creditService.revokeSubscriptionCredits(
           {
             userId: subscription.userId,

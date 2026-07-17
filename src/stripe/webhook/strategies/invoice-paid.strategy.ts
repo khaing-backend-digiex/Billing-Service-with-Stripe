@@ -25,7 +25,6 @@ export class InvoicePaidStrategy implements WebhookStrategy {
 
   async handle(event: Stripe.Event): Promise<void> {
     const paidInvoice = this.stripeService.mapRawInvoice(event.data.object);
-    this.logger.debug(`invoice.paid: ${JSON.stringify(paidInvoice)}`);
     const lineToUse =
       paidInvoice.lines.find(line => line.type === "subscription" && !line.isProration) ??
       paidInvoice.lines.find(line => !line.isProration && line.subscriptionId) ??

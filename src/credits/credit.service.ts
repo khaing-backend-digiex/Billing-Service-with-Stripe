@@ -71,7 +71,6 @@ export class CreditService {
           remainingAddon: remainingAddon,
         };
       }
-      this.logger.debug(`Locked balances for user ${cmd.userId}, product ${cmd.productId}: ${JSON.stringify(balances)}`);
       // 2. Prepare allocation sources
       const sources: AllocationSource[] = [];
       for (const grant of balances.grants) {
