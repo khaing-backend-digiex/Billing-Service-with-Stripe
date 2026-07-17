@@ -121,10 +121,11 @@ model Subscription {
   // ─── EXPAND: cột mới, chưa có implementation cho tới PR3 (Dev B) ───
 
   /// Denormalize từ pricingOption.plan.productId để làm partial unique index
-  /// `(userId, productId) WHERE status IN ('ACTIVE','PAST_DUE')` (§13.1).
-  /// Nullable ở PR1 vì row cũ chưa backfill → index tạm thời trơ. PR3 populate +
-  /// thêm composite FK (pricingOptionId, productId), PR4 siết NOT NULL.
-  productId   String?
+  /// `(userId, productId) WHERE status IN ('ACTIVE','PAST_DUE')` (§13.1) — Postgres không
+  /// index xuyên join nên cột này phải nằm vật lý trên row.
+  /// NOT NULL từ 20260717050000: để nullable thì NULL là DISTINCT trong unique index nên
+  /// index hoá trơ, và composite FK dưới đây là MATCH SIMPLE nên hàng NULL né FK hoàn toàn.
+  productId   String
   /// Row Free = NONE (không Stripe sub phía sau), Enterprise = MANUAL (thay A10).
   billingMode BillingMode @default(PROVIDER)
 
@@ -144,7 +145,11 @@ model Subscription {
 
   providerSubscriptionId String?
   invoices               Invoice[]
-  pricingOption          PricingOption       @relation(fields: [pricingOptionId], references: [id])
+  // Composite FK, KHÔNG phải FK đơn `pricingOptionId`: FK đơn để `productId` trôi tự do khỏi
+  // pricingOption.plan.productId, tức cột chống lưng cho partial unique index §13.1 có thể
+  // nói dối. Composite thì DB từ chối — không có PricingOption nào (id=X, productId=Y) lệch.
+  // Cùng pattern PricingOption→Plan ở trên. Đòi unique PricingOption(id, productId).
+  pricingOption          PricingOption       @relation(fields: [pricingOptionId, productId], references: [id, productId])
   user                   User                @relation(fields: [userId], references: [id])
   events                 SubscriptionEvent[]
 
