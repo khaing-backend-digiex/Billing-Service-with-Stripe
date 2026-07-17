@@ -292,6 +292,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
     const strategy = () =>
       new InvoicePaymentFailedStrategy(
         ctx.prisma,
+        new InvoiceRecordService(ctx.prisma),
         stripeServiceMock as any,
       );
 
@@ -320,6 +321,26 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       });
       expect(events).toHaveLength(1);
       expect(stripeServiceMock.cancelSubscriptionNow).not.toHaveBeenCalled();
+    });
+
+    // §8: row local chỉ sinh ở invoice.paid ĐẦU TIÊN, nên payment_failed đến khi chưa có
+    // row là thứ tự bình thường của Model B, không phải lỗi → phải log + bỏ qua, không throw.
+    // Trước khi nối lại recordFailedAttempt, nhánh này gọi thẳng invoice.update() nên ném
+    // P2025 và webhook fail vĩnh viễn qua mọi lần Stripe retry.
+    it("tolerates a failure for a Stripe subscription that has no local row yet", async () => {
+      const payload = invoicePayload(`sub_ghost_${rand()}`, ctx.basicOption.providerPriceId!, {
+        attempt_count: 1,
+        next_payment_attempt: Math.floor(Date.now() / 1000) + 86_400,
+      });
+
+      await expect(
+        strategy().handle(stripeEvent("invoice.payment_failed", payload)),
+      ).resolves.toBeUndefined();
+
+      // và không được bịa ra invoice cho một sub không tồn tại
+      expect(
+        await ctx.prisma.invoice.count({ where: { providerInvoiceId: payload.id } }),
+      ).toBe(0);
     });
 
     // TODO(Bước 3): test này encode model cũ "Free = Stripe sub đổi giá" – nó kỳ vọng
