@@ -12,7 +12,7 @@ import {
   WebhookEvent,
 } from "../payments/types/payment.types";
 import { PrismaService } from "../database/prisma.service";
-import { AddonPackage, SubscriptionStatus } from "@prisma/client";
+import { AddonPackage, SubscriptionStatus, PaymentProvider } from "@prisma/client";
 import { PLAN_CODES } from "../common/constants/plan.constants";
 import { STRIPE_METADATA_KEY } from "../common/constants/stripe.constants";
 import { formatDatabaseAmountToStripe } from "./utils/stripe-currency.util";
@@ -69,7 +69,7 @@ export class StripeService {
     try {
       await this.prisma.user.update({
         where: { id: user.id },
-        data: { providerCustomerId: customer.id },
+        data: { providerCustomerId: customer.id, provider: PaymentProvider.STRIPE },
       });
       return customer.id;
     } catch (error) {

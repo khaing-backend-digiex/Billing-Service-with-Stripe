@@ -20,10 +20,18 @@ export class InvoiceRecordService {
     subscriptionId: string,
     tx?: Prisma.TransactionClient,
   ): Promise<Invoice> {
+    const sub = await this.db(tx).subscription.findUnique({
+      where: { id: subscriptionId },
+      select: { pricingOptionId: true },
+    });
+
     return this.db(tx).invoice.upsert({
       where: { providerInvoiceId: providerInvoice.id },
       update: {},
-      create: this.createData(providerInvoice, subscriptionId),
+      create: {
+        ...this.createData(providerInvoice, subscriptionId),
+        pricingOptionId: sub?.pricingOptionId,
+      },
     });
   }
 
@@ -59,10 +67,19 @@ export class InvoiceRecordService {
     };
 
     if (subscriptionId) {
+      const sub = await tx.subscription.findUnique({
+        where: { id: subscriptionId },
+        select: { pricingOptionId: true },
+      });
+
       return tx.invoice.upsert({
         where: { providerInvoiceId: providerInvoice.id },
         update: retryData,
-        create: { ...this.createData(providerInvoice, subscriptionId), ...retryData },
+        create: { 
+          ...this.createData(providerInvoice, subscriptionId), 
+          ...retryData,
+          pricingOptionId: sub?.pricingOptionId,
+        },
       });
     }
 
