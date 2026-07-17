@@ -2,12 +2,13 @@ import {
   AllocationSource,
   AllocationResult,
 } from './credit.types';
+import { CreditGrantSourceType } from '@prisma/client';
 
 export function allocateCredits(
   sources: AllocationSource[],
   amount: number,
 ): AllocationResult {
-  const allocations: { grantId: string; sourceType: any; amount: number }[] = [];
+  const allocations: { grantId: string; sourceType: CreditGrantSourceType; amount: number }[] = [];
   let remaining = amount;
 
   for (const source of sources) {

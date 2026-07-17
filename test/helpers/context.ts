@@ -127,6 +127,10 @@ export class TestContext {
         currency: "usd",
         provider: PaymentProvider.STRIPE,
         providerPriceId: `price_test_addon_${this.runId}`,
+        // Add-on là SKU riêng của từng product (D5). PR3 thêm cột này và
+        // payment-intent-succeeded từ chối cấp credit nếu addon không có productId —
+        // fixture thiếu nó thì strategy bail sớm và test đo được số 0.
+        productId: this.product.id,
       },
     });
   }

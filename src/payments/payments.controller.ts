@@ -102,7 +102,7 @@ export class PaymentsController {
       throw new BadRequestException("User does not have a Stripe customer account.");
     }
 
-    const subscription = await this.prisma.subscription.findUnique({
+    const subscription = await this.prisma.subscription.findFirst({
       where: { userId },
     });
 

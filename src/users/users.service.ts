@@ -37,7 +37,7 @@ export class UsersService {
     return this.prisma.user.findMany({
       where: {
         createdAt: { lt: params.createdBefore },
-        OR: [{ providerCustomerId: null }, { subscription: null }],
+        OR: [{ providerCustomerId: null }, { subscriptions: { none: {} } }],
       },
       orderBy: { createdAt: "asc" },
       take: params.limit,

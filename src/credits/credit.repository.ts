@@ -74,8 +74,6 @@ export class CreditRepository {
   }
 
   async lockForConsume(userId: string, productId: string, tx: TxClient): Promise<LockedBalances> {
-    // We lock the single subscription to derive freeze status.
-    // (In Step 3, this will also filter by productId once the Subscription model becomes multi-product).
     const subRows = await tx.$queryRaw<
       [{ status: SubscriptionStatus; isFree: boolean }] | []
     >`

@@ -87,16 +87,19 @@ export class PaymentMethodsService {
   }
 
   private async hasLivePaidSubscription(userId: string): Promise<boolean> {
-    const subscription = await this.prisma.subscription.findUnique({
-      where: { userId },
-      include: { pricingOption: { include: { plan: true } } },
+    const subscription = await this.prisma.subscription.findFirst({
+      where: { 
+        userId,
+        status: { in: LIVE_STATUSES },
+        pricingOption: {
+          plan: {
+            isFree: false,
+          }
+        }
+      },
     });
 
-    return (
-      !!subscription &&
-      LIVE_STATUSES.includes(subscription.status) &&
-      subscription.pricingOption?.plan?.code !== PLAN_CODES.FREE
-    );
+    return !!subscription;
   }
 
 }

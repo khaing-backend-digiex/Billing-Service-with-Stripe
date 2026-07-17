@@ -268,8 +268,11 @@ export class StripeService {
   }
 
   async upgradeSubscriptionTier(userId: string, newPricingOptionId: string): Promise<PaymentSubscription> {
-    const currentSub = await this.prisma.subscription.findUnique({
-      where: { userId },
+    const currentSub = await this.prisma.subscription.findFirst({
+      where: { 
+        userId,
+        status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE, SubscriptionStatus.TRIALING] }
+      },
     });
 
     if (!currentSub || !currentSub.providerSubscriptionId) {
@@ -300,8 +303,11 @@ export class StripeService {
   }
 
   async upgradeSubscriptionCycle(userId: string, newPricingOptionId: string): Promise<PaymentSubscription> {
-    const currentSub = await this.prisma.subscription.findUnique({
-      where: { userId },
+    const currentSub = await this.prisma.subscription.findFirst({
+      where: { 
+        userId,
+        status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE, SubscriptionStatus.TRIALING] }
+      },
     });
 
     if (!currentSub || !currentSub.providerSubscriptionId) {
@@ -340,8 +346,11 @@ export class StripeService {
       throw new BadRequestException("User does not have a Stripe customer account.");
     }
 
-    const currentSub = await this.prisma.subscription.findUnique({
-      where: { userId },
+    const currentSub = await this.prisma.subscription.findFirst({
+      where: { 
+        userId,
+        status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE, SubscriptionStatus.TRIALING] }
+      },
     });
 
     if (!currentSub || !currentSub.providerSubscriptionId) {
@@ -372,8 +381,11 @@ export class StripeService {
       throw new BadRequestException("User does not have a Stripe customer account.");
     }
 
-    const currentSub = await this.prisma.subscription.findUnique({
-      where: { userId },
+    const currentSub = await this.prisma.subscription.findFirst({
+      where: { 
+        userId,
+        status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE, SubscriptionStatus.TRIALING] }
+      },
     });
 
     if (!currentSub || !currentSub.providerSubscriptionId) {

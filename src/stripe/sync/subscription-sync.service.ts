@@ -64,40 +64,56 @@ export class SubscriptionSyncService {
     const trialEnd = sub.trialEnd ? new Date(sub.trialEnd * 1000) : null;
     const cancelledAt = sub.cancelAt ? new Date(sub.cancelAt * 1000) : null;
 
-    const existing = await this.prisma.subscription.findUnique({
-      where: { userId: user.id },
+    const existing = await this.prisma.subscription.findFirst({
+      where: { providerSubscriptionId: sub.id },
       include: { pricingOption: true },
     });
 
 
     const localSubscription = await this.prisma.$transaction(async (tx) => {
-      const upserted = await tx.subscription.upsert({
-        where: { userId: user.id },
-        create: {
-          userId: user.id,
-          pricingOptionId: pricingOption.id,
-          status,
-          currentPeriodStart,
-          currentPeriodEnd,
-          nextCreditResetAt: currentPeriodEnd,
-          trialStart,
-          trialEnd,
-          cancelledAt,
-          provider: PaymentProvider.STRIPE,
-          providerSubscriptionId: sub.id,
-        },
-        update: {
-          pricingOptionId: pricingOption.id,
-          status,
-          currentPeriodStart,
-          currentPeriodEnd,
-          trialStart,
-          trialEnd,
-          providerSubscriptionId: sub.id,
-          cancelledAt,
-          autoRenew: sub.cancelAtPeriodEnd === false,
-        },
-      });
+      let upserted;
+      if (existing) {
+        upserted = await tx.subscription.update({
+          where: { id: existing.id },
+          data: {
+            pricingOptionId: pricingOption.id,
+            status,
+            currentPeriodStart,
+            currentPeriodEnd,
+            trialStart,
+            trialEnd,
+            cancelledAt,
+            autoRenew: sub.cancelAtPeriodEnd === false,
+          },
+        });
+      } else {
+        // Expire any existing live subscription for this product
+        await tx.subscription.updateMany({
+          where: {
+            userId: user.id,
+            productId: pricingOption.plan.productId,
+            status: { in: LIVE_STATUSES }
+          },
+          data: { status: SubscriptionStatus.EXPIRED }
+        });
+
+        upserted = await tx.subscription.create({
+          data: {
+            userId: user.id,
+            productId: pricingOption.plan.productId,
+            pricingOptionId: pricingOption.id,
+            status,
+            currentPeriodStart,
+            currentPeriodEnd,
+            nextCreditResetAt: currentPeriodEnd,
+            trialStart,
+            trialEnd,
+            cancelledAt,
+            provider: PaymentProvider.STRIPE,
+            providerSubscriptionId: sub.id,
+          },
+        });
+      }
 
       if (
         existing &&

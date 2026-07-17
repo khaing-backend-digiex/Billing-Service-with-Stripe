@@ -15,8 +15,9 @@ import {
   creditKey,
   isSubscriptionSource,
   KEY_SEPARATOR,
+  isAddonUsable,
 } from './credit.types';
-import { CreditTransactionType, ReferenceType, CreditGrantSourceType } from '@prisma/client';
+import { CreditTransactionType, ReferenceType, CreditGrantSourceType, SubscriptionStatus } from '@prisma/client';
 import { InsufficientCreditsException } from './exceptions';
 
 type TxClient = Parameters<Parameters<PrismaService['$transaction']>[0]>[0];
@@ -291,9 +292,12 @@ export class CreditService {
   }
 
   async getUserPackageStatus(userId: string): Promise<UserPackageStatus[]> {
-  
-    const subscription = await this.prisma.subscription.findUnique({
-      where: { userId },
+    // In preparation for Step 3, we fetch all active subscriptions for the user
+    const subscriptions = await this.prisma.subscription.findMany({
+      where: { 
+        userId,
+        status: SubscriptionStatus.ACTIVE 
+      },
       include: {
         pricingOption: {
           include: {
@@ -305,7 +309,14 @@ export class CreditService {
 
     const grants = await this.prisma.creditGrant.groupBy({
       by: ['productId', 'sourceType'],
-      where: { userId },
+      where: { 
+        userId,
+        amountRemaining: { gt: 0 },
+        OR: [
+          { expiresAt: null },
+          { expiresAt: { gt: new Date() } }
+        ]
+      },
       _sum: { amountRemaining: true },
     });
 
@@ -320,18 +331,38 @@ export class CreditService {
       else data.addon += sum;
     }
     
-    
     const statuses: UserPackageStatus[] = [];
     
-    for (const [productId, credits] of productCredits.entries()) {
-       
+    for (const sub of subscriptions) {
+       const productId = (sub as any).productId ?? sub.pricingOption.plan.productId;
+       const credits = productCredits.get(productId) ?? { sub: 0, addon: 0 };
+
        statuses.push({
-         plan: subscription?.pricingOption?.plan?.name ?? 'Free',
-         pricingOption: subscription?.pricingOption?.name ?? 'N/A',
-         nextBillingDate: subscription?.currentPeriodEnd ?? null,
+         productId,
+         plan: sub.pricingOption.plan.name,
+         pricingOption: sub.pricingOption.name,
+         nextBillingDate: sub.currentPeriodEnd,
          subscriptionCredits: credits.sub,
          addonCredits: credits.addon,
-         addonIsActive: true, // simplified for now
+         // Cột isFree, không phải chuỗi code: getFreePriceId() quyết định free tier bằng
+         // cột, nên gate freeze phải hỏi cùng một nguồn sự thật.
+         addonIsActive: isAddonUsable(sub.pricingOption.plan.isFree, sub.status),
+       });
+
+       // Remove from map to track which products have explicit subscriptions
+       productCredits.delete(productId);
+    }
+    
+    // For any products that have credits but NO subscription row (rare/legacy)
+    for (const [productId, credits] of productCredits.entries()) {
+       statuses.push({
+         productId,
+         plan: 'Free',
+         pricingOption: 'Free',
+         nextBillingDate: null,
+         subscriptionCredits: credits.sub,
+         addonCredits: credits.addon,
+         addonIsActive: false,
        });
     }
 

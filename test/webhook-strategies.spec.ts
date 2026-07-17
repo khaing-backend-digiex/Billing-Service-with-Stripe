@@ -154,7 +154,9 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
 
       await strategy().handle(stripeEvent("invoice.paid", payload));
 
-      const sub = await ctx.prisma.subscription.findUniqueOrThrow({
+      // findFirst chứ không findUnique: PR3 đã bỏ `Subscription.userId @unique`, một user
+      // có thể có nhiều sub (mỗi product một cái).
+      const sub = await ctx.prisma.subscription.findFirstOrThrow({
         where: { userId: user.id },
       });
       expect(sub.providerSubscriptionId).toBe(stripeSubId);
