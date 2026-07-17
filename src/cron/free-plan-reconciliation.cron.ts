@@ -81,16 +81,26 @@ export class FreePlanReconciliationCron {
     // thành candidate: rộng hơn trước, và sub kẹt thật càng khó lọt vào 50 chỗ. Không có
     // orderBy nên thứ tự còn do DB quyết.
     //
-    // NOT EXISTS giữ nguyên định nghĩa "kẹt" cũ (không có bút toán RENEWAL nào từ đầu kỳ
-    // hiện tại) — chỉ đổi chỗ lọc, không đổi business rule.
+    // Bằng chứng "đã cấp credit cho kỳ này" là SỔ, không phải số dư. Điều kiện sổ phải nằm
+    // TRONG query, không được lọc sau khi đã take() — nếu không cron chết đói.
+    //
+    // `ct.referenceId = s.id` giờ mới thật sự đúng: trước đây invoice.paid ghi
+    // referenceId = invoice.id (event) thay vì subscription.id (entity), nên mọi sub settle
+    // qua đường gia hạn bình thường đều vô hình với NOT EXISTS này và kẹt vĩnh viễn.
+    // Migration 20260717000000 đã sửa cả bên ghi lẫn dữ liệu cũ — đó là thứ chữa cron, chứ
+    // không phải đổi bảng đi hỏi.
+    //
+    // TODO(C6): hỏi CreditGrant(sourceRef = s.id) thì đúng ngữ nghĩa hơn — sourceRef là
+    // identity, còn bút toán neo theo event. NHƯNG chưa được: đã đo trên dev, đếm theo grant
+    // ra 71 sub kẹt so với 4 theo sổ, vì 196/201 bút toán RENEWAL có grantId NULL — lịch sử
+    // trước PR2, lúc CreditGrant chưa tồn tại. Đếm theo grant coi toàn bộ lịch sử đó là
+    // "chưa từng cấp" và làm batch 50 đầy rác, đúng kiểu starvation C4 đã chữa.
+    // Điều kiện để chuyển: mọi bút toán đều có grant (PR4 siết grantId NOT NULL) — chính là
+    // invariant `npm run db:doctor` đang đếm.
     //
     // Phải là raw SQL: điều kiện sổ so `referenceId` với id của CHÍNH sub đang xét và
     // `createdAt` với `currentPeriodStart` của chính nó. Prisma không tham chiếu chéo cột
     // của hàng ngoài trong nested filter được.
-    //
-    // TODO(C6): khi PR2 chuyển xong mọi đường ghi sang CreditGrant, đổi NOT EXISTS sang
-    // CreditGrant(SUBSCRIPTION, sourceRef = s.id) của kỳ hiện tại. Giữ CreditTransaction ở
-    // đây vì hiện nó vẫn là sổ được ghi.
     const stuck = await this.prisma.$queryRaw<
       { id: string; providerSubscriptionId: string }[]
     >`

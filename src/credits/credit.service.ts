@@ -13,6 +13,7 @@ import {
   AllocationSource,
   UserPackageStatus,
   creditKey,
+  isSubscriptionSource,
   KEY_SEPARATOR,
 } from './credit.types';
 import { CreditTransactionType, ReferenceType, CreditGrantSourceType } from '@prisma/client';
@@ -48,17 +49,17 @@ export class CreditService {
         let fromSub = 0;
         let fromAddon = 0;
         for (const tx of existing) {
-           if (tx.grant?.sourceType === 'SUBSCRIPTION') {
+           if (isSubscriptionSource(tx.grant?.sourceType)) {
                fromSub += Math.abs(tx.amount);
            } else {
                fromAddon += Math.abs(tx.amount);
            }
         }
-        
+
         let remainingSub = 0;
         let remainingAddon = 0;
         for (const grant of balances.grants) {
-          if (grant.sourceType === 'SUBSCRIPTION') remainingSub += grant.amountRemaining;
+          if (isSubscriptionSource(grant.sourceType)) remainingSub += grant.amountRemaining;
           else remainingAddon += grant.amountRemaining;
         }
 
@@ -117,8 +118,8 @@ export class CreditService {
         let finalAmt = grant.amountRemaining;
         const used = allocation.allocations.find(a => a.grantId === grant.id);
         if (used) finalAmt -= used.amount;
-        
-        if (grant.sourceType === 'SUBSCRIPTION') remainingSub += finalAmt;
+
+        if (isSubscriptionSource(grant.sourceType)) remainingSub += finalAmt;
         else remainingAddon += finalAmt;
       }
 
@@ -149,8 +150,10 @@ export class CreditService {
         data: {
           userId: cmd.userId,
           productId: cmd.productId,
-          sourceType: CreditGrantSourceType.SUBSCRIPTION,
-          sourceRef: cmd.referenceId,
+          sourceType: cmd.sourceType,
+          // Entity, không phải hoá đơn: reconcile hỏi "sub này đã được cấp cho kỳ này chưa",
+          // nên grant phải neo vào chính sub đó mới trả lời được.
+          sourceRef: cmd.subscriptionId,
           amountGranted: cmd.amount,
           amountRemaining: cmd.amount,
           expiresAt: cmd.expiresAt,
@@ -166,7 +169,8 @@ export class CreditService {
           amount: cmd.amount,
           description: cmd.description,
           referenceType: ReferenceType.SUBSCRIPTION,
-          referenceId: cmd.referenceId,
+          referenceId: cmd.subscriptionId,
+          invoiceId: cmd.invoiceId,
           idempotencyKey: cmd.idempotencyKey,
         }
       });
@@ -187,7 +191,7 @@ export class CreditService {
           userId: cmd.userId,
           productId: cmd.productId,
           description: cmd.revokeDescription,
-          referenceId: cmd.referenceId,
+          subscriptionId: cmd.subscriptionId,
           idempotencyKey: creditKey.revokeStep(cmd.idempotencyKey),
         },
         client,
@@ -199,7 +203,9 @@ export class CreditService {
           productId: cmd.productId,
           amount: cmd.amount,
           description: cmd.grantDescription,
-          referenceId: cmd.referenceId,
+          subscriptionId: cmd.subscriptionId,
+          // Reset là cron cấp trong kỳ, không có hoá đơn nào đứng sau — nên không invoiceId.
+          sourceType: CreditGrantSourceType.SUBSCRIPTION_RESET,
           idempotencyKey: creditKey.grantStep(cmd.idempotencyKey),
           expiresAt: cmd.expiresAt,
         },
@@ -227,7 +233,8 @@ export class CreditService {
           amount: -grant.amountRemaining,
           description: cmd.description,
           referenceType: ReferenceType.SUBSCRIPTION,
-          referenceId: cmd.referenceId,
+          referenceId: cmd.subscriptionId,
+          invoiceId: cmd.invoiceId,
           idempotencyKey: `req:${cmd.userId}:${cmd.idempotencyKey}:revokeSub:${grant.id}`,
         };
         await this.repo.applyDelta(cmd.userId, -grant.amountRemaining, entry, client);
@@ -256,7 +263,7 @@ export class CreditService {
           userId: cmd.userId,
           productId: cmd.productId,
           sourceType: CreditGrantSourceType.ADDON,
-          sourceRef: cmd.referenceId,
+          sourceRef: cmd.paymentId,
           amountGranted: cmd.amount,
           amountRemaining: cmd.amount,
           expiresAt: cmd.expiresAt,
@@ -272,7 +279,7 @@ export class CreditService {
           amount: cmd.amount,
           description: cmd.description,
           referenceType: ReferenceType.ADDON_PURCHASE,
-          referenceId: cmd.referenceId,
+          referenceId: cmd.paymentId,
           idempotencyKey: cmd.idempotencyKey,
         }
       });
@@ -284,10 +291,7 @@ export class CreditService {
   }
 
   async getUserPackageStatus(userId: string): Promise<UserPackageStatus[]> {
-    // In Step 2, we return an array since the design is for multi-product.
-    // However, since we haven't fully refactored Subscription to multi-product yet (Step 3),
-    // we query grants grouped by productId and join with the single subscription for now.
-    
+  
     const subscription = await this.prisma.subscription.findUnique({
       where: { userId },
       include: {
@@ -305,7 +309,6 @@ export class CreditService {
       _sum: { amountRemaining: true },
     });
 
-    // Group sums by productId
     const productCredits = new Map<string, { sub: number; addon: number }>();
     for (const g of grants) {
       const sum = g._sum.amountRemaining || 0;
@@ -313,18 +316,15 @@ export class CreditService {
          productCredits.set(g.productId, { sub: 0, addon: 0 });
       }
       const data = productCredits.get(g.productId)!;
-      if (g.sourceType === 'SUBSCRIPTION') data.sub += sum;
+      if (isSubscriptionSource(g.sourceType)) data.sub += sum;
       else data.addon += sum;
     }
     
-    // We only have 1 subscription in this step. So we'll return an array of 1 for the subscription's product
-    // plus any other products they have grants for.
+    
     const statuses: UserPackageStatus[] = [];
     
     for (const [productId, credits] of productCredits.entries()) {
-       // Is this product the one in the single subscription?
-       // Currently, the single subscription has no productId. We'll just assume it applies to AI.
-       // We'll return the sub status if it matches, else default.
+       
        statuses.push({
          plan: subscription?.pricingOption?.plan?.name ?? 'Free',
          pricingOption: subscription?.pricingOption?.name ?? 'N/A',

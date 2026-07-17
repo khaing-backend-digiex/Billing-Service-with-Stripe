@@ -49,7 +49,7 @@ describe("TestContext fixtures (real DB)", () => {
       const user = await ctx.createUser();
       const sub = await ctx.createSubscription(user.id);
       const grant = await ctx.createGrant(user.id, {
-        sourceType: CreditGrantSourceType.SUBSCRIPTION,
+        sourceType: CreditGrantSourceType.SUBSCRIPTION_ALLOCATION,
         sourceRef: sub.id,
       });
 
@@ -61,7 +61,7 @@ describe("TestContext fixtures (real DB)", () => {
     it("rejects a SUBSCRIPTION grant without sourceRef", async () => {
       const user = await ctx.createUser();
       await expect(
-        ctx.createGrant(user.id, { sourceType: CreditGrantSourceType.SUBSCRIPTION }),
+        ctx.createGrant(user.id, { sourceType: CreditGrantSourceType.SUBSCRIPTION_ALLOCATION }),
       ).rejects.toThrow();
     });
 

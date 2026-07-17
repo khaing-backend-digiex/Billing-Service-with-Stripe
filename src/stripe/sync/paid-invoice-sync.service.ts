@@ -1,6 +1,7 @@
 
 import { Injectable, Logger } from "@nestjs/common";
 import {
+  CreditGrantSourceType,
   InvoiceStatus,
   SubscriptionEventType,
   SubscriptionStatus,
@@ -164,12 +165,17 @@ export class PaidInvoiceSyncService {
       const isUpdate = paidInvoice.billingReason === "subscription_update";
 
       if (!isUpdate) {
+        // subscriptionId là ENTITY (grant.sourceRef neo vào đây, reconcile hỏi theo nó),
+        // invoiceId là EVENT (chỉ vào sổ). idempotencyKey PHẢI giữ nguyên theo invoice: mỗi
+        // hoá đơn cấp đúng một lần. Neo key theo subscription.id thì kỳ gia hạn thứ hai
+        // trùng key kỳ đầu → không cấp credit, im lặng, mọi kỳ về sau.
         await this.creditService.revokeSubscriptionCredits(
           {
             userId: subscription.userId,
             productId: plan.productId,
             description: `Unused credits expired before renewal`,
-            referenceId: invoice.id,
+            subscriptionId: subscription.id,
+            invoiceId: invoice.id,
             idempotencyKey: `revoke_sub_${invoice.id}`,
           },
           tx,
@@ -181,7 +187,9 @@ export class PaidInvoiceSyncService {
             productId: plan.productId,
             amount: plan.creditPolicy?.creditAmount ?? 0,
             description,
-            referenceId: invoice.id,
+            subscriptionId: subscription.id,
+            invoiceId: invoice.id,
+            sourceType: CreditGrantSourceType.SUBSCRIPTION_ALLOCATION,
             idempotencyKey: `grant_sub_${invoice.id}`,
           },
           tx,

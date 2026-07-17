@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { isAddonUsable } from "./credit.types";
+import { isAddonUsable, SUBSCRIPTION_SOURCES } from "./credit.types";
 import { PrismaService } from "../database/prisma.service";
 import { CreditTransactionType, CreditGrantSourceType, SubscriptionStatus, ReferenceType } from "@prisma/client";
 
@@ -12,6 +12,7 @@ export interface TransactionEntry {
   description: string;
   referenceType?: ReferenceType;
   referenceId?: string;
+  invoiceId?: string;
   idempotencyKey: string;
 }
 
@@ -46,7 +47,7 @@ export class CreditRepository {
       }
     }
 
-    // Update grant balance
+
     await tx.creditGrant.update({
       where: { id: entry.grantId },
       data: {
@@ -54,7 +55,7 @@ export class CreditRepository {
       },
     });
 
-    // Log transaction
+   
     await tx.creditTransaction.create({
       data: {
         userId,
@@ -64,6 +65,7 @@ export class CreditRepository {
         description: entry.description,
         referenceType: entry.referenceType,
         referenceId: entry.referenceId,
+        invoiceId: entry.invoiceId,
         idempotencyKey: entry.idempotencyKey,
       },
     });
@@ -75,9 +77,9 @@ export class CreditRepository {
     // We lock the single subscription to derive freeze status.
     // (In Step 3, this will also filter by productId once the Subscription model becomes multi-product).
     const subRows = await tx.$queryRaw<
-      [{ status: SubscriptionStatus; planCode: string }] | []
+      [{ status: SubscriptionStatus; isFree: boolean }] | []
     >`
-      SELECT s."status", p."code" AS "planCode"
+      SELECT s."status", p."isFree" AS "isFree"
       FROM "Subscription" s
       JOIN "PricingOption" po ON po."id" = s."pricingOptionId"
       JOIN "Plan" p ON p."id" = po."planId"
@@ -102,10 +104,15 @@ export class CreditRepository {
 
     return {
       grants: grantRows || [],
-      addonIsActive: isAddonUsable(sub?.planCode, sub?.status),
+      addonIsActive: isAddonUsable(sub?.isFree, sub?.status),
     };
   }
 
+  /**
+   * Revoke quét CẢ HAI nguồn subscription: credit cấp theo hoá đơn và credit do cron reset
+   * đều là credit của gói, hết kỳ là hết. Liệt kê thiếu một giá trị ở đây nghĩa là credit
+   * kỳ cũ sống sót qua kỳ mới mà không ai thấy.
+   */
   async lockForRevokeSubscription(userId: string, productId: string, tx: TxClient): Promise<LockedGrant[]> {
     const grantRows = await tx.$queryRaw<
       [{ id: string; sourceType: CreditGrantSourceType; amountRemaining: number }]
@@ -114,7 +121,7 @@ export class CreditRepository {
       FROM "CreditGrant"
       WHERE "userId" = ${userId}
         AND "productId" = ${productId}
-        AND "sourceType" = 'SUBSCRIPTION'
+        AND "sourceType" = ANY(${SUBSCRIPTION_SOURCES}::"CreditGrantSourceType"[])
         AND "amountRemaining" > 0
       ORDER BY "priority" ASC, "expiresAt" ASC NULLS LAST, "id" ASC
       FOR UPDATE

@@ -99,7 +99,7 @@ export class CreditResetCronService {
               amount: plan.creditPolicy?.creditAmount ?? 0,
               grantDescription: `Credits reset – ${plan.name} (monthly cycle)`,
               revokeDescription: `Unused credits expired before monthly reset – ${plan.name}`,
-              referenceId: subscription.id,
+              subscriptionId: subscription.id,
               idempotencyKey: creditKey.subscriptionReset(
                 subscription.id,
                 subscription.nextCreditResetAt,

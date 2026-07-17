@@ -74,7 +74,7 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
           productId: defaultProduct?.id ?? addon.id,
           amount: addon.credits,
           description: `Purchased Addon: ${addon.name}`,
-          referenceId: payment.id,
+          paymentId: payment.id,
           idempotencyKey: creditKey.addonPurchase(paymentIntent.id),
         },
         tx,

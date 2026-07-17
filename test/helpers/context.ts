@@ -169,6 +169,11 @@ export class TestContext {
    * Lưu ý CHECK `Subscription_billing_mode_check`: `billingMode = 'NONE'` (row Free) hoặc
    * `MANUAL` bắt buộc `providerSubscriptionId: null`, nếu không DB từ chối. Mặc định ở đây
    * là PROVIDER + có providerSubscriptionId nên nhất quán sẵn.
+   *
+   * KHÔNG set `subscriptionCreditsRemaining`: cột đã chết ở PR2 (không src nào đọc nữa,
+   * chỉ chờ PR4 xoá). Set nó ở đây là để fixture nói dối — sub trông như có credit trong
+   * khi số dư thật nằm ở CreditGrant và user chưa có grant nào. Cần credit thì gọi
+   * `createGrant()`.
    */
   async createSubscription(
     userId: string,
@@ -183,12 +188,55 @@ export class TestContext {
         currentPeriodStart: new Date(Date.now() - 86_400_000),
         currentPeriodEnd: new Date(Date.now() + 29 * 86_400_000),
         nextCreditResetAt: new Date(Date.now() + 29 * 86_400_000),
-        subscriptionCreditsRemaining: 100,
         provider: PaymentProvider.STRIPE,
         providerSubscriptionId: `sub_test_${rand()}`,
         ...overrides,
       },
     });
+  }
+
+  /**
+   * Grant credit gói cho sub. `sourceRef` là chính sub đó (entity sinh ra grant) – CHECK
+   * `CreditGrant_source_ref_check` bắt buộc, và reconcile tìm theo đúng cột này.
+   *
+   * Mặc định ALLOCATION (cấp theo hoá đơn). Cần credit do cron reset thì truyền
+   * `SUBSCRIPTION_RESET` – hai nguồn khác nhau nhưng đều là credit của gói.
+   */
+  async createSubGrant(
+    userId: string,
+    subId: string,
+    amount: number,
+    sourceType: CreditGrantSourceType = CreditGrantSourceType.SUBSCRIPTION_ALLOCATION,
+  ) {
+    return this.createGrant(userId, {
+      sourceType,
+      sourceRef: subId,
+      amountGranted: amount,
+      priority: 10,
+    });
+  }
+
+  /** Tổng số dư còn lại của user theo nguồn – số dư thật, đọc từ ledger. */
+  async remainingCredits(
+    userId: string,
+    sourceType?: CreditGrantSourceType | CreditGrantSourceType[],
+  ) {
+    const filter = Array.isArray(sourceType) ? { in: sourceType } : sourceType;
+    const grants = await this.prisma.creditGrant.findMany({
+      where: { userId, ...(filter ? { sourceType: filter } : {}) },
+    });
+    return grants.reduce((n, g) => n + g.amountRemaining, 0);
+  }
+
+  /**
+   * Số dư credit GÓI: gộp cả ALLOCATION lẫn RESET. Hai giá trị enum, một khái niệm — test
+   * hỏi "user còn bao nhiêu credit gói" thì không quan tâm nó tới từ hoá đơn hay từ cron.
+   */
+  subscriptionCredits(userId: string) {
+    return this.remainingCredits(userId, [
+      CreditGrantSourceType.SUBSCRIPTION_ALLOCATION,
+      CreditGrantSourceType.SUBSCRIPTION_RESET,
+    ]);
   }
 
   /**

@@ -1,4 +1,5 @@
 import {
+  CreditGrantSourceType,
   CreditTransactionType,
   InvoiceStatus,
   PaymentProvider,
@@ -89,7 +90,6 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       const user = await ctx.createUser();
       const sub = await ctx.createSubscription(user.id, {
         status: SubscriptionStatus.PAST_DUE,
-        subscriptionCreditsRemaining: 0,
       });
       const payload = paidPayload(user, sub.providerSubscriptionId!);
       await ctx.prisma.invoice.create({
@@ -114,7 +114,9 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
 
       const after = await ctx.prisma.subscription.findUniqueOrThrow({ where: { id: sub.id } });
       expect(after.status).toBe(SubscriptionStatus.ACTIVE);
-      expect(after.subscriptionCreditsRemaining).toBe(ctx.plan.creditPolicy.creditAmount);
+      expect(await ctx.subscriptionCredits(user.id)).toBe(
+        ctx.plan.creditPolicy.creditAmount,
+      );
 
       const payment = await ctx.prisma.payment.findUnique({
         where: { providerPaymentId: payload.payment_intent as string },
@@ -129,7 +131,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
 
     it("creates the local invoice when it does not exist yet", async () => {
       const user = await ctx.createUser();
-      const sub = await ctx.createSubscription(user.id, { subscriptionCreditsRemaining: 0 });
+      const sub = await ctx.createSubscription(user.id);
       const payload = paidPayload(user, sub.providerSubscriptionId!);
 
       await strategy().handle(stripeEvent("invoice.paid", payload));
@@ -140,8 +142,9 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       expect(invoice).not.toBeNull();
       expect(invoice!.status).toBe(InvoiceStatus.PAID);
 
-      const after = await ctx.prisma.subscription.findUniqueOrThrow({ where: { id: sub.id } });
-      expect(after.subscriptionCreditsRemaining).toBe(ctx.plan.creditPolicy.creditAmount);
+      expect(await ctx.subscriptionCredits(user.id)).toBe(
+        ctx.plan.creditPolicy.creditAmount,
+      );
     });
 
     it("creates the local subscription row when onboarding never produced one", async () => {
@@ -156,12 +159,14 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       });
       expect(sub.providerSubscriptionId).toBe(stripeSubId);
       expect(sub.status).toBe(SubscriptionStatus.ACTIVE);
-      expect(sub.subscriptionCreditsRemaining).toBe(ctx.plan.creditPolicy.creditAmount);
+      expect(await ctx.subscriptionCredits(user.id)).toBe(
+        ctx.plan.creditPolicy.creditAmount,
+      );
     });
 
     it("is idempotent: replaying the event does not double-grant credits", async () => {
       const user = await ctx.createUser();
-      const sub = await ctx.createSubscription(user.id, { subscriptionCreditsRemaining: 0 });
+      const sub = await ctx.createSubscription(user.id);
       const payload = paidPayload(user, sub.providerSubscriptionId!);
 
       await strategy().handle(stripeEvent("invoice.paid", payload));
@@ -171,6 +176,10 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
         where: { userId: user.id, type: CreditTransactionType.RENEWAL },
       });
       expect(txs).toHaveLength(1);
+      // Replay không được đẻ grant thứ hai – số dư là bằng chứng, không chỉ số bút toán.
+      expect(await ctx.subscriptionCredits(user.id)).toBe(
+        ctx.plan.creditPolicy.creditAmount,
+      );
     });
 
     // Nâng cấp Free → PRO: Stripe tạo sub MỚI. Nếu invoice.paid không dời con trỏ,
@@ -183,7 +192,6 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
         pricingOptionId: ctx.freeOption.id,
         providerSubscriptionId: oldFreeSubId,
         currentPeriodStart: new Date(Date.now() - 10 * 86_400_000),
-        subscriptionCreditsRemaining: 0,
       });
 
       const newPaidSubId = `sub_pro_${rand()}`;
@@ -202,7 +210,9 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       });
       expect(after.providerSubscriptionId).toBe(newPaidSubId);
       expect(after.pricingOptionId).toBe(ctx.basicOption.id);
-      expect(after.subscriptionCreditsRemaining).toBe(ctx.plan.creditPolicy.creditAmount);
+      expect(await ctx.subscriptionCredits(user.id)).toBe(
+        ctx.plan.creditPolicy.creditAmount,
+      );
     });
 
     it("does not repoint when a stale invoice from an older period arrives late", async () => {
@@ -211,7 +221,6 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       const sub = await ctx.createSubscription(user.id, {
         providerSubscriptionId: currentSubId,
         currentPeriodStart: new Date(),
-        subscriptionCreditsRemaining: 0,
       });
 
       const now = Math.floor(Date.now() / 1000);
@@ -248,16 +257,20 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
     // Bug thật: cron chữa trước (applyPaidInvoice), webhook retry tới sau.
     it("does not re-grant credits when the cron already applied the same invoice", async () => {
       const user = await ctx.createUser();
-      const sub = await ctx.createSubscription(user.id, { subscriptionCreditsRemaining: 0 });
+      const sub = await ctx.createSubscription(user.id);
       const payload = paidPayload(user, sub.providerSubscriptionId!);
 
       // Đường cron: reconcile gọi thẳng sync service với local subscription id.
       await paidInvoiceSync().applyPaidInvoice(adapter.mapRawInvoice(payload), sub.id);
 
-      // User tiêu bớt credit trước khi webhook chậm chân tới nơi.
-      await ctx.prisma.subscription.update({
-        where: { id: sub.id },
-        data: { subscriptionCreditsRemaining: 10 },
+      // User tiêu bớt credit trước khi webhook chậm chân tới nơi: trừ thẳng trên grant mà
+      // cron vừa cấp, vì số dư giờ nằm ở đó.
+      const granted = await ctx.prisma.creditGrant.findFirstOrThrow({
+        where: { userId: user.id, sourceType: CreditGrantSourceType.SUBSCRIPTION_ALLOCATION },
+      });
+      await ctx.prisma.creditGrant.update({
+        where: { id: granted.id },
+        data: { amountRemaining: 10 },
       });
 
       await strategy().handle(stripeEvent("invoice.paid", payload));
@@ -267,8 +280,8 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       });
       expect(txs).toHaveLength(1);
 
-      const after = await ctx.prisma.subscription.findUniqueOrThrow({ where: { id: sub.id } });
-      expect(after.subscriptionCreditsRemaining).toBe(10);
+      // Webhook tới sau không được cấp lại: số dư giữ nguyên 10 mà user đang có.
+      expect(await ctx.subscriptionCredits(user.id)).toBe(10);
     });
   });
 
@@ -371,7 +384,8 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
 
     it("status unpaid (final payment failure) → EXPIRED, credits forfeited, downgrade to Free triggered", async () => {
       const user = await ctx.createUser();
-      const sub = await ctx.createSubscription(user.id, { subscriptionCreditsRemaining: 42 });
+      const sub = await ctx.createSubscription(user.id);
+      await ctx.createSubGrant(user.id, sub.id, 42);
       const payload = subscriptionPayload(user.providerCustomerId!, ctx.basicOption.providerPriceId!, {
         id: sub.providerSubscriptionId,
         status: "unpaid",
@@ -381,7 +395,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
 
       const after = await ctx.prisma.subscription.findUniqueOrThrow({ where: { id: sub.id } });
       expect(after.status).toBe(SubscriptionStatus.EXPIRED);
-      expect(after.subscriptionCreditsRemaining).toBe(0);
+      expect(await ctx.subscriptionCredits(user.id)).toBe(0);
 
       const forfeits = await ctx.prisma.creditTransaction.findMany({
         where: { userId: user.id, type: CreditTransactionType.EXPIRATION },
@@ -400,7 +414,8 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
 
     it("cancels the local subscription, forfeits credits, triggers downgrade", async () => {
       const user = await ctx.createUser();
-      const sub = await ctx.createSubscription(user.id, { subscriptionCreditsRemaining: 30 });
+      const sub = await ctx.createSubscription(user.id);
+      await ctx.createSubGrant(user.id, sub.id, 30);
       const payload = subscriptionPayload(user.providerCustomerId!, ctx.basicOption.providerPriceId!, {
         id: sub.providerSubscriptionId,
         status: "canceled",
@@ -410,7 +425,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
 
       const after = await ctx.prisma.subscription.findUniqueOrThrow({ where: { id: sub.id } });
       expect(after.status).toBe(SubscriptionStatus.CANCELLED);
-      expect(after.subscriptionCreditsRemaining).toBe(0);
+      expect(await ctx.subscriptionCredits(user.id)).toBe(0);
       expect(after.cancelledAt).not.toBeNull();
 
       const forfeits = await ctx.prisma.creditTransaction.findMany({
@@ -590,7 +605,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
         creditService,
       );
 
-    it("credits the addon wallet exactly once, even on replay", async () => {
+    it("grants addon credits exactly once, even on replay", async () => {
       const user = await ctx.createUser();
       const intent = {
         id: `pi_test_${rand()}`,
@@ -602,10 +617,15 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       await strategy().handle(stripeEvent("payment_intent.succeeded", intent));
       await strategy().handle(stripeEvent("payment_intent.succeeded", intent));
 
-      const wallet = await ctx.prisma.creditWallet.findUniqueOrThrow({
-        where: { userId: user.id },
+      // Add-on giờ là một CreditGrant riêng, không phải cột addonCredits trên CreditWallet:
+      // replay không được đẻ grant thứ hai.
+      const grants = await ctx.prisma.creditGrant.findMany({
+        where: { userId: user.id, sourceType: CreditGrantSourceType.ADDON },
       });
-      expect(wallet.addonCredits).toBe(ctx.addon.credits);
+      expect(grants).toHaveLength(1);
+      expect(await ctx.remainingCredits(user.id, CreditGrantSourceType.ADDON)).toBe(
+        ctx.addon.credits,
+      );
 
       const payment = await ctx.prisma.payment.findUniqueOrThrow({
         where: { providerPaymentId: intent.id },

@@ -160,22 +160,18 @@ model CreditWallet {
   user         User     @relation(fields: [userId], references: [id])
 }
 
-/// Bucket ledger thay CreditWallet + Subscription.subscriptionCreditsRemaining (§4).
-/// Consume lock theo `priority ASC, expiresAt ASC NULLS LAST, id ASC`, chỉ lấy
-/// amountRemaining > 0. CHECK không âm nằm trong migration (Prisma DSL không có CHECK).
+
 model CreditGrant {
   id              String                @id @default(cuid())
   userId          String
   /// Credit luôn thuộc đúng một product — không có credit universal (D5).
   productId       String
   sourceType      CreditGrantSourceType
-  /// subscriptionId / paymentId / campaignId / adminUserId tuỳ sourceType.
   sourceRef       String?
   amountGranted   Int
   amountRemaining Int
   /// Subscription credit hết hạn theo reset; add-on null; gift/promo có hạn.
   expiresAt       DateTime?
-  /// Thứ tự tiêu điều khiển bằng data thay vì code (thay A3).
   priority        Int                   @default(100)
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
@@ -219,9 +215,11 @@ model Invoice {
   /// nhưng KHÔNG bất biến theo pricing (đổi chu kỳ đổi pricingOptionId), nên "invoice này
   /// theo giá nào" phải đọc từ chính Invoice. PR3 (Dev B) populate.
   pricingOptionId   String?
-  pricingOption     PricingOption?  @relation(fields: [pricingOptionId], references: [id])
-  subscription      Subscription    @relation(fields: [subscriptionId], references: [id])
-  payments          Payment[]
+  pricingOption      PricingOption?      @relation(fields: [pricingOptionId], references: [id])
+  subscription       Subscription        @relation(fields: [subscriptionId], references: [id])
+  payments           Payment[]
+  /// Hoá đơn này đã kích hoạt những bút toán credit nào (log, không phải sở hữu).
+  creditTransactions CreditTransaction[]
 }
 
 model Payment {
@@ -265,6 +263,8 @@ model CreditTransaction {
   type           CreditTransactionType
   amount         Int
   description    String?
+  /// Trỏ vào ENTITY: với credit subscription thì referenceId = subscription.id, không phải
+  /// invoice.id. Hoá đơn đi vào `invoiceId` bên dưới.
   referenceType  ReferenceType?
   referenceId    String?
   createdAt      DateTime              @default(now())
@@ -274,10 +274,16 @@ model CreditTransaction {
   /// EXPAND: nullable ở PR1 vì implementation cũ vẫn ghi transaction không có grant.
   /// Spec muốn NOT NULL — siết ở PR4 sau khi PR2 chuyển xong mọi đường ghi.
   grantId        String?
+  /// EVENT đã kích hoạt bút toán này. Invoice không phải entitlement, không phải identity
+  /// của grant — nó là cái làm việc cấp credit xảy ra, nên nó thuộc về sổ. Nullable vì
+  /// reset cron và adjust không sinh ra từ hoá đơn nào.
+  invoiceId      String?
   grant          CreditGrant?          @relation(fields: [grantId], references: [id])
+  invoice        Invoice?              @relation(fields: [invoiceId], references: [id])
   user           User                  @relation(fields: [userId], references: [id])
 
   @@index([grantId])
+  @@index([invoiceId])
 }
 
 model SubscriptionEvent {
@@ -332,9 +338,10 @@ enum ResetInterval {
   EVERY_N_DAYS
 }
 
-/// Nguồn gốc của một CreditGrant (§4). Không có TRIAL – D12 bỏ trial hoàn toàn.
+
 enum CreditGrantSourceType {
-  SUBSCRIPTION
+  SUBSCRIPTION_ALLOCATION
+  SUBSCRIPTION_RESET
   ADDON
   GIFT
   PROMOTION

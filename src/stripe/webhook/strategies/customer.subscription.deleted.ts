@@ -66,7 +66,7 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
             userId: subscription.userId,
             productId: subscription.pricingOption.productId,
             description: `Subscription deleted: ${subscription.id}`,
-            referenceId: subscription.id,
+            subscriptionId: subscription.id,
             idempotencyKey: creditKey.subscriptionRevoke(subscription.id, sub.id),
           },
           tx,

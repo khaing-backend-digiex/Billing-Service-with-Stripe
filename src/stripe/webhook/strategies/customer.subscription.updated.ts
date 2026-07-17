@@ -153,7 +153,7 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
             userId: subscription.userId,
             productId: subscription.pricingOption.productId,
             description: "Credits forfeited – subscription expired (payment failed)",
-            referenceId: subscription.id,
+            subscriptionId: subscription.id,
             idempotencyKey: creditKey.subscriptionRevoke(subscription.id, stripeSubscription.id),
           },
           tx,

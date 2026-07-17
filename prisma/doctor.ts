@@ -88,20 +88,24 @@ async function checkPlansWithoutCreditPolicy(): Promise<void> {
 }
 
 /**
- * StripeService.getFreePriceId() tra `findFirst({ code: 'FREE' })` KHÔNG kèm productId rồi
- * lấy pricingOptions[0]. Plan.code là @@unique([productId, code]) nên FREE tồn tại theo
- * TỪNG product — hai plan FREE là hàm đó thành tung đồng xu.
+ * StripeService.getFreePriceId() tra `findFirst({ isFree: true })` KHÔNG kèm productId rồi
+ * lấy pricingOptions[0]. Plan.isFree không unique theo product, nên hai plan free là hàm
+ * đó thành tung đồng xu.
+ *
+ * Tra theo `isFree`, KHÔNG theo `code = 'FREE'`: getFreePriceId đã chuyển sang cột (306e02f)
+ * nên soi theo code là soi nhầm thứ — plan `isFree: true` mang code khác sẽ lọt lưới đúng
+ * cái lưới này dựng ra để chặn.
  */
 async function checkFreePlanAmbiguity(): Promise<void> {
   const freePlans = await prisma.plan.findMany({
-    where: { code: 'FREE' },
+    where: { isFree: true },
     include: { pricingOptions: true, product: true },
   });
 
   if (freePlans.length > 1) {
     findings.push({
       blocking: true,
-      title: `${freePlans.length} plan có code FREE (trên ${new Set(freePlans.map((p) => p.productId)).size} product)`,
+      title: `${freePlans.length} plan có isFree = true (trên ${new Set(freePlans.map((p) => p.productId)).size} product)`,
       detail: freePlans.map((p) => `${p.product.code}/${p.code} (${p.id})`),
       why:
         'getFreePriceId() không lọc theo productId nên trả về plan nào là ngẫu nhiên: user ' +
@@ -113,11 +117,43 @@ async function checkFreePlanAmbiguity(): Promise<void> {
   if (multiOption.length > 0) {
     findings.push({
       blocking: true,
-      title: `${multiOption.length} plan FREE có nhiều hơn 1 pricing option`,
+      title: `${multiOption.length} plan free có nhiều hơn 1 pricing option`,
       detail: multiOption.map((p) => `${p.code} – ${p.pricingOptions.length} option`),
       why: 'getFreePriceId() lấy pricingOptions[0] không kèm orderBy, nên chọn cái nào là do DB quyết.',
     });
   }
+}
+
+/**
+ * Hai định nghĩa "free" đá nhau. getFreePriceId() tra `isFree: true` (306e02f), còn
+ * isAddonUsable() (credit.types.ts) vẫn so `code !== 'FREE'` — nửa còn lại của A5 chưa
+ * chuyển. Plan nào hai bên trả lời khác nhau là plan làm D7 hỏng im lặng: user được
+ * getFreePriceId đẩy vào free tier, nhưng isAddonUsable thấy code lạ nên KHÔNG đóng băng
+ * add-on, và user tiêu mất credit lẽ ra phải giữ nguyên.
+ */
+async function checkFreeDefinitionMismatch(): Promise<void> {
+  const mismatched = await prisma.plan.findMany({
+    where: {
+      OR: [
+        { isFree: true, code: { not: 'FREE' } },
+        { isFree: false, code: 'FREE' },
+      ],
+    },
+    include: { product: true },
+  });
+  if (mismatched.length === 0) return;
+
+  findings.push({
+    blocking: true,
+    title: `${mismatched.length} plan mà isFree và code bất đồng`,
+    detail: mismatched.map((p) => `${p.product.code}/${p.code} (${p.id}) – isFree=${p.isFree}`),
+    why:
+      'getFreePriceId() quyết định theo cột isFree, isAddonUsable() quyết định theo chuỗi ' +
+      'code === "FREE". Plan nào hai bên bất đồng thì add-on của user trên plan đó không ' +
+      'đóng băng đúng D7. Catalog seed hiện khớp cả hai nên chưa nổ — nhưng POST ' +
+      '/pricing/plans cho đặt isFree tuỳ ý, nên đây là mìn chờ. Gốc: A5 (Bước 5) — bỏ ' +
+      'PLAN_CODES, dùng Plan.isFree.',
+  });
 }
 
 /** Không có providerPriceId thì không tạo sub trên Stripe được — option chỉ để trưng bày. */
@@ -154,13 +190,120 @@ async function checkDuplicateBillingCycles(): Promise<void> {
   });
 }
 
+/**
+ * Số dư còn kẹt ở Subscription.subscriptionCreditsRemaining. PR2 đã dời số dư sang
+ * CreditGrant và KHÔNG ghi cột này nữa — nên cột còn > 0 nghĩa là số dư đó vô hình với
+ * code hiện tại: user vẫn thấy 0 credit dù DB nói còn.
+ */
+async function checkStrandedSubscriptionCredits(): Promise<void> {
+  const stranded = await prisma.$queryRaw<{ userId: string; subId: string; amount: number }[]>`
+    SELECT s."userId", s."id" AS "subId", s."subscriptionCreditsRemaining" AS amount
+    FROM "Subscription" s
+    WHERE s."subscriptionCreditsRemaining" > 0
+      AND NOT EXISTS (SELECT 1 FROM "CreditGrant" g WHERE g."userId" = s."userId")
+    ORDER BY s."subscriptionCreditsRemaining" DESC
+  `;
+  if (stranded.length === 0) return;
+
+  const total = stranded.reduce((n, r) => n + r.amount, 0);
+  findings.push({
+    blocking: false,
+    title: `${stranded.length} subscription còn ${total} credit kẹt ở cột đã chết`,
+    detail: stranded.map((r) => `sub ${r.subId} (user ${r.userId}) – ${r.amount} credit`),
+    why:
+      'subscriptionCreditsRemaining là cột @deprecated: PR2 đọc/ghi qua CreditGrant, không ' +
+      'ai đọc cột này nữa. Các user này không có grant nào nên code mới trả về 0 credit. ' +
+      'Không tự backfill: chuyển số dư là quyết định business. Trên DB dev thì `npm run db:reset`.',
+  });
+}
+
+/**
+ * CreditTransaction.grantId đang nullable vì implementation cũ ghi transaction không có
+ * grant. Spec muốn NOT NULL (PR4) — hàng cũ còn sót là thứ chặn việc siết cột.
+ */
+async function checkTransactionsWithoutGrant(): Promise<void> {
+  const [row] = await prisma.$queryRaw<{ count: bigint }[]>`
+    SELECT COUNT(*) AS count FROM "CreditTransaction" WHERE "grantId" IS NULL
+  `;
+  const count = Number(row.count);
+  if (count === 0) return;
+
+  findings.push({
+    blocking: false,
+    title: `${count} CreditTransaction không gắn grant nào (grantId NULL)`,
+    detail: [`${count} hàng – lịch sử ghi bằng model cũ trước PR2`],
+    why:
+      'PR4 muốn siết CreditTransaction.grantId thành NOT NULL; còn hàng NULL thì migration ' +
+      'đó sẽ gãy. Đây là lịch sử cũ, không phải lỗi đang chảy — chỉ là việc phải dọn trước PR4.',
+  });
+}
+
+/**
+ * Grant không có transaction nào trỏ tới = không do CreditService cấp. Mọi đường cấp của
+ * app đều ghi grant + transaction trong CÙNG một transaction DB, nên grant trần là dấu
+ * hiệu có ai đó INSERT tay hoặc chạy script backfill ngoài luồng.
+ */
+async function checkGrantsWithoutTransaction(): Promise<void> {
+  const orphans = await prisma.$queryRaw<{ id: string; sourceType: string; amount: number }[]>`
+    SELECT g."id", g."sourceType"::text AS "sourceType", g."amountGranted" AS amount
+    FROM "CreditGrant" g
+    WHERE NOT EXISTS (SELECT 1 FROM "CreditTransaction" t WHERE t."grantId" = g."id")
+  `;
+  if (orphans.length === 0) return;
+
+  findings.push({
+    blocking: true,
+    title: `${orphans.length} CreditGrant không có transaction nào trỏ tới`,
+    detail: orphans.map((g) => `${g.id} – ${g.sourceType}, ${g.amount} credit`),
+    why:
+      'CreditService luôn tạo grant + transaction trong cùng một DB transaction, nên grant ' +
+      'trần nghĩa là credit vào bằng đường khác (INSERT tay / script backfill). Ledger và số ' +
+      'dư đã lệch nhau: không truy được credit này từ đâu ra.',
+  });
+}
+
+/**
+ * Cấp credit hai lần cho cùng một nguồn. Grant hợp lệ được neo bằng idempotencyKey trên
+ * CreditTransaction, nhưng script chạy ngoài app (INSERT thẳng, không ON CONFLICT) thì
+ * chạy hai lần là nhân đôi số dư mà không ai báo.
+ */
+async function checkDuplicateGrantSource(): Promise<void> {
+  const dupes = await prisma.$queryRaw<
+    { userId: string; sourceRef: string; count: bigint }[]
+  >`
+    SELECT "userId", "sourceRef", COUNT(*) AS count
+    FROM "CreditGrant"
+    WHERE "sourceRef" IS NOT NULL
+      AND "sourceType" = 'SUBSCRIPTION_ALLOCATION'
+    GROUP BY "userId", "productId", "sourceRef"
+    HAVING COUNT(*) > 1
+  `;
+  if (dupes.length === 0) return;
+
+  findings.push({
+    blocking: true,
+    title: `${dupes.length} subscription được cấp ALLOCATION grant nhiều hơn một lần trong cùng kỳ`,
+    detail: dupes.map((d) => `user ${d.userId} – sub ${d.sourceRef}: ${d.count} grant`),
+    why:
+      'Chỉ soi ALLOCATION (cấp theo hoá đơn): mỗi hoá đơn cấp đúng một lần nên trùng nghĩa ' +
+      'là credit bị cấp đôi — thường do script INSERT thẳng chạy lại, không đi qua ' +
+      'idempotencyKey của CreditService. KHÔNG soi SUBSCRIPTION_RESET: cron reset cấp một ' +
+      'grant mỗi kỳ trên cùng một sub nên nhiều grant cùng sourceRef ở đó là ĐÚNG.',
+  });
+}
+
 async function main(): Promise<void> {
   console.log(FIX ? 'db:doctor (--fix: có xoá)\n' : 'db:doctor (chỉ đọc)\n');
 
   await checkPlansWithoutCreditPolicy();
   await checkFreePlanAmbiguity();
+  await checkFreeDefinitionMismatch();
   await checkPricingOptionsWithoutPrice();
   await checkDuplicateBillingCycles();
+  await checkStrandedSubscriptionCredits();
+  await checkTransactionsWithoutGrant();
+  await checkGrantsWithoutTransaction();
+  await checkDuplicateGrantSource();
 
   if (findings.length === 0) {
     console.log('Không có vi phạm.');

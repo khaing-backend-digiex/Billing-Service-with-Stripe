@@ -1,28 +1,34 @@
 import { CreditGrantSourceType, SubscriptionStatus } from '@prisma/client';
-import { PLAN_CODES } from '../common/constants/plan.constants';
 
 export const ADDON_LIVE_STATUSES: SubscriptionStatus[] = [
   SubscriptionStatus.ACTIVE,
   SubscriptionStatus.TRIALING,
 ];
 
-// In a real implementation this should check the specific Product.addonRequiresLiveSubscription flag,
-// but for now we follow the existing logic structure mapped to the new parameters.
+
+export const SUBSCRIPTION_SOURCES: CreditGrantSourceType[] = [
+  CreditGrantSourceType.SUBSCRIPTION_ALLOCATION,
+  CreditGrantSourceType.SUBSCRIPTION_RESET,
+];
+
+export const isSubscriptionSource = (
+  sourceType: CreditGrantSourceType | null | undefined,
+): boolean => !!sourceType && SUBSCRIPTION_SOURCES.includes(sourceType);
+
+
 export const isAddonUsable = (
-  planCode: string | null | undefined,
+  isFree: boolean | null | undefined,
   status: SubscriptionStatus | null | undefined,
-): boolean =>
-  !!planCode &&
-  planCode !== PLAN_CODES.FREE &&
-  !!status &&
-  ADDON_LIVE_STATUSES.includes(status);
+): boolean => isFree === false && !!status && ADDON_LIVE_STATUSES.includes(status);
 
 export interface GrantSubscriptionCmd {
   userId: string;
   productId: string;
   amount: number;
   description: string;
-  referenceId: string;
+  subscriptionId: string;
+  invoiceId?: string;
+  sourceType: CreditGrantSourceType;
   idempotencyKey: string;
   expiresAt?: Date;
 }
@@ -31,7 +37,8 @@ export interface RevokeSubscriptionCmd {
   userId: string;
   productId: string;
   description: string;
-  referenceId: string;
+  subscriptionId: string;
+  invoiceId?: string;
   idempotencyKey: string;
 }
 
@@ -41,7 +48,7 @@ export interface ResetSubscriptionCmd {
   amount: number;
   grantDescription: string;
   revokeDescription: string;
-  referenceId: string;
+  subscriptionId: string;
   idempotencyKey: string;
   expiresAt?: Date;
 }
@@ -51,7 +58,7 @@ export interface GrantAddonCmd {
   productId: string;
   amount: number;
   description: string;
-  referenceId: string;
+  paymentId: string;
   idempotencyKey: string;
   expiresAt?: Date;
 }
