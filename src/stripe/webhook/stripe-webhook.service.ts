@@ -42,7 +42,8 @@ export class StripeWebhookService {
       
       if (
         error instanceof DatabaseException ||
-        error instanceof ExternalServiceException
+        error instanceof ExternalServiceException ||
+        isUniqueViolation(error)
       ) {
         throw error;
       }

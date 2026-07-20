@@ -3,6 +3,7 @@ import { StripeService } from "./stripe.service";
 import { StripeController } from "./stripe.controller";
 import { StripeWebhookController } from "./webhook/stripe-webhook.controller";
 import { StripeWebhookService } from "./webhook/stripe-webhook.service";
+import { FreePlanDowngradeService } from "./webhook/free-plan-downgrade.service";
 import { UsersModule } from "../users/users.module";
 import { PricingModule } from "../pricing/pricing.module";
 import { InvoicePaidStrategy } from "./webhook/strategies/invoice-paid.strategy";
@@ -15,7 +16,7 @@ import { SetupIntentStrategy } from "./webhook/strategies/setup-intent.strategy"
 import { CustomerSubscriptionUpdatedStrategy } from "./webhook/strategies/customer.subscription.updated";
 import { CustomerSubscriptionDeletedStrategy } from "./webhook/strategies/customer.subscription.deleted";
 import { WebhookStrategyFactory } from "./webhook/strategies/webhook-strategy.factory";
-import { FreePlanDowngradeService } from "./webhook/free-plan-downgrade.service";
+
 import { SubscriptionSyncService } from "./sync/subscription-sync.service";
 import { PaidInvoiceSyncService } from "./sync/paid-invoice-sync.service";
 import { InvoiceRecordService } from "./invoice-record.service";

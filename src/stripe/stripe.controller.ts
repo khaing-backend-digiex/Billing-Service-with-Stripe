@@ -79,17 +79,13 @@ export class StripeController {
     @Body() dto: PurchaseSubscriptionDto,
   ) {
     const user = await this.usersService.findById(userId);
-    const currentSubscription = await this.prisma.subscription.findFirst({
-      where: { 
-        userId,
-        status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE, SubscriptionStatus.TRIALING] }
-      },
-      include: { pricingOption: true },
-    });
 
     const badDebtInvoice = await this.prisma.invoice.findFirst({
       where: {
-        subscription: { userId },
+        subscription: {
+          userId,
+          status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE, SubscriptionStatus.TRIALING] },
+        },
         status: { in: [InvoiceStatus.OPEN, InvoiceStatus.UNCOLLECTIBLE] },
       },
     });
@@ -98,16 +94,18 @@ export class StripeController {
       throw new BadRequestException("You have an unpaid invoice. Please pay it before creating a new subscription.");
     }
 
-    if (currentSubscription && currentSubscription.pricingOption) {
-      const isCancelledOrExpired =
-        currentSubscription.status === SubscriptionStatus.CANCELLED ||
-        currentSubscription.status === SubscriptionStatus.EXPIRED;
+    const currentSubscription = await this.prisma.subscription.findFirst({
+      where: { 
+        userId,
+        status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE, SubscriptionStatus.TRIALING] }
+      },
+      include: { pricingOption: true },
+    });
 
-      if (!isCancelledOrExpired) {
-        const price = Number(currentSubscription.pricingOption.price);
-        if (price > 0) {
-          throw new BadRequestException("Cannot create a new subscription checkout session while an active paid subscription exists. Please cancel your current subscription first.");
-        }
+    if (currentSubscription?.pricingOption) {
+      const isFreePlan = Number(currentSubscription.pricingOption.price) === 0;
+      if (!isFreePlan) {
+        throw new BadRequestException("Cannot create a new subscription checkout session while an active paid subscription exists. Please cancel your current subscription first.");
       }
     }
 
@@ -115,12 +113,15 @@ export class StripeController {
       where: { id: dto.pricingOptionId },
     });
 
-    if (!pricingOption || !pricingOption.providerPriceId) {
+    if (!pricingOption?.providerPriceId) {
       throw new BadRequestException("Pricing option not found or it does not have a valid Stripe Price ID");
     }
 
     const customerId = await this.stripeService.ensureValidCustomerId(user);
     const paymentMethod = await this.paymentMethodSync.getDefaultOrThrow(userId, customerId);
+
+
+    await this.stripeService.cancelFreeSubscriptionOnStripe(customerId);
 
     const result = await this.stripeService.createOffSessionSubscription(
       userId,

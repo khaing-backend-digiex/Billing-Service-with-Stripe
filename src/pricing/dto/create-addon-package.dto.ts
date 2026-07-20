@@ -6,6 +6,10 @@ export class CreateAddonPackageDto {
   @IsString()
   code!: string;
 
+  @ApiProperty({ description: 'Product ID this addon belongs to', example: 'cmr1xjlpu0000tkuh9no0psh5' })
+  @IsString()
+  productId!: string;
+
   @ApiProperty({ description: 'The name of the addon', example: '50 Extra Credits' })
   @IsString()
   name!: string;

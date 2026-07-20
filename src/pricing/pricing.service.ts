@@ -111,7 +111,7 @@ export class PricingService {
     });
   }
 
-  async createAddonPackage(data: { code: string; name: string; credits: number; price: number; currency: string }) {
+  async createAddonPackage(data: { code: string; name: string; credits: number; price: number; currency: string; productId: string; }) {
     try {
       const productId = await this.adapter.createProduct(data.name);
 
@@ -130,6 +130,7 @@ export class PricingService {
           currency: data.currency,
           provider: PaymentProvider.STRIPE,
           providerPriceId: priceId,
+          productId: data.productId,
         },
       });
     } catch (error) {

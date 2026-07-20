@@ -82,8 +82,8 @@ export class PaidInvoiceSyncService {
     }
 
     const plan = pricingOption.plan;
-    const periodStart = new Date(paidInvoice.periodStart * 1000);
-    const periodEnd = new Date(paidInvoice.periodEnd * 1000);
+    const periodStart = new Date((lineToUse?.periodStart ?? paidInvoice.periodStart) * 1000);
+    const periodEnd = new Date((lineToUse?.periodEnd ?? paidInvoice.periodEnd) * 1000);
     const resetMonths = plan.creditPolicy?.resetInterval === 'MONTHLY' 
       ? 1 
       : Math.max(1, Math.round((plan.creditPolicy?.intervalDays || 30) / 30));
@@ -158,43 +158,56 @@ export class PaidInvoiceSyncService {
           `Subscription ${subscription.id} repointed: ${subscription.providerSubscriptionId} → ${stripeSubscriptionId}`,
         );
       }
+
+      const fallbackSubs = await tx.subscription.findMany({
+        where: {
+          userId: subscription.userId,
+          productId: plan.productId,
+          id: { not: subscription.id },
+          status: SubscriptionStatus.ACTIVE,
+        }
+      });
+      for (const fallback of fallbackSubs) {
+        await tx.subscription.update({ where: { id: fallback.id }, data: { status: SubscriptionStatus.EXPIRED }});
+        await this.creditService.revokeSubscriptionCredits({
+          userId: subscription.userId,
+          productId: plan.productId,
+          description: `Fallback free plan expired upon Pro recovery`,
+          subscriptionId: fallback.id,
+          idempotencyKey: `revoke_fallback_${fallback.id}_${invoice.id}`,
+        }, tx);
+        this.logger.log(`Expired fallback Free subscription ${fallback.id} upon Pro recovery`);
+      }
       this.logger.log(
         `Subscription ${subscription.id} updated: status=ACTIVE, currentPeriodStart=${periodStart.toISOString()}, currentPeriodEnd=${periodEnd.toISOString()}, nextCreditResetAt=${nextCreditResetAt.toISOString()}`,
       );
 
-      const isUpdate = paidInvoice.billingReason === "subscription_update";
+      await this.creditService.revokeSubscriptionCredits(
+        {
+          userId: subscription.userId,
+          productId: plan.productId,
+          description: `Unused credits expired before renewal/upgrade`,
+          subscriptionId: subscription.id,
+          invoiceId: invoice.id,
+          idempotencyKey: `revoke_sub_${invoice.id}`,
+        },
+        tx,
+      );
 
-      if (!isUpdate) {
-        // subscriptionId là ENTITY (grant.sourceRef neo vào đây, reconcile hỏi theo nó),
-        // invoiceId là EVENT (chỉ vào sổ). idempotencyKey PHẢI giữ nguyên theo invoice: mỗi
-        // hoá đơn cấp đúng một lần. Neo key theo subscription.id thì kỳ gia hạn thứ hai
-        // trùng key kỳ đầu → không cấp credit, im lặng, mọi kỳ về sau.
-        await this.creditService.revokeSubscriptionCredits(
-          {
-            userId: subscription.userId,
-            productId: plan.productId,
-            description: `Unused credits expired before renewal`,
-            subscriptionId: subscription.id,
-            invoiceId: invoice.id,
-            idempotencyKey: `revoke_sub_${invoice.id}`,
-          },
-          tx,
-        );
-
-        await this.creditService.grantSubscriptionAllowance(
-          {
-            userId: subscription.userId,
-            productId: plan.productId,
-            amount: plan.creditPolicy?.creditAmount ?? 0,
-            description,
-            subscriptionId: subscription.id,
-            invoiceId: invoice.id,
-            sourceType: CreditGrantSourceType.SUBSCRIPTION_ALLOCATION,
-            idempotencyKey: `grant_sub_${invoice.id}`,
-          },
-          tx,
-        );
-      }
+      await this.creditService.grantSubscriptionAllowance(
+        {
+          userId: subscription.userId,
+          productId: plan.productId,
+          amount: plan.creditPolicy?.creditAmount ?? 0,
+          description,
+          subscriptionId: subscription.id,
+          invoiceId: invoice.id,
+          sourceType: CreditGrantSourceType.SUBSCRIPTION_ALLOCATION,
+          idempotencyKey: `grant_sub_${invoice.id}`,
+          expiresAt: nextCreditResetAt, 
+        },
+        tx,
+      );
 
       await tx.subscriptionEvent.create({
         data: {

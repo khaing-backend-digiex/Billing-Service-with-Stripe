@@ -16,7 +16,7 @@ export class InvoicePaidStrategy implements WebhookStrategy {
     private readonly pricingService: PricingService,
     private readonly paidInvoiceSync: PaidInvoiceSyncService,
     private readonly stripeService: StripeService,
-  ) {}
+  ) { }
 
   private readonly invoicePaid = "invoice.paid";
   canHandle(eventType: string): boolean {
@@ -29,7 +29,7 @@ export class InvoicePaidStrategy implements WebhookStrategy {
     const lineToUse =
       paidInvoice.lines.find(line => line.type === "subscription" && !line.isProration) ??
       paidInvoice.lines.find(line => !line.isProration && line.subscriptionId) ??
-      paidInvoice.lines.find(line => line.type === "subscription") ?? 
+      paidInvoice.lines.find(line => line.type === "subscription") ??
       paidInvoice.lines[0];
     const stripeSubscriptionId = paidInvoice.subscriptionId ?? lineToUse?.subscriptionId ?? null;
 
@@ -71,8 +71,8 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       return;
     }
 
-    const periodStart = new Date(paidInvoice.periodStart * 1000);
-    const periodEnd = new Date(paidInvoice.periodEnd * 1000);
+    const periodStart = new Date((lineToUse?.periodStart ?? paidInvoice.periodStart) * 1000);
+    const periodEnd = new Date((lineToUse?.periodEnd ?? paidInvoice.periodEnd) * 1000);
 
     let subscription = await this.prisma.subscription.findFirst({
       where: { providerSubscriptionId: stripeSubscriptionId }
@@ -90,7 +90,6 @@ export class InvoicePaidStrategy implements WebhookStrategy {
         }
       });
     } else {
-      // Expire any existing live subscription for this product
       await this.prisma.subscription.updateMany({
         where: {
           userId: user.id,

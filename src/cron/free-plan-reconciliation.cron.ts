@@ -12,6 +12,8 @@ import { PaymentSubscription } from "../payments/types/payment.types";
 import { UsersService } from "../users/users.service";
 import { SubscriptionSyncService } from "../stripe/sync/subscription-sync.service";
 import { PaidInvoiceSyncService } from "../stripe/sync/paid-invoice-sync.service";
+import { CreditService } from "../credits/credit.service";
+import { creditKey } from "../credits/credit.types";
 
 const GRACE_MS = 15 * 60_000;
 const BATCH_SIZE = 50;
@@ -33,6 +35,7 @@ export class FreePlanReconciliationCron {
     private readonly subscriptionSync: SubscriptionSyncService,
     private readonly paidInvoiceSync: PaidInvoiceSyncService,
     private readonly prisma: PrismaService,
+    private readonly creditService: CreditService,
   ) { }
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -167,15 +170,50 @@ export class FreePlanReconciliationCron {
         return this.healFromStripe(user, activeSub);
       }
 
-      const freeSub = await this.stripeService.subscribeToFreePlan(customerId);
-      if (!freeSub) {
+      const freePlan = await this.prisma.plan.findFirst({
+        where: { isFree: true },
+        include: { pricingOptions: true, creditPolicy: true },
+      });
+      const freeOption = freePlan?.pricingOptions[0];
+
+      if (!freeOption) {
         this.logger.warn(
           `User ${user.id}: free plan is not configured – no subscription created`,
         );
         return ReconcileOutcome.SKIPPED;
       }
 
-      this.logger.log(`User ${user.id}: free subscription ${freeSub.id} created`);
+      const nextCreditResetAt = new Date();
+      nextCreditResetAt.setMonth(nextCreditResetAt.getMonth() + 1); 
+
+      const sub = await this.prisma.subscription.create({
+        data: {
+          userId: user.id,
+          productId: freeOption.productId,
+          pricingOptionId: freeOption.id,
+          status: 'ACTIVE',
+          billingMode: 'NONE',
+          currentPeriodStart: new Date(),
+          currentPeriodEnd: new Date(new Date().setFullYear(new Date().getFullYear() + 100)),
+          nextCreditResetAt: nextCreditResetAt,
+        },
+      });
+
+      const policy = freePlan.creditPolicy;
+      if (policy) {
+        await this.creditService.resetSubscriptionAllowance({
+          userId: user.id,
+          productId: freeOption.productId,
+          amount: policy.creditAmount,
+          grantDescription: `Initial Free plan credits (Reconciliation)`,
+          revokeDescription: `Reset`,
+          subscriptionId: sub.id,
+          idempotencyKey: creditKey.subscriptionReset(sub.id, sub.nextCreditResetAt),
+          expiresAt: sub.nextCreditResetAt, 
+        });
+      }
+
+      this.logger.log(`User ${user.id}: free subscription created in local DB`);
       return ReconcileOutcome.CREATED;
     } catch (err) {
       this.logger.error(

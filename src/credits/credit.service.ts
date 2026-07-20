@@ -72,11 +72,10 @@ export class CreditService {
         };
       }
 
-      // 2. Prepare allocation sources
       const sources: AllocationSource[] = [];
       for (const grant of balances.grants) {
         if (grant.sourceType === 'ADDON' && !balances.addonIsActive) {
-           continue; // Addon credits are frozen
+           continue;
         }
         sources.push({
           grantId: grant.id,
@@ -85,7 +84,6 @@ export class CreditService {
         });
       }
 
-      // 3. Allocate credits
       const allocation = allocateCredits(sources, cmd.amount);
       if (allocation.shortfall > 0) {
         throw new InsufficientCreditsException(
@@ -93,7 +91,6 @@ export class CreditService {
         );
       }
 
-      // 4. Apply deltas (Single-step consume)
       for (const alloc of allocation.allocations) {
         const entry: TransactionEntry = {
           type: CreditTransactionType.USAGE,
@@ -344,16 +341,13 @@ export class CreditService {
          nextBillingDate: sub.currentPeriodEnd,
          subscriptionCredits: credits.sub,
          addonCredits: credits.addon,
-         // Cột isFree, không phải chuỗi code: getFreePriceId() quyết định free tier bằng
-         // cột, nên gate freeze phải hỏi cùng một nguồn sự thật.
+        
          addonIsActive: isAddonUsable(sub.pricingOption.plan.isFree, sub.status),
        });
 
-       // Remove from map to track which products have explicit subscriptions
        productCredits.delete(productId);
     }
     
-    // For any products that have credits but NO subscription row (rare/legacy)
     for (const [productId, credits] of productCredits.entries()) {
        statuses.push({
          productId,

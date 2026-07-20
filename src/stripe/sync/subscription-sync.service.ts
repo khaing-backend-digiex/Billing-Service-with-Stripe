@@ -10,6 +10,9 @@ import { PrismaService } from "../../database/prisma.service";
 import { PricingService } from "../../pricing/pricing.service";
 import { PaymentSubscription } from "../../payments/types/payment.types";
 import { StripeService } from "../stripe.service";
+import { CreditService } from "../../credits/credit.service";
+import { creditKey } from "../../credits/credit.types";
+import { BillingMode } from "@prisma/client";
 
 const LIVE_STATUSES: SubscriptionStatus[] = [
   SubscriptionStatus.ACTIVE,
@@ -27,7 +30,8 @@ export class SubscriptionSyncService {
     private readonly prisma: PrismaService,
     private readonly pricingService: PricingService,
     private readonly stripeService: StripeService,
-  ) {}
+    private readonly creditService: CreditService,
+  ) { }
 
 
   async syncFromStripe(sub: PaymentSubscription): Promise<Subscription | null> {
@@ -109,6 +113,7 @@ export class SubscriptionSyncService {
             trialStart,
             trialEnd,
             cancelledAt,
+            autoRenew: sub.cancelAtPeriodEnd === false,
             provider: PaymentProvider.STRIPE,
             providerSubscriptionId: sub.id,
           },
@@ -135,7 +140,7 @@ export class SubscriptionSyncService {
         });
         this.logger.log(
           `Plan ${isUpgrade ? "upgraded" : "downgraded"} for user ${user.id}: ` +
-            `${existing.pricingOption.name} → ${pricingOption.name}`,
+          `${existing.pricingOption.name} → ${pricingOption.name}`,
         );
       }
 
@@ -153,5 +158,73 @@ export class SubscriptionSyncService {
 
     this.logger.log(`Subscription synced for user ${user.id} (${sub.id})`);
     return localSubscription;
+  }
+
+  async provisionFreePlanFallback(userId: string, productId: string, tx?: any) {
+    const doProvision = async (client: any) => {
+      await client.user.update({
+        where: { id: userId },
+        data: { updatedAt: new Date() }
+      });
+
+      const freePlan = await client.plan.findFirst({
+        where: { isFree: true, productId },
+        include: { pricingOptions: true, creditPolicy: true },
+      });
+      const freeOption = freePlan?.pricingOptions?.[0];
+
+      if (!freeOption) {
+        this.logger.warn(`Could not provision free plan: no free option found for product ${productId}`);
+        return;
+      }
+
+      const existingLive = await client.subscription.findFirst({
+        where: {
+          userId,
+          productId,
+          status: { in: LIVE_STATUSES },
+        }
+      });
+
+      if (existingLive) {
+        this.logger.log(`Live plan already exists for user ${userId}, skipping fallback provision`);
+        return;
+      }
+
+      const freeSub = await client.subscription.create({
+        data: {
+          userId,
+          productId,
+          pricingOptionId: freeOption.id,
+          status: SubscriptionStatus.ACTIVE,
+          billingMode: BillingMode.NONE,
+          currentPeriodStart: new Date(),
+          currentPeriodEnd: new Date(new Date().setFullYear(new Date().getFullYear() + 100)),
+          nextCreditResetAt: new Date(),
+        },
+      });
+
+      const policy = freePlan.creditPolicy;
+      if (policy) {
+        await this.creditService.resetSubscriptionAllowance({
+          userId,
+          productId,
+          amount: policy.creditAmount,
+          grantDescription: `Initial Free plan credits (Downgrade/Fallback)`,
+          revokeDescription: `Reset`,
+          subscriptionId: freeSub.id,
+          idempotencyKey: creditKey.subscriptionReset(freeSub.id, freeSub.nextCreditResetAt),
+          expiresAt: freeSub.nextCreditResetAt,
+        }, client);
+      }
+
+      this.logger.log(`Provisioned new Free subscription for user ${userId} (fallback)`);
+    };
+
+    if (tx) {
+      await doProvision(tx);
+    } else {
+      await this.prisma.$transaction(doProvision);
+    }
   }
 }

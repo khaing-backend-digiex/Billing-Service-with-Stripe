@@ -7,7 +7,7 @@ import {
   SubscriptionEventType,
   InvoiceStatus,
   PaymentProvider,
-  
+
 } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
@@ -15,6 +15,8 @@ import { InvoiceRecordService } from "../../invoice-record.service";
 import { StripeService } from "../../stripe.service";
 import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
 import { PLAN_CODES } from "@/common/constants/plan.constants";
+import { CreditService } from "../../../credits/credit.service";
+import { SubscriptionSyncService } from "../../sync/subscription-sync.service";
 
 
 const MAX_RETRY_ATTEMPTS = 3;
@@ -27,6 +29,7 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly stripeService: StripeService,
+    private readonly creditService: CreditService,
   ) { }
   private readonly invoicePaymentFailed = "invoice.payment_failed";
   canHandle(eventType: string): boolean {
@@ -44,6 +47,7 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
       const subscription = stripeSubscriptionId
         ? await tx.subscription.findFirst({
           where: { providerSubscriptionId: stripeSubscriptionId },
+          include: { pricingOption: true },
         })
         : null;
 
@@ -101,12 +105,54 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
 
       const isUpdate = stripeInvoice.billing_reason === 'subscription_update';
 
+      const isSubscriptionUpdate =
+        stripeInvoice.billing_reason === 'subscription_update';
+
+      if (isSubscriptionUpdate) {
+        return;
+      }
+
+      const freshSub = await tx.subscription.findUnique({
+        where: { id: subscription.id },
+        select: { status: true },
+      });
+
+      const isTerminalStatus =
+        freshSub?.status === SubscriptionStatus.CANCELLED ||
+        freshSub?.status === SubscriptionStatus.EXPIRED;
+
+      if (isTerminalStatus) {
+        this.logger.log(
+          `Subscription ${subscription.id} already ${freshSub.status} – skipping PAST_DUE downgrade`,
+        );
+        return;
+      }
+
       await tx.subscription.update({
         where: { id: subscription.id },
         data: {
-          status: isUpdate ? undefined : SubscriptionStatus.PAST_DUE,
+          status: SubscriptionStatus.PAST_DUE,
         },
       });
+
+      const productId =
+        subscription.productId ?? subscription.pricingOption?.productId;
+
+      if (!productId) {
+        return;
+      }
+
+      await this.creditService.revokeSubscriptionCredits(
+        {
+          userId: subscription.userId,
+          productId,
+          description: `Subscription past due: ${subscription.id}`,
+          subscriptionId: subscription.id,
+          idempotencyKey: `revoke_past_due_${stripeInvoice.id}`,
+        },
+        tx
+      );
+
 
       await tx.subscriptionEvent.create({
         data: {
@@ -127,11 +173,11 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
 
     if (!result?.subscription || !stripeSubscriptionId) return;
 
-    await this.downgradeToFreeIfRetriesExhausted(result.invoice, result.subscription, stripeInvoice, stripeSubscriptionId);
+    await this.cancelIfRetriesExhausted(result.invoice, result.subscription, stripeInvoice, stripeSubscriptionId);
   }
 
 
-  private async downgradeToFreeIfRetriesExhausted(
+  private async cancelIfRetriesExhausted(
     invoice: Invoice,
     subscription: Subscription,
     stripeInvoice: Stripe.Invoice,
@@ -143,22 +189,24 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
 
     if (retriesUsed < MAX_RETRY_ATTEMPTS && !windowExceeded) return;
 
-    this.logger.warn(
-      `Retries exhausted for subscription ${subscription.id} ` +
-      `(retries: ${retriesUsed}/${MAX_RETRY_ATTEMPTS}, window exceeded: ${windowExceeded}) – downgrading to free`,
-    );
-
-    const freePlan = await this.prisma.plan.findFirst({
-      where: { code: PLAN_CODES.FREE
-       },
-      include: { pricingOptions: true },
+    const current = await this.prisma.subscription.findUnique({
+      where: { id: subscription.id },
+      select: { status: true },
     });
-    const freePricingOption = freePlan?.pricingOptions?.[0];
-
-    if (!freePricingOption?.providerPriceId) {
-      await this.stripeService.cancelSubscriptionNow(stripeSubscriptionId);
+    if (
+      current?.status === SubscriptionStatus.CANCELLED ||
+      current?.status === SubscriptionStatus.EXPIRED
+    ) {
+      this.logger.log(
+        `Subscription ${subscription.id} already ${current.status} – skipping retry-exhausted cancellation`,
+      );
       return;
     }
+
+    this.logger.warn(
+      `Retries exhausted for subscription ${subscription.id} ` +
+      `(retries: ${retriesUsed}/${MAX_RETRY_ATTEMPTS}, window exceeded: ${windowExceeded}) – cancelling subscription`,
+    );
 
     await this.stripeService.cancelSubscriptionNow(stripeSubscriptionId);
 

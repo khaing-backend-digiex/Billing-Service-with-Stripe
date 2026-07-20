@@ -9,6 +9,8 @@ import { PrismaService } from "../database/prisma.service";
 import { StripeService } from "../stripe/stripe.service";
 import { UsersService } from "../users/users.service";
 import { User } from "@prisma/client";
+import { CreditService } from "../credits/credit.service";
+import { creditKey } from "../credits/credit.types";
 
 export type PublicUser = Pick<User, "email" | "name" | "roles">;
 
@@ -26,6 +28,7 @@ export class UserProvisioningService implements OnApplicationBootstrap {
     private readonly prisma: PrismaService,
     private readonly stripeService: StripeService,
     private readonly usersService: UsersService,
+    private readonly creditService: CreditService,
   ) { }
 
   async onApplicationBootstrap() {
@@ -95,10 +98,19 @@ export class UserProvisioningService implements OnApplicationBootstrap {
   private async ensureStripeSetup(user: User): Promise<void> {
     const customerId = await this.stripeService.ensureCustomerId(user);
     try {
-      await this.stripeService.ensureFreeSubscription(customerId);
+      const freePlan = await this.prisma.plan.findFirst({
+        where: { isFree: true },
+        include: { pricingOptions: true, creditPolicy: true },
+      });
+      const freeOption = freePlan?.pricingOptions[0];
+
+      if (freeOption) {
+        await this.stripeService.ensureFreeSubscription(customerId);
+        this.logger.log(`Triggered Stripe Free subscription creation for user ${user.id}. Local DB sync will be handled by webhook.`);
+      }
     } catch (error) {
       this.logger.error(
-        `Failed to register free plan for user ${user.id} with Stripe customer ${customerId}`,
+        `Failed to register free plan for user ${user.id}`,
         error,
       );
       throw new InternalServerErrorException(

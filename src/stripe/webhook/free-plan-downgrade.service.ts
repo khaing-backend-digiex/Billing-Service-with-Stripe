@@ -74,6 +74,16 @@ export class FreePlanDowngradeService {
       : addCalendarMonths(periodStart, 1);
 
     await this.prisma.$transaction(async (tx) => {
+      await tx.subscription.updateMany({
+        where: {
+          userId: subscription.userId,
+          productId: subscription.productId,
+          status: SubscriptionStatus.ACTIVE,
+          id: { not: subscription.id },
+        },
+        data: { status: SubscriptionStatus.EXPIRED },
+      });
+
       if (freePricingOption) {
         const freePlan = freePricingOption.plan as any;
         const resetMonths = freePlan.creditPolicy?.resetInterval === 'MONTHLY' 

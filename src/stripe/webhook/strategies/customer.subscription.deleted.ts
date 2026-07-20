@@ -1,17 +1,16 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, forwardRef, Inject } from "@nestjs/common";
 import Stripe from "stripe";
 import {
   SubscriptionStatus,
   SubscriptionEventType,
-  CreditTransactionType,
-  ReferenceType,
-  InvoiceStatus,
+  BillingMode
 } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
-import { FreePlanDowngradeService } from "../free-plan-downgrade.service";
 import { CreditService } from "../../../credits/credit.service";
 import { creditKey } from "../../../credits/credit.types";
+import { SubscriptionSyncService } from "../../sync/subscription-sync.service";
+import { StripeService } from "../../stripe.service";
 
 @Injectable()
 export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
@@ -19,8 +18,10 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly freePlanDowngrade: FreePlanDowngradeService,
     private readonly creditService: CreditService,
+    private readonly subscriptionSyncService: SubscriptionSyncService,
+    @Inject(forwardRef(() => StripeService))
+    private readonly stripeService: StripeService,
   ) {}
 
   private readonly customerSubcriptionDeleted = "customer.subscription.deleted"
@@ -38,7 +39,7 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
     });
 
     if (!subscription) {
-      this.logger.error(`No local subscription found for Stripe subscription ${sub.id}`);
+      this.logger.warn(`No local subscription found for Stripe subscription ${sub.id}. This is normal for abandoned checkouts.`);
       return;
     }
 
@@ -79,32 +80,29 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
       this.logger.log(`Subscription ${subscription.id} already CANCELLED`);
     }
 
-  
-    if (subscription.providerSubscriptionId !== sub.id) {
-      this.logger.log(
-        `Subscription ${subscription.id} already points to ${subscription.providerSubscriptionId} (not ${sub.id}) — skipping downgrade (upgrade detected)`,
-      );
+    const user = await this.prisma.user.findUnique({ where: { id: subscription.userId }});
+    let stripeFreeCreated = false;
+
+    const isFreePlan = Number(subscription.pricingOption?.price || 0) === 0;
+    if (isFreePlan) {
+      this.logger.log(`Deleted subscription ${subscription.id} was already a Free plan. Skipping Free plan fallback provision.`);
       return;
     }
 
-    const hasUnpaidInvoice = await this.prisma.invoice.findFirst({
-      where: {
-        subscriptionId: subscription.id,
-        status: { in: [InvoiceStatus.OPEN, InvoiceStatus.UNCOLLECTIBLE] },
-      },
-    });
-
-    if (hasUnpaidInvoice) {
-      this.logger.warn(
-        `Subscription ${subscription.id} cancelled with unpaid debt (invoice ${hasUnpaidInvoice.id}). Banning instead of downgrading to Free.`,
-      );
-      return;
+    if (user?.providerCustomerId) {
+       const stripeFreeSub = await this.stripeService.ensureFreeSubscription(user.providerCustomerId);
+       if (stripeFreeSub) {
+          stripeFreeCreated = true;
+          this.logger.log(`Created Stripe Free subscription fallback for user ${user.id}`);
+       }
     }
 
-    await this.freePlanDowngrade.downgradeToFree(
-      subscription,
-      sub,
-      sub.cancellation_details?.reason ?? "subscription_deleted",
-    );
+    if (!stripeFreeCreated) {
+      const productId = subscription.productId ?? subscription.pricingOption?.productId;
+      if (productId) {
+        this.logger.log(`Falling back to local Free plan provision for user ${user?.id}`);
+        await this.subscriptionSyncService.provisionFreePlanFallback(subscription.userId, productId);
+      }
+    }
   }
 }

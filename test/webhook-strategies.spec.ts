@@ -18,7 +18,6 @@ import { PaymentIntentSucceededStrategy } from "../src/stripe/webhook/strategies
 import { PaidInvoiceSyncService } from "../src/stripe/sync/paid-invoice-sync.service";
 import { InvoiceRecordService } from "../src/stripe/invoice-record.service";
 import { PaymentRecordService } from "../src/stripe/payment-record.service";
-import { FreePlanDowngradeService } from "../src/stripe/webhook/free-plan-downgrade.service";
 import { SubscriptionSyncService } from "../src/stripe/sync/subscription-sync.service";
 import { StripeAdapter } from "../src/stripe/adapter/stripe.adapter";
 import { TestContext, invoicePayload, rand, stripeEvent, subscriptionPayload } from "./helpers/context";
@@ -38,7 +37,6 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
     mapRawInvoice: (raw: unknown) => adapter.mapRawInvoice(raw),
     mapRawSubscription: (raw: unknown) => adapter.mapRawSubscription(raw),
   };
-  const freePlanDowngradeMock = { downgradeToFree: jest.fn().mockResolvedValue(undefined) };
   // PricingService.findByProviderPriceId chỉ query DB → stub chạy query thật
   const pricingServiceStub = {
     findByProviderPriceId: (priceId: string) =>
@@ -293,6 +291,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       new InvoicePaymentFailedStrategy(
         ctx.prisma,
         stripeServiceMock as any,
+        creditService,
       );
 
     it("records retry info, sets PAST_DUE; does not cancel on first failure", async () => {
@@ -322,12 +321,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       expect(stripeServiceMock.cancelSubscriptionNow).not.toHaveBeenCalled();
     });
 
-    // TODO(Bước 3): test này encode model cũ "Free = Stripe sub đổi giá" – nó kỳ vọng
-    // `upgradeSubscriptionTier` để hạ về free trên chính sub đó. Code đã cancel thay vì
-    // đổi giá, và spec D9 chốt: hết retry → Stripe cancel → webhook `deleted` → row Free
-    // MỚI (Free có billingMode=NONE, không có Stripe sub phía sau). Code gần spec hơn test.
-    // Viết lại khi Bước 3 đổi lifecycle sang Model B, đừng sửa code cho vừa test này.
-    it.skip("downgrades to the free plan and marks invoice UNCOLLECTIBLE when retries are exhausted", async () => {
+    it("cancels the subscription and marks invoice UNCOLLECTIBLE when retries are exhausted", async () => {
       const user = await ctx.createUser();
       const sub = await ctx.createSubscription(user.id);
       const payload = invoicePayload(sub.providerSubscriptionId!, ctx.basicOption.providerPriceId!, {
@@ -337,10 +331,8 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
 
       await strategy().handle(stripeEvent("invoice.payment_failed", payload));
 
-      // Hết retry giờ HẠ VỀ FREE (đổi giá trên chính sub đó), không huỷ sub nữa.
-      // `cancelSubscriptionNow` chỉ còn là đường lui khi không có gói free hoặc khi hạ gói lỗi.
-      expect(stripeServiceMock.upgradeSubscriptionTier).toHaveBeenCalled();
-      expect(stripeServiceMock.cancelSubscriptionNow).not.toHaveBeenCalled();
+      expect(stripeServiceMock.cancelSubscriptionNow).toHaveBeenCalled();
+      expect(stripeServiceMock.upgradeSubscriptionTier).not.toHaveBeenCalled();
 
       const invoice = await ctx.prisma.invoice.findUniqueOrThrow({
         where: { providerInvoiceId: payload.id },
@@ -355,11 +347,11 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
     const strategy = () =>
       new CustomerSubscriptionUpdatedStrategy(
         ctx.prisma,
-        freePlanDowngradeMock as any,
         new SubscriptionSyncService(
           ctx.prisma,
           pricingServiceStub as any,
           stripeServiceMock as any,
+          creditService,
         ),
         stripeServiceMock as any,
         creditService,
@@ -405,14 +397,24 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       expect(forfeits).toHaveLength(1);
       expect(forfeits[0].amount).toBe(-42);
 
-      expect(freePlanDowngradeMock.downgradeToFree).toHaveBeenCalledTimes(1);
+      expect(stripeServiceMock.ensureFreeSubscription).toHaveBeenCalledTimes(1);
     });
   });
 
   // ───────────────────────── customer.subscription.deleted ─────────────────────────
   describe("customer.subscription.deleted", () => {
     const strategy = () =>
-      new CustomerSubscriptionDeletedStrategy(ctx.prisma, freePlanDowngradeMock as any, creditService);
+      new CustomerSubscriptionDeletedStrategy(
+        ctx.prisma,
+        creditService,
+        new SubscriptionSyncService(
+          ctx.prisma,
+          pricingServiceStub as any,
+          stripeServiceMock as any,
+          creditService,
+        ),
+        stripeServiceMock as any,
+      );
 
     it("cancels the local subscription, forfeits credits, triggers downgrade", async () => {
       const user = await ctx.createUser();
@@ -435,7 +437,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       });
       expect(forfeits).toHaveLength(1);
       expect(forfeits[0].amount).toBe(-30);
-      expect(freePlanDowngradeMock.downgradeToFree).toHaveBeenCalledTimes(1);
+      expect(stripeServiceMock.ensureFreeSubscription).toHaveBeenCalledTimes(1);
     });
 
     it("is idempotent on replay: no duplicate CANCELLED event, downgrade still re-attempted", async () => {
@@ -453,150 +455,11 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
         where: { subscriptionId: sub.id, type: SubscriptionEventType.CANCELLED },
       });
       expect(events).toHaveLength(1);
-      expect(freePlanDowngradeMock.downgradeToFree).toHaveBeenCalledTimes(2);
+      expect(stripeServiceMock.ensureFreeSubscription).toHaveBeenCalledTimes(2);
     });
   });
 
-  // ───────────── downgrade → invoice.paid: ai là chủ sở hữu việc cấp credit ─────────────
-  // Bug thật (credits-refactor.md §2.4, user 13): free-plan-downgrade cấp credit, rồi
-  // invoice.paid ($0) của chính free sub vừa tạo cấp lần nữa → sổ có 2 bút toán RENEWAL
-  // cho một sự kiện, trong khi số dư chỉ tăng một lần (vì là phép gán). Sổ lệch số dư.
-  describe("free plan downgrade", () => {
-    const invoicePaid = () =>
-      new InvoicePaidStrategy(
-        ctx.prisma,
-        pricingServiceStub as any,
-        new PaidInvoiceSyncService(
-          ctx.prisma,
-          pricingServiceStub as any,
-          new InvoiceRecordService(ctx.prisma),
-          new PaymentRecordService(ctx.prisma),
-          creditService,
-        ),
-        stripeServiceMock as any,
-      );
 
-    // TODO(Bước 3): test kỳ vọng KHÔNG có event CREATED khi rớt về free. Trong Model B,
-    // `invoice.paid` với billing_reason=subscription_create CHÍNH LÀ sự kiện tạo row nên
-    // CREATED là đúng ngữ nghĩa. Cả kịch bản này (free = Stripe sub) sẽ được viết lại ở Bước 3.
-    it.skip("grants the free plan credits exactly once – invoice.paid owns the grant", async () => {
-      const user = await ctx.createUser();
-      const sub = await ctx.createSubscription(user.id, {
-        subscriptionCreditsRemaining: 30,
-      });
-
-      // User đang ở gói trả phí ⇒ đã từng có hoá đơn được trả. Đây là mốc để phân biệt
-      // "subscription mới" với "sub free sinh ra do downgrade".
-      await ctx.prisma.invoice.create({
-        data: {
-          subscriptionId: sub.id,
-          provider: PaymentProvider.STRIPE,
-          providerInvoiceId: `in_paid_${rand()}`,
-          amount: 10,
-          currency: "usd",
-          status: InvoiceStatus.PAID,
-          dueAt: new Date(),
-          paidAt: new Date(),
-        },
-      });
-
-      const now = Math.floor(Date.now() / 1000);
-      const freeSubId = `sub_free_${rand()}`;
-      const stripeMock = {
-        ...stripeServiceMock,
-        getFreePriceId: jest.fn().mockResolvedValue(ctx.freeOption.providerPriceId),
-        ensureFreeSubscription: jest.fn().mockResolvedValue({
-          id: freeSubId,
-          customerId: user.providerCustomerId,
-          status: SubscriptionStatus.ACTIVE,
-          items: [
-            {
-              priceId: ctx.freeOption.providerPriceId,
-              currentPeriodStart: now,
-              currentPeriodEnd: now + 30 * 86_400,
-            },
-          ],
-          currentPeriodStart: now,
-          currentPeriodEnd: now + 30 * 86_400,
-          cancelAtPeriodEnd: false,
-          created: now,
-        }),
-      };
-
-      const deleted = new CustomerSubscriptionDeletedStrategy(
-        ctx.prisma,
-        new FreePlanDowngradeService(ctx.prisma, stripeMock as any),
-        creditService,
-      );
-
-      await deleted.handle(
-        stripeEvent(
-          "customer.subscription.deleted",
-          subscriptionPayload(user.providerCustomerId!, ctx.basicOption.providerPriceId!, {
-            id: sub.providerSubscriptionId,
-            status: "canceled",
-          }),
-        ),
-      );
-
-      // Sau downgrade: credit cũ đã bị đốt, và KHÔNG có bút toán cấp nào.
-      const afterDowngrade = await ctx.prisma.subscription.findUniqueOrThrow({
-        where: { id: sub.id },
-      });
-      expect(afterDowngrade.providerSubscriptionId).toBe(freeSubId);
-      expect(afterDowngrade.pricingOptionId).toBe(ctx.freeOption.id);
-      expect(afterDowngrade.subscriptionCreditsRemaining).toBe(0);
-      expect(
-        await ctx.prisma.creditTransaction.findMany({
-          where: { userId: user.id, type: CreditTransactionType.RENEWAL },
-        }),
-      ).toHaveLength(0);
-
-      // Stripe phát hành hoá đơn $0 cho free sub vừa tạo → đây mới là chỗ cấp credit.
-      await invoicePaid().handle(
-        stripeEvent(
-          "invoice.paid",
-          invoicePayload(freeSubId, ctx.freeOption.providerPriceId!, {
-            customer: user.providerCustomerId,
-            billing_reason: "subscription_create",
-            amount_due: 0,
-            amount_paid: 0,
-            payment_intent: null,
-          }),
-        ),
-      );
-
-      const afterPaid = await ctx.prisma.subscription.findUniqueOrThrow({
-        where: { id: sub.id },
-      });
-      expect(afterPaid.subscriptionCreditsRemaining).toBe(ctx.freePlan.creditPolicy.creditAmount);
-
-      // Trước khi sửa: 2 bút toán RENEWAL (+50 downgrade, +50 invoice.paid) cho 1 sự kiện.
-      const renewals = await ctx.prisma.creditTransaction.findMany({
-        where: { userId: user.id, type: CreditTransactionType.RENEWAL },
-      });
-      expect(renewals).toHaveLength(1);
-      expect(renewals[0].amount).toBe(ctx.freePlan.creditPolicy.creditAmount);
-
-      // Sổ khớp số dư: -30 (đốt) rồi +50 (cấp) = 20 delta, số dư 30 → 50. ✓
-      const forfeits = await ctx.prisma.creditTransaction.findMany({
-        where: { userId: user.id, type: CreditTransactionType.EXPIRATION },
-      });
-      expect(forfeits).toHaveLength(1);
-      expect(forfeits[0].amount).toBe(-30);
-
-      // Hoá đơn đầu của free sub mang billing_reason=subscription_create, nhưng đây KHÔNG
-      // phải subscription mới – nó là hạ gói. Không được ghi CREATED chồng lên DOWNGRADED.
-      const events = await ctx.prisma.subscriptionEvent.findMany({
-        where: { subscriptionId: sub.id },
-        select: { type: true },
-      });
-      const types = events.map((e) => e.type);
-      expect(types).toContain(SubscriptionEventType.DOWNGRADED);
-      expect(types).not.toContain(SubscriptionEventType.CREATED);
-      expect(types).toContain(SubscriptionEventType.RENEWED);
-    });
-  });
 
   // ───────────────────────── payment_intent.succeeded ─────────────────────────
   describe("payment_intent.succeeded", () => {
