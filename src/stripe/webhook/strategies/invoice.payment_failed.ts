@@ -14,7 +14,6 @@ import { PaymentInvoice } from "../../../payments/types/payment.types";
 import { STRIPE_INVOICE_LINE_TYPE } from "../../../common/constants/stripe.constants";
 import { PLAN_CODES } from "@/common/constants/plan.constants";
 
-
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_WINDOW_MS = 3 * 86_400_000;
 
@@ -48,9 +47,6 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
         })
         : null;
 
-      // Không có sub local thì recordFailedAttempt chỉ update-nếu-có (updateMany) rồi trả null:
-      // webhook out-of-order là chuyện thường của Model B (row chỉ sinh ở invoice.paid đầu tiên),
-      // nên "chưa có invoice local" phải là ignore + log, không được throw (§8).
       const invoice = await this.invoiceService.recordFailedAttempt(
         tx,
         stripeInvoice,

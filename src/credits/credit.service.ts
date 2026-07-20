@@ -201,7 +201,6 @@ export class CreditService {
           amount: cmd.amount,
           description: cmd.grantDescription,
           subscriptionId: cmd.subscriptionId,
-          // Reset là cron cấp trong kỳ, không có hoá đơn nào đứng sau — nên không invoiceId.
           sourceType: CreditGrantSourceType.SUBSCRIPTION_RESET,
           idempotencyKey: creditKey.grantStep(cmd.idempotencyKey),
           expiresAt: cmd.expiresAt,
@@ -288,7 +287,6 @@ export class CreditService {
   }
 
   async getUserPackageStatus(userId: string): Promise<UserPackageStatus[]> {
-    // In preparation for Step 3, we fetch all active subscriptions for the user
     const subscriptions = await this.prisma.subscription.findMany({
       where: { 
         userId,

@@ -87,10 +87,6 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       where: { providerSubscriptionId: stripeSubscriptionId }
     });
 
-    // Row terminal là BẤT BIẾN (§8). Không lọc status ở đây thì `invoice.paid` của một sub
-    // đã chết sẽ kéo row về ACTIVE — kịch bản thật: sub Free bị hủy khi user lên Pro vẫn
-    // gia hạn $0 và phát invoice.paid, làm row Free EXPIRED sống dậy bên cạnh row Pro đang
-    // live → hai row live cùng (user, product) → vỡ partial unique index §13.1.
     if (existing && TERMINAL_STATUSES.includes(existing.status)) {
       this.logger.warn(
         `Subscription ${existing.id} is ${existing.status} – ignoring late invoice ` +
@@ -100,7 +96,6 @@ export class InvoicePaidStrategy implements WebhookStrategy {
     }
 
     let subscription;
-    // Stripe sub bị thay thế bởi sub mới này — hủy SAU khi DB commit (xem dưới).
     let supersededStripeSubIds: string[] = [];
 
     if (existing) {
@@ -116,8 +111,6 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       });
     } else {
       const result = await this.prisma.$transaction(async (tx) => {
-        // findMany trước updateMany: cần giữ lại providerSubscriptionId của các row sắp bị
-        // thay thế thì mới biết phải hủy Stripe sub nào (updateMany không trả row).
         const superseded = await tx.subscription.findMany({
           where: {
             userId: user.id,
@@ -157,10 +150,6 @@ export class InvoicePaidStrategy implements WebhookStrategy {
 
     await this.paidInvoiceSync.applyPaidInvoice(paidInvoice, subscription.id);
 
-    // Hủy Stripe sub cũ (điển hình: sub Free giá 0) CHỈ sau khi DB đã commit — gọi Stripe là
-    // side-effect không rollback được, đưa vào transaction thì transaction fail sẽ để lại
-    // user không còn sub nào (§8). Lỗi ở đây không được làm fail webhook: credit đã cấp rồi,
-    // ném lỗi chỉ khiến Stripe retry và cấp lại. Sub sót lại là việc của reconciliation cron.
     for (const supersededId of supersededStripeSubIds) {
       try {
         await this.stripeService.cancelSubscriptionNow(supersededId);

@@ -6,7 +6,6 @@ import { CreatePlanDto } from "./dto/create-plan.dto";
 import { CreatePricingOptionDto } from "./dto/create-pricing-option.dto";
 import { CreateBillingCycleDto } from "./dto/create-billing-cycle.dto";
 import { CreateAddonPackageDto } from "./dto/create-addon-package.dto";
-import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { Roles } from "../common/decorators/roles.decorator";
 import { Role } from "../common/constants/roles.enum";

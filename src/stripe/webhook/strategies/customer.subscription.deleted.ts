@@ -45,12 +45,6 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
       return;
     }
 
-    // EXPIRED ≠ CANCELLED, và phân biệt được là điều kiện để không phá (§8).
-    // EXPIRED = row bị một row live khác thay thế — chính invoice-paid đặt trạng thái này khi
-    // user lên gói mới. Kịch bản thật: lên Pro → row Free thành EXPIRED → hủy sub Free trên
-    // Stripe → Stripe phát `deleted` cho sub Free đó. Chạy tiếp là hỏng: revokeSubscriptionCredits
-    // quét theo (userId, productId), KHÔNG theo subscriptionId, nên nó xóa luôn credit của row
-    // Pro vừa cấp — user mất đúng số credit vừa trả tiền mua.
     if (subscription.status === SubscriptionStatus.EXPIRED) {
       this.logger.log(
         `Subscription ${subscription.id} is EXPIRED (superseded by a newer subscription) – ` +
@@ -59,8 +53,6 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
       return;
     }
 
-    // CANCELLED thì khác: đây là replay của chính event này. Không ghi lại event/revoke lần
-    // hai, nhưng vẫn đi tiếp xuống downgrade — lần trước có thể đã dựng Free thất bại.
     if (subscription.status !== SubscriptionStatus.CANCELLED) {
       await this.prisma.$transaction(async (tx) => {
         await tx.subscription.update({
@@ -96,11 +88,6 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
       this.logger.log(`Subscription ${subscription.id} already CANCELLED`);
     }
 
-    // Thay cho check chết ở bản cũ (`subscription.providerSubscriptionId !== sub.id` luôn
-    // false vì `subscription` được tìm BẰNG `sub.id`). Ý đồ gốc vẫn đúng: nếu (user, product)
-    // còn row live khác thì user không hề rớt về free — họ vừa chuyển sang gói khác. Dựng
-    // Free lúc này sẽ đá vào partial unique index §13.1, và vì Free giờ có Stripe sub thật
-    // (D2, sửa 2026-07-17) thì nó còn đẻ vòng lặp Free → cancel → Free.
     const otherLive = await this.prisma.subscription.findFirst({
       where: {
         userId: subscription.userId,

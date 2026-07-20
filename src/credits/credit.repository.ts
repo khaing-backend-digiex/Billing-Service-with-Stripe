@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable } from "@nestjs/common";
 import { isAddonUsable, SUBSCRIPTION_SOURCES } from "./credit.types";
 import { PrismaService } from "../database/prisma.service";
 import { CreditTransactionType, CreditGrantSourceType, SubscriptionStatus, ReferenceType } from "@prisma/client";
@@ -30,8 +30,6 @@ export interface LockedBalances {
 
 @Injectable()
 export class CreditRepository {
-  constructor(private readonly prisma: PrismaService) {}
-
   async applyDelta(
     userId: string,
     delta: number,
@@ -48,7 +46,6 @@ export class CreditRepository {
       }
     }
 
-
     await tx.creditGrant.update({
       where: { id: entry.grantId },
       data: {
@@ -56,7 +53,6 @@ export class CreditRepository {
       },
     });
 
-   
     await tx.creditTransaction.create({
       data: {
         userId,

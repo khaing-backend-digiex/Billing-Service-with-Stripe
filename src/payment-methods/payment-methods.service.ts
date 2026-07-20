@@ -4,7 +4,6 @@ import { PrismaService } from "../database/prisma.service";
 import { StripeService } from "../stripe/stripe.service";
 import { PaymentMethodSyncService } from "../stripe/sync/payment-method-sync.service";
 import { SetupIntentResult } from "../payments/types/payment.types";
-import { PLAN_CODES } from "../common/constants/plan.constants";
 import { UsersService } from "../users/users.service";
 
 const LIVE_STATUSES: SubscriptionStatus[] = [

@@ -2,16 +2,13 @@ import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
 import {
   SubscriptionStatus,
-  SubscriptionEventType,
-  CreditTransactionType,
-  ReferenceType,
+  SubscriptionEventType
 } from "@prisma/client";
 
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { FreePlanDowngradeService } from "../free-plan-downgrade.service";
 import { SubscriptionSyncService } from "../../sync/subscription-sync.service";
-import { Subscription } from "@prisma/client";
 
 const EVENT_TYPE = "customer.subscription.updated";
 

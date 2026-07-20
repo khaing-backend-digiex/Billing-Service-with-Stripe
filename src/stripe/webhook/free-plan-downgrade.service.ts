@@ -57,10 +57,6 @@ export class FreePlanDowngradeService {
       return;
     }
 
-    // Model B (§8): row cũ đã terminal và BẤT BIẾN — không mutate nó nữa. Nếu (user, product)
-    // đã có row live thì việc rớt free đã xong rồi (replay, hoặc cron/webhook chạy song song)
-    // → không dựng thêm. Check này phải đứng TRƯỚC khi gọi Stripe: tạo sub rồi mới phát hiện
-    // trùng thì đã đẻ ra một sub thừa phải đi hủy (§8).
     const existingLive = await this.prisma.subscription.findFirst({
       where: {
         userId: subscription.userId,
@@ -107,10 +103,6 @@ export class FreePlanDowngradeService {
 
     try {
       await this.prisma.$transaction(async (tx) => {
-        // Row MỚI, không mutate row cũ (§8): row là contract instance, đã terminal thì bất
-        // biến. Bản cũ ghi đè pricingOption + providerSubscriptionId của chính row Pro —
-        // đó là "repoint" mà Model B xóa bỏ, và nó xóa luôn lịch sử: hợp đồng Pro biến mất,
-        // Invoice/Payment của kỳ Pro treo vào một row giờ mang nhãn Free.
         const created = await tx.subscription.create({
           data: {
             userId: subscription.userId,
@@ -147,9 +139,6 @@ export class FreePlanDowngradeService {
         );
       });
     } catch (err) {
-      // Thua race dựng row Free (partial unique index §13.1 chặn bản sao) → coi là SUCCESS,
-      // không được fail webhook (§8). Nhưng Stripe sub vừa tạo giờ mồ côi: DB rollback được,
-      // Stripe thì không. Phải hủy lại, nếu không đây đúng là loại zombie đang đi dọn.
       if (
         err instanceof Prisma.PrismaClientKnownRequestError &&
         err.code === UNIQUE_VIOLATION

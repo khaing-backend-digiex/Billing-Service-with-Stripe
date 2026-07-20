@@ -17,8 +17,6 @@ const LIVE_STATUSES: SubscriptionStatus[] = [
   SubscriptionStatus.PAST_DUE,
 ];
 
-
-
 @Injectable()
 export class SubscriptionSyncService {
   private readonly logger = new Logger(SubscriptionSyncService.name);
@@ -28,7 +26,6 @@ export class SubscriptionSyncService {
     private readonly pricingService: PricingService,
     private readonly stripeService: StripeService,
   ) {}
-
 
   async syncFromStripe(sub: PaymentSubscription): Promise<Subscription | null> {
     const user = await this.prisma.user.findFirst({
@@ -68,7 +65,6 @@ export class SubscriptionSyncService {
       where: { providerSubscriptionId: sub.id },
       include: { pricingOption: true },
     });
-
 
     const localSubscription = await this.prisma.$transaction(async (tx) => {
       let upserted;
@@ -141,7 +137,6 @@ export class SubscriptionSyncService {
 
       return upserted;
     });
-
 
     if (
       existing &&
