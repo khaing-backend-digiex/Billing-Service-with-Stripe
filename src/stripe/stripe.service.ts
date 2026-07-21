@@ -31,7 +31,7 @@ export class StripeService {
     @Inject("PAYMENT_ADAPTER")
     private readonly paymentAdapter: IPaymentAdapter,
     private readonly prisma: PrismaService,
-  ) {}
+  ) { }
 
   async ensureCustomerId(user: StripeCustomerOwner): Promise<string> {
     if (user.providerCustomerId) {
@@ -133,21 +133,6 @@ export class StripeService {
     return freePlan?.pricingOptions[0]?.providerPriceId ?? null;
   }
 
-  async ensureFreeSubscription(
-    customerId: string,
-  ): Promise<PaymentSubscription | null> {
-    const freePriceId = await this.getFreePriceId();
-    if (!freePriceId) return null;
-
-    const existingSubs = await this.paymentAdapter.listSubscriptions(customerId);
-    const hasActive = existingSubs.some(s =>
-      s.status === SubscriptionStatus.ACTIVE || s.status === SubscriptionStatus.TRIALING || s.status === SubscriptionStatus.PAST_DUE
-    );
-    if (hasActive) return null;
-
-    return this.paymentAdapter.createSubscription(customerId, freePriceId);
-  }
-
   async findActiveSubscription(
     customerId: string,
   ): Promise<PaymentSubscription | null> {
@@ -165,14 +150,6 @@ export class StripeService {
     subscriptionId: string,
   ): Promise<PaymentInvoice | null> {
     return this.paymentAdapter.getLatestPaidInvoice(subscriptionId);
-  }
-
-  async subscribeToFreePlan(
-    customerId: string,
-  ): Promise<PaymentSubscription | null> {
-    const freePriceId = await this.getFreePriceId();
-    if (!freePriceId) return null;
-    return this.paymentAdapter.createSubscription(customerId, freePriceId);
   }
 
   async createOffSessionSubscription(
@@ -266,9 +243,35 @@ export class StripeService {
     return this.paymentAdapter.mapRawInvoice(rawInvoice);
   }
 
+  async ensureFreeSubscription(customerId: string): Promise<PaymentSubscription | null> {
+    const freePriceId = await this.getFreePriceId();
+    if (!freePriceId) return null;
+
+    const subs = await this.paymentAdapter.listSubscriptions(customerId);
+    const existingFreeSub = subs.find(s => s.items[0]?.priceId === freePriceId && s.status === SubscriptionStatus.ACTIVE);
+    if (existingFreeSub) {
+      return existingFreeSub;
+    }
+
+    return this.paymentAdapter.createSubscription(customerId, freePriceId);
+  }
+
+  async cancelFreeSubscriptionOnStripe(customerId: string): Promise<void> {
+    const freePriceId = await this.getFreePriceId();
+    if (!freePriceId) return;
+
+    const subs = await this.paymentAdapter.listSubscriptions(customerId);
+    const existingFreeSubs = subs.filter(s => s.items[0]?.priceId === freePriceId && s.status === SubscriptionStatus.ACTIVE);
+    
+    for (const sub of existingFreeSubs) {
+      await this.paymentAdapter.cancelSubscriptionNow(sub.id);
+      this.logger.log(`Cancelled Stripe Free subscription ${sub.id} for customer ${customerId}`);
+    }
+  }
+
   async upgradeSubscriptionTier(userId: string, newPricingOptionId: string): Promise<PaymentSubscription> {
     const currentSub = await this.prisma.subscription.findFirst({
-      where: { 
+      where: {
         userId,
         status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE, SubscriptionStatus.TRIALING] }
       },
@@ -290,11 +293,18 @@ export class StripeService {
       currentSub.providerSubscriptionId,
       newPricingOption.providerPriceId
     );
+    this.logger.log('updatedStripeSub:::', JSON.stringify(updatedStripeSub));
 
     await this.prisma.subscription.update({
       where: { id: currentSub.id },
       data: {
         pricingOptionId: newPricingOption.id,
+        status: updatedStripeSub.status,
+        currentPeriodStart: new Date(updatedStripeSub.currentPeriodStart * 1000),
+        currentPeriodEnd: new Date(updatedStripeSub.currentPeriodEnd * 1000),
+        nextCreditResetAt: new Date(updatedStripeSub.currentPeriodEnd * 1000),
+        cancelledAt: updatedStripeSub.cancelAt ? new Date(updatedStripeSub.cancelAt * 1000) : null,
+        autoRenew: updatedStripeSub.cancelAtPeriodEnd === false,
       }
     });
 
@@ -303,7 +313,7 @@ export class StripeService {
 
   async upgradeSubscriptionCycle(userId: string, newPricingOptionId: string): Promise<PaymentSubscription> {
     const currentSub = await this.prisma.subscription.findFirst({
-      where: { 
+      where: {
         userId,
         status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE, SubscriptionStatus.TRIALING] }
       },
@@ -330,6 +340,12 @@ export class StripeService {
       where: { id: currentSub.id },
       data: {
         pricingOptionId: newPricingOption.id,
+        status: updatedStripeSub.status,
+        currentPeriodStart: new Date(updatedStripeSub.currentPeriodStart * 1000),
+        currentPeriodEnd: new Date(updatedStripeSub.currentPeriodEnd * 1000),
+        nextCreditResetAt: new Date(updatedStripeSub.currentPeriodEnd * 1000),
+        cancelledAt: updatedStripeSub.cancelAt ? new Date(updatedStripeSub.cancelAt * 1000) : null,
+        autoRenew: updatedStripeSub.cancelAtPeriodEnd === false,
       }
     });
 
@@ -346,7 +362,7 @@ export class StripeService {
     }
 
     const currentSub = await this.prisma.subscription.findFirst({
-      where: { 
+      where: {
         userId,
         status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE, SubscriptionStatus.TRIALING] }
       },
@@ -381,7 +397,7 @@ export class StripeService {
     }
 
     const currentSub = await this.prisma.subscription.findFirst({
-      where: { 
+      where: {
         userId,
         status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE, SubscriptionStatus.TRIALING] }
       },

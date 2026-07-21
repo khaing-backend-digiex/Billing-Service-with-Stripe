@@ -426,8 +426,8 @@ export class StripeAdapter implements IPaymentAdapter {
         currentPeriodStart: (item as any).current_period_start,
         currentPeriodEnd: (item as any).current_period_end,
       })),
-      currentPeriodStart: (stripeSubscription.items.data[0] as any)?.current_period_start ?? stripeSubscription.created,
-      currentPeriodEnd: (stripeSubscription.items.data[0] as any)?.current_period_end ?? stripeSubscription.created,
+      currentPeriodStart: stripeSubscription.current_period_start ?? (stripeSubscription.items?.data?.[0] as any)?.current_period_start ?? stripeSubscription.created,
+      currentPeriodEnd: stripeSubscription.current_period_end ?? (stripeSubscription.items?.data?.[0] as any)?.current_period_end ?? stripeSubscription.created,
       cancelAtPeriodEnd: stripeSubscription.cancel_at_period_end,
       cancelAt: stripeSubscription.cancel_at,
       trialStart: stripeSubscription.trial_start,
@@ -450,8 +450,8 @@ export class StripeAdapter implements IPaymentAdapter {
       currency: i.currency,
       status: i.status as string,
       billingReason: i.billing_reason,
-      periodStart: i.lines.data[0]?.period?.start ,
-      periodEnd: i.lines.data[0]?.period?.end,
+      periodStart: i.period_start ?? i.lines?.data?.[0]?.period?.start ?? i.created ?? Math.floor(Date.now() / 1000),
+      periodEnd: i.period_end ?? i.lines?.data?.[0]?.period?.end ?? i.created ?? Math.floor(Date.now() / 1000),
       dueDate: i.due_date,
       attemptCount: i.attempt_count,
       nextPaymentAttempt: i.next_payment_attempt,
@@ -467,6 +467,8 @@ export class StripeAdapter implements IPaymentAdapter {
           (l as any).parent?.subscription_item_details?.subscription ??
           null,
         isProration: (l as any).proration ?? (l as any).parent?.subscription_item_details?.proration ?? false,
+        periodStart: l.period?.start ?? i.period_start,
+        periodEnd: l.period?.end ?? i.period_end,
       })),
     };
   }
@@ -486,6 +488,26 @@ export class StripeAdapter implements IPaymentAdapter {
         },
       ],
       proration_behavior: 'create_prorations',
+    });
+
+    return this.mapSubscription(updatedSubscription);
+  }
+
+  async downgradeSubscriptionToFree(subscriptionId: string, freePriceId: string): Promise<PaymentSubscription> {
+    const subscription = await this.stripe.subscriptions.retrieve(subscriptionId);
+    if (!subscription.items.data.length) {
+      throw new BadRequestException('Subscription has no items to update');
+    }
+    const subscriptionItemId = subscription.items.data[0].id;
+
+    const updatedSubscription = await this.stripe.subscriptions.update(subscriptionId, {
+      items: [
+        {
+          id: subscriptionItemId,
+          price: freePriceId,
+        },
+      ],
+      proration_behavior: 'none',
     });
 
     return this.mapSubscription(updatedSubscription);

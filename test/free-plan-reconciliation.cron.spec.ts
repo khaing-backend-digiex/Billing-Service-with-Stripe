@@ -56,6 +56,7 @@ describe("FreePlanReconciliationCron – missing settlement (real DB, Stripe moc
         creditService,
       ),
       ctx.prisma,
+      creditService,
     );
 
   /** Sub đã quá grace: currentPeriodStart lùi về quá khứ. */

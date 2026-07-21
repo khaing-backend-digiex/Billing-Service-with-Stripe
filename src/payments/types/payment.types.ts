@@ -54,6 +54,8 @@ export interface PaymentInvoiceLine {
   priceId?: string | null;
   subscriptionId?: string | null;
   isProration?: boolean;
+  periodStart: number;
+  periodEnd: number;
 }
 
 export interface PaymentMethodDetails {

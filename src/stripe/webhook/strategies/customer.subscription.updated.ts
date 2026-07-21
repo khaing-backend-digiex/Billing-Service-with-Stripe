@@ -7,7 +7,6 @@ import {
 
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
-import { FreePlanDowngradeService } from "../free-plan-downgrade.service";
 import { SubscriptionSyncService } from "../../sync/subscription-sync.service";
 
 const EVENT_TYPE = "customer.subscription.updated";
@@ -31,7 +30,6 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly freePlanDowngrade: FreePlanDowngradeService,
     private readonly subscriptionSyncService: SubscriptionSyncService,
     private readonly stripeService: StripeService,
     private readonly creditService: CreditService,
@@ -67,6 +65,13 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
     const existing = await this.prisma.subscription.findFirst({
       where: { providerSubscriptionId: stripeSubscription.id },
     });
+
+    if (existing && (existing.status === SubscriptionStatus.CANCELLED || existing.status === SubscriptionStatus.EXPIRED)) {
+      this.logger.warn(
+        `Subscription ${stripeSubscription.id} is already ${existing.status} locally. Ignoring updated webhook (out-of-order tolerance).`,
+      );
+      return;
+    }
 
     const previousStatus = existing?.status;
 
@@ -164,12 +169,6 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
     } else {
       this.logger.log(`Subscription ${subscription.id} already EXPIRED`);
     }
-
-
-    await this.freePlanDowngrade.downgradeToFree(
-      subscription,
-      stripeSubscription,
-      CANCELLATION_REASON.PAYMENT_FAILED,
-    );
+    await this.subscriptionSyncService.ensureFreePlanAfterTerminal(subscription);
   }
 }

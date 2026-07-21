@@ -15,7 +15,7 @@ import { SetupIntentStrategy } from "./webhook/strategies/setup-intent.strategy"
 import { CustomerSubscriptionUpdatedStrategy } from "./webhook/strategies/customer.subscription.updated";
 import { CustomerSubscriptionDeletedStrategy } from "./webhook/strategies/customer.subscription.deleted";
 import { WebhookStrategyFactory } from "./webhook/strategies/webhook-strategy.factory";
-import { FreePlanDowngradeService } from "./webhook/free-plan-downgrade.service";
+
 import { SubscriptionSyncService } from "./sync/subscription-sync.service";
 import { PaidInvoiceSyncService } from "./sync/paid-invoice-sync.service";
 import { InvoiceRecordService } from "./invoice-record.service";
@@ -30,7 +30,6 @@ import { CreditsModule } from "../credits/credits.module";
   providers: [
     StripeService,
     StripeWebhookService,
-    FreePlanDowngradeService,
     SubscriptionSyncService,
     PaidInvoiceSyncService,
     InvoiceRecordService,

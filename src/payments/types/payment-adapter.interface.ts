@@ -24,6 +24,7 @@ export interface IPaymentAdapter {
   createOffSessionSubscription(params: CreateOffSessionSubscriptionParams): Promise<OffSessionSubscriptionResult>;
   cancelSubscriptionAtPeriodEnd(subscriptionId: string): Promise<void>;
   cancelSubscriptionNow(subscriptionId: string): Promise<void>;
+  downgradeSubscriptionToFree(subscriptionId: string, freePriceId: string): Promise<PaymentSubscription>;
   listSubscriptions(customerId: string): Promise<PaymentSubscription[]>;
   getLatestPaidInvoice(subscriptionId: string): Promise<PaymentInvoice | null>;
 

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { CreditRepository, TransactionEntry, LockedGrant } from './credit.repository';
 import { allocateCredits } from './credit-allocation';
@@ -32,6 +32,12 @@ export class CreditService {
   ) {}
 
   async consume(cmd: ConsumeCmd, tx?: TxClient): Promise<ConsumeResult> {
+    if (cmd.amount <= 0) {
+      throw new BadRequestException(
+        `Consumption amount must be greater than 0, got ${cmd.amount}`,
+      );
+    }
+
     const exec = async (client: TxClient): Promise<ConsumeResult> => {
       // 1. Lock rows
       const balances = await this.repo.lockForConsume(cmd.userId, cmd.productId, client);
@@ -77,6 +83,11 @@ export class CreditService {
         if (grant.sourceType === CreditGrantSourceType.ADDON && !balances.addonIsActive) {
            continue; // Addon credits are frozen
         }
+        // Freeze credit GÓI khi không có sub ACTIVE (PAST_DUE ân hạn): grant giữ nguyên,
+        // chỉ không tiêu được (§9/§14.2). Recovery/terminal sẽ dọn qua invoice.paid/deleted.
+        if (isSubscriptionSource(grant.sourceType) && !balances.subscriptionIsActive) {
+           continue;
+        }
         sources.push({
           grantId: grant.id,
           sourceType: grant.sourceType,
@@ -91,7 +102,6 @@ export class CreditService {
         );
       }
 
-      // 4. Apply deltas (Single-step consume)
       for (const alloc of allocation.allocations) {
         const entry: TransactionEntry = {
           type: CreditTransactionType.USAGE,
@@ -341,11 +351,9 @@ export class CreditService {
          addonIsActive: isAddonUsable(sub.pricingOption.plan.isFree, sub.status),
        });
 
-       // Remove from map to track which products have explicit subscriptions
        productCredits.delete(productId);
     }
     
-    // For any products that have credits but NO subscription row (rare/legacy)
     for (const [productId, credits] of productCredits.entries()) {
        statuses.push({
          productId,

@@ -26,10 +26,13 @@ export interface LockedGrant {
 export interface LockedBalances {
   grants: LockedGrant[];
   addonIsActive: boolean;
+  subscriptionIsActive: boolean;
 }
 
 @Injectable()
 export class CreditRepository {
+  constructor(private readonly prisma: PrismaService) {}
+
   async applyDelta(
     userId: string,
     delta: number,
@@ -100,6 +103,7 @@ export class CreditRepository {
     return {
       grants: grantRows || [],
       addonIsActive: isAddonUsable(sub?.isFree, sub?.status),
+      subscriptionIsActive: sub != null,
     };
   }
 

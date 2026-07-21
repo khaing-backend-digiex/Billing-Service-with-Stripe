@@ -1,6 +1,7 @@
 generator client {
-  provider   = "prisma-client-js"
-  engineType = "none"
+  provider        = "prisma-client-js"
+  previewFeatures = ["partialIndexes"]
+  engineType      = "none"
 }
 
 datasource db {
@@ -20,26 +21,26 @@ model User {
   id                 String              @id @default(uuid())
   creditGrants       CreditGrant[]
   creditTransactions CreditTransaction[]
+  creditWallets      CreditWallet?
   payments           Payment[]
   paymentMethods     PaymentMethod[]
   subscriptions      Subscription[]
-  creditWallets      CreditWallet[]
 }
 
 model Product {
-  id                            String        @id @default(cuid())
-  code                          String        @unique
+  id                            String         @id @default(cuid())
+  code                          String         @unique
   name                          String
-  isActive                      Boolean       @default(true)
-  createdAt                     DateTime      @default(now())
-  updatedAt                     DateTime      @updatedAt
+  isActive                      Boolean        @default(true)
+  createdAt                     DateTime       @default(now())
+  updatedAt                     DateTime       @updatedAt
   /// Add-on credit của product này có cần một sub live mới tiêu được không (D7).
   /// AI = true: rớt về Free thì add-on grant đóng băng – không tiêu được, không mất.
   /// Đưa vào PR1 (không đợi Bước 5) để PR2 viết gate freeze một lần, khỏi rework.
-  addonRequiresLiveSubscription Boolean       @default(true)
+  addonRequiresLiveSubscription Boolean        @default(true)
+  addonPackages                 AddonPackage[]
   creditGrants                  CreditGrant[]
   plans                         Plan[]
-  addonPackages                 AddonPackage[]
 }
 
 model Plan {
@@ -56,7 +57,6 @@ model Plan {
   pricingOptions PricingOption[]
 
   @@unique([productId, code])
-  // Target cho composite FK của PricingOption (§13.1). Plan là nguồn sự thật của productId.
   @@unique([id, productId])
 }
 
@@ -90,12 +90,9 @@ model PricingOption {
   isActive              Boolean             @default(true)
   createdAt             DateTime            @default(now())
   productId             String
-  billingCycle          BillingCycle        @relation(fields: [billingCycleId], references: [id])
-  // Composite FK, KHÔNG phải FK đơn `planId`: FK đơn để `productId` tự do, cho phép
-  // PricingOption { planId: AI_Pro, productId: OCR } lọt qua vì OCR là product có thật.
-  // Composite thì từ chối — không có Plan nào (id=AI_Pro, productId=OCR). (§7/§13.1)
-  plan                  Plan                @relation(fields: [planId, productId], references: [id, productId])
   invoices              Invoice[]
+  billingCycle          BillingCycle        @relation(fields: [billingCycleId], references: [id])
+  plan                  Plan                @relation(fields: [planId, productId], references: [id, productId])
   subscriptions         Subscription[]
   subscriptionEventsNew SubscriptionEvent[] @relation("NewPricing")
   subscriptionEventsOld SubscriptionEvent[] @relation("OldPricing")
@@ -136,7 +133,6 @@ model Subscription {
   subscriptionCreditsRemaining Int       @default(0)
   /// @deprecated D12 bỏ trial hoàn toàn. Xoá ở PR4.
   trialEnd                     DateTime?
-  /// @deprecated D12 bỏ trial hoàn toàn. Xoá ở PR4.
   trialStart                   DateTime?
 
   /// @unique giữ tới PR3: bỏ bây giờ làm vỡ 27 chỗ trong src/credits (call-site mà PR2
@@ -154,10 +150,9 @@ model Subscription {
   events                 SubscriptionEvent[]
 
   @@unique([provider, providerSubscriptionId])
+  @@unique([userId, productId], map: "Subscription_live_user_product_key", where: raw("(status = 'ACTIVE'::\"SubscriptionStatus\")"))
 }
 
-/// @deprecated Thay bằng CreditGrant. PR2 (Dev A) chuyển implementation, PR4 xoá model.
-/// "Wallet" sau đó chỉ còn là khái niệm đọc: SUM(amountRemaining) GROUP BY productId, sourceType.
 model CreditWallet {
   addonCredits Int      @default(0)
   updatedAt    DateTime @updatedAt
@@ -166,17 +161,14 @@ model CreditWallet {
   user         User     @relation(fields: [userId], references: [id])
 }
 
-
 model CreditGrant {
   id              String                @id @default(cuid())
   userId          String
-  /// Credit luôn thuộc đúng một product — không có credit universal (D5).
   productId       String
   sourceType      CreditGrantSourceType
   sourceRef       String?
   amountGranted   Int
   amountRemaining Int
-  /// Subscription credit hết hạn theo reset; add-on null; gift/promo có hạn.
   expiresAt       DateTime?
   priority        Int                   @default(100)
   createdAt       DateTime              @default(now())
@@ -197,37 +189,36 @@ model AddonPackage {
   currency        String
   provider        PaymentProvider?
   providerPriceId String?
-  productId       String?
   isActive        Boolean          @default(true)
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
+  productId       String?
   product         Product?         @relation(fields: [productId], references: [id])
   payments        Payment[]
 }
 
 model Invoice {
-  id                String          @id @default(cuid())
-  subscriptionId    String
-  provider          PaymentProvider
-  providerInvoiceId String?         @unique
-  amount            Decimal
-  currency          String
-  status            InvoiceStatus
-  retryCount        Int             @default(0)
-  nextRetryAt       DateTime?
-  dueAt             DateTime
-  paidAt            DateTime?
-  createdAt         DateTime        @default(now())
-  billingReason     String?
+  id                 String              @id @default(cuid())
+  subscriptionId     String
+  provider           PaymentProvider
+  providerInvoiceId  String?             @unique
+  amount             Decimal
+  currency           String
+  status             InvoiceStatus
+  retryCount         Int                 @default(0)
+  nextRetryAt        DateTime?
+  dueAt              DateTime
+  paidAt             DateTime?
+  createdAt          DateTime            @default(now())
+  billingReason      String?
   /// EXPAND: snapshot giá tại thời điểm charge (§8, D10). Row bất biến theo Stripe sub ID
   /// nhưng KHÔNG bất biến theo pricing (đổi chu kỳ đổi pricingOptionId), nên "invoice này
   /// theo giá nào" phải đọc từ chính Invoice. PR3 (Dev B) populate.
-  pricingOptionId   String?
+  pricingOptionId    String?
+  creditTransactions CreditTransaction[]
   pricingOption      PricingOption?      @relation(fields: [pricingOptionId], references: [id])
   subscription       Subscription        @relation(fields: [subscriptionId], references: [id])
   payments           Payment[]
-  /// Hoá đơn này đã kích hoạt những bút toán credit nào (log, không phải sở hữu).
-  creditTransactions CreditTransaction[]
 }
 
 model Payment {
@@ -334,6 +325,7 @@ model CleanupTask {
   @@unique([type, target])
 }
 
+
 enum WebhookEventStatus {
   RECEIVED
   SUCCESS
@@ -345,7 +337,6 @@ enum ResetInterval {
   MONTHLY
   EVERY_N_DAYS
 }
-
 
 enum CreditGrantSourceType {
   SUBSCRIPTION_ALLOCATION
@@ -431,3 +422,4 @@ enum SubscriptionEventType {
   PAYMENT_RECOVERED
   PAYMENT_ACTION_REQUIRED
 }
+

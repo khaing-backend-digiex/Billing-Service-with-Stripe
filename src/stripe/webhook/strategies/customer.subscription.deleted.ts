@@ -1,29 +1,27 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, forwardRef, Inject } from "@nestjs/common";
 import Stripe from "stripe";
 import {
   SubscriptionStatus,
   SubscriptionEventType,
-  InvoiceStatus,
+  BillingMode
 } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
-import { FreePlanDowngradeService } from "../free-plan-downgrade.service";
 import { CreditService } from "../../../credits/credit.service";
 import { creditKey } from "../../../credits/credit.types";
+import { SubscriptionSyncService } from "../../sync/subscription-sync.service";
+import { StripeService } from "../../stripe.service";
 
-const LIVE_STATUSES: SubscriptionStatus[] = [
-  SubscriptionStatus.ACTIVE,
-  SubscriptionStatus.PAST_DUE,
-  SubscriptionStatus.TRIALING,
-];
 @Injectable()
 export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
   private readonly logger = new Logger(CustomerSubscriptionDeletedStrategy.name);
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly freePlanDowngrade: FreePlanDowngradeService,
     private readonly creditService: CreditService,
+    private readonly subscriptionSyncService: SubscriptionSyncService,
+    @Inject(forwardRef(() => StripeService))
+    private readonly stripeService: StripeService,
   ) {}
 
   private readonly customerSubcriptionDeleted = "customer.subscription.deleted"
@@ -41,7 +39,7 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
     });
 
     if (!subscription) {
-      this.logger.error(`No local subscription found for Stripe subscription ${sub.id}`);
+      this.logger.warn(`No local subscription found for Stripe subscription ${sub.id}. This is normal for abandoned checkouts.`);
       return;
     }
 
@@ -81,6 +79,7 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
           },
           tx,
         );
+
       });
 
       this.logger.log(`Subscription ${subscription.id} cancelled`);
@@ -88,42 +87,8 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
       this.logger.log(`Subscription ${subscription.id} already CANCELLED`);
     }
 
-    const otherLive = await this.prisma.subscription.findFirst({
-      where: {
-        userId: subscription.userId,
-        productId: subscription.productId,
-        id: { not: subscription.id },
-        status: { in: LIVE_STATUSES },
-      },
-      select: { id: true },
-    });
-
-    if (otherLive) {
-      this.logger.log(
-        `Subscription ${subscription.id} superseded by live subscription ${otherLive.id} ` +
-        `for the same product – skipping free downgrade`,
-      );
-      return;
-    }
-
-    const hasUnpaidInvoice = await this.prisma.invoice.findFirst({
-      where: {
-        subscriptionId: subscription.id,
-        status: { in: [InvoiceStatus.OPEN, InvoiceStatus.UNCOLLECTIBLE] },
-      },
-    });
-
-    if (hasUnpaidInvoice) {
-      this.logger.warn(
-        `Subscription ${subscription.id} cancelled with unpaid debt (invoice ${hasUnpaidInvoice.id}). Banning instead of downgrading to Free.`,
-      );
-      return;
-    }
-
-    await this.freePlanDowngrade.downgradeToFree(
-      subscription,
-      sub,
-      sub.cancellation_details?.reason ?? "subscription_deleted",
-    );
+    // Downgrade về Free dùng chung một đường với updated(unpaid): Stripe Free sub trước
+    // (PROVIDER, credit qua invoice.paid), fallback row NONE local nếu Stripe fail.
+    await this.subscriptionSyncService.ensureFreePlanAfterTerminal(subscription);
   }
 }

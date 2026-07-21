@@ -5,14 +5,19 @@ import {
   Subscription,
   SubscriptionStatus,
   SubscriptionEventType,
+  InvoiceStatus,
+  PaymentProvider,
+
 } from "@prisma/client";
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { InvoiceRecordService } from "../../invoice-record.service";
 import { StripeService } from "../../stripe.service";
-import { PaymentInvoice } from "../../../payments/types/payment.types";
-import { STRIPE_INVOICE_LINE_TYPE } from "../../../common/constants/stripe.constants";
+import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
 import { PLAN_CODES } from "@/common/constants/plan.constants";
+import { CreditService } from "../../../credits/credit.service";
+import { SubscriptionSyncService } from "../../sync/subscription-sync.service";
+
 
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_WINDOW_MS = 3 * 86_400_000;
@@ -23,8 +28,8 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly invoiceService: InvoiceRecordService,
     private readonly stripeService: StripeService,
+    private readonly creditService: CreditService,
   ) { }
   private readonly invoicePaymentFailed = "invoice.payment_failed";
   canHandle(eventType: string): boolean {
@@ -32,28 +37,62 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
   }
 
   async handle(event: Stripe.Event): Promise<void> {
-    const stripeInvoice = this.stripeService.mapRawInvoice(event.data.object);
-    this.logger.log(`invoice.payment_failed: ${stripeInvoice.id} (attempt #${stripeInvoice.attemptCount})`);
+    const stripeInvoice = event.data.object as Stripe.Invoice;
+    this.logger.log(`invoice.payment_failed: ${stripeInvoice.id} (attempt #${stripeInvoice.attempt_count})`);
 
-    const line =
-      stripeInvoice.lines.find((l) => l.type === STRIPE_INVOICE_LINE_TYPE.SUBSCRIPTION) ??
-      stripeInvoice.lines[0];
-    const stripeSubscriptionId = stripeInvoice.subscriptionId ?? line?.subscriptionId ?? null;
+    let line = stripeInvoice.lines?.data?.find(line => line.type === 'subscription') || stripeInvoice.lines?.data?.[0];
+    let stripeSubscriptionId = line?.subscription ?? (line as any)?.parent?.subscription_item_details?.subscription ?? null;
 
     const result = await this.prisma.$transaction(async (tx) => {
       const subscription = stripeSubscriptionId
         ? await tx.subscription.findFirst({
           where: { providerSubscriptionId: stripeSubscriptionId },
+          include: { pricingOption: true },
         })
         : null;
 
-      const invoice = await this.invoiceService.recordFailedAttempt(
-        tx,
-        stripeInvoice,
-        subscription?.id ?? null,
-      );
+      const retryData = {
+        status: InvoiceStatus.OPEN,
+        retryCount: stripeInvoice.attempt_count,
+        nextRetryAt: stripeInvoice.next_payment_attempt
+          ? new Date(stripeInvoice.next_payment_attempt * 1000)
+          : null,
+      };
 
-      if (!invoice) return null;
+
+      let invoice: Invoice | null = null;
+      if (subscription) {
+        invoice = await tx.invoice.upsert({
+          where: { providerInvoiceId: stripeInvoice.id },
+          update: retryData,
+          create: {
+            subscriptionId: subscription.id,
+            provider: PaymentProvider.STRIPE,
+            providerInvoiceId: stripeInvoice.id,
+            amount: formatStripeAmountToDatabase(stripeInvoice.amount_due, stripeInvoice.currency),
+            currency: stripeInvoice.currency,
+            billingReason: stripeInvoice.billing_reason ?? null,
+            dueAt: stripeInvoice.due_date
+              ? new Date(stripeInvoice.due_date * 1000)
+              : new Date(stripeInvoice.period_end * 1000),
+            ...retryData,
+          },
+        });
+      } else {
+        invoice = await tx.invoice.update({
+          where: { providerInvoiceId: stripeInvoice.id },
+          data: retryData,
+        });
+
+        if (!invoice) {
+          this.logger.error(`No local invoice found for Stripe invoice ${stripeInvoice.id}`);
+          return null;
+        }
+
+
+      }
+
+      if (!stripeSubscriptionId) return { invoice, subscription: null };
 
       if (!subscription) {
         if (stripeSubscriptionId) {
@@ -64,12 +103,35 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
         return { invoice, subscription: null };
       }
 
-      const isUpdate = stripeInvoice.billingReason === 'subscription_update';
+      const isUpdate = stripeInvoice.billing_reason === 'subscription_update';
+
+      const isSubscriptionUpdate =
+        stripeInvoice.billing_reason === 'subscription_update';
+
+      if (isSubscriptionUpdate) {
+        return;
+      }
+
+      const freshSub = await tx.subscription.findUnique({
+        where: { id: subscription.id },
+        select: { status: true },
+      });
+
+      const isTerminalStatus =
+        freshSub?.status === SubscriptionStatus.CANCELLED ||
+        freshSub?.status === SubscriptionStatus.EXPIRED;
+
+      if (isTerminalStatus) {
+        this.logger.log(
+          `Subscription ${subscription.id} already ${freshSub.status} – skipping PAST_DUE downgrade`,
+        );
+        return;
+      }
 
       await tx.subscription.update({
         where: { id: subscription.id },
         data: {
-          status: isUpdate ? undefined : SubscriptionStatus.PAST_DUE,
+          status: SubscriptionStatus.PAST_DUE,
         },
       });
 
@@ -79,9 +141,9 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
           type: SubscriptionEventType.PAYMENT_FAILED,
           metadata: {
             stripeInvoiceId: stripeInvoice.id,
-            attemptCount: stripeInvoice.attemptCount,
-            nextPaymentAttempt: stripeInvoice.nextPaymentAttempt
-              ? new Date(stripeInvoice.nextPaymentAttempt * 1000)
+            attemptCount: stripeInvoice.attempt_count,
+            nextPaymentAttempt: stripeInvoice.next_payment_attempt
+              ? new Date(stripeInvoice.next_payment_attempt * 1000)
               : null,
           },
         },
@@ -92,41 +154,46 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
 
     if (!result?.subscription || !stripeSubscriptionId) return;
 
-    await this.downgradeToFreeIfRetriesExhausted(result.invoice, result.subscription, stripeInvoice, stripeSubscriptionId);
+    await this.cancelIfRetriesExhausted(result.invoice, result.subscription, stripeInvoice, stripeSubscriptionId);
   }
 
 
-  private async downgradeToFreeIfRetriesExhausted(
+  private async cancelIfRetriesExhausted(
     invoice: Invoice,
     subscription: Subscription,
-    stripeInvoice: PaymentInvoice,
+    stripeInvoice: Stripe.Invoice,
     stripeSubscriptionId: string,
   ): Promise<void> {
-    const retriesUsed = (stripeInvoice.attemptCount ?? 1) - 1;
+    const retriesUsed = (stripeInvoice.attempt_count ?? 1) - 1;
     const windowExceeded =
       Date.now() - invoice.createdAt.getTime() > RETRY_WINDOW_MS;
 
     if (retriesUsed < MAX_RETRY_ATTEMPTS && !windowExceeded) return;
 
-    this.logger.warn(
-      `Retries exhausted for subscription ${subscription.id} ` +
-      `(retries: ${retriesUsed}/${MAX_RETRY_ATTEMPTS}, window exceeded: ${windowExceeded}) – downgrading to free`,
-    );
-
-    const freePlan = await this.prisma.plan.findFirst({
-      where: { code: PLAN_CODES.FREE
-       },
-      include: { pricingOptions: true },
+    const current = await this.prisma.subscription.findUnique({
+      where: { id: subscription.id },
+      select: { status: true },
     });
-    const freePricingOption = freePlan?.pricingOptions?.[0];
-
-    if (!freePricingOption?.providerPriceId) {
-      await this.stripeService.cancelSubscriptionNow(stripeSubscriptionId);
+    if (
+      current?.status === SubscriptionStatus.CANCELLED ||
+      current?.status === SubscriptionStatus.EXPIRED
+    ) {
+      this.logger.log(
+        `Subscription ${subscription.id} already ${current.status} – skipping retry-exhausted cancellation`,
+      );
       return;
     }
 
+    this.logger.warn(
+      `Retries exhausted for subscription ${subscription.id} ` +
+      `(retries: ${retriesUsed}/${MAX_RETRY_ATTEMPTS}, window exceeded: ${windowExceeded}) – cancelling subscription`,
+    );
+
     await this.stripeService.cancelSubscriptionNow(stripeSubscriptionId);
 
-    await this.invoiceService.markUncollectible(invoice.id);
+    await this.prisma.invoice.update({
+      where: { id: invoice.id },
+      data: { status: InvoiceStatus.UNCOLLECTIBLE, nextRetryAt: null },
+    });
   }
 }

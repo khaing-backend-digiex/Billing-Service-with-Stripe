@@ -5,11 +5,15 @@ import {
   SubscriptionStatus,
   SubscriptionEventType,
   PaymentProvider,
+  PricingOption,
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
 import { PricingService } from "../../pricing/pricing.service";
 import { PaymentSubscription } from "../../payments/types/payment.types";
 import { StripeService } from "../stripe.service";
+import { CreditService } from "../../credits/credit.service";
+import { creditKey } from "../../credits/credit.types";
+import { BillingMode } from "@prisma/client";
 
 const LIVE_STATUSES: SubscriptionStatus[] = [
   SubscriptionStatus.ACTIVE,
@@ -25,7 +29,8 @@ export class SubscriptionSyncService {
     private readonly prisma: PrismaService,
     private readonly pricingService: PricingService,
     private readonly stripeService: StripeService,
-  ) {}
+    private readonly creditService: CreditService,
+  ) { }
 
   async syncFromStripe(sub: PaymentSubscription): Promise<Subscription | null> {
     const user = await this.prisma.user.findFirst({
@@ -105,6 +110,7 @@ export class SubscriptionSyncService {
             trialStart,
             trialEnd,
             cancelledAt,
+            autoRenew: sub.cancelAtPeriodEnd === false,
             provider: PaymentProvider.STRIPE,
             providerSubscriptionId: sub.id,
           },
@@ -131,7 +137,7 @@ export class SubscriptionSyncService {
         });
         this.logger.log(
           `Plan ${isUpgrade ? "upgraded" : "downgraded"} for user ${user.id}: ` +
-            `${existing.pricingOption.name} → ${pricingOption.name}`,
+          `${existing.pricingOption.name} → ${pricingOption.name}`,
         );
       }
 
@@ -148,5 +154,96 @@ export class SubscriptionSyncService {
 
     this.logger.log(`Subscription synced for user ${user.id} (${sub.id})`);
     return localSubscription;
+  }
+
+  async provisionFreePlanFallback(userId: string, productId: string, tx?: any) {
+    const doProvision = async (client: any) => {
+      await client.user.update({
+        where: { id: userId },
+        data: { updatedAt: new Date() }
+      });
+
+      const freePlan = await client.plan.findFirst({
+        where: { isFree: true, productId },
+        include: { pricingOptions: true, creditPolicy: true },
+      });
+      const freeOption = freePlan?.pricingOptions?.[0];
+
+      if (!freeOption) {
+        this.logger.warn(`Could not provision free plan: no free option found for product ${productId}`);
+        return;
+      }
+
+      const existingLive = await client.subscription.findFirst({
+        where: {
+          userId,
+          productId,
+          status: { in: LIVE_STATUSES },
+        }
+      });
+
+      if (existingLive) {
+        this.logger.log(`Live plan already exists for user ${userId}, skipping fallback provision`);
+        return;
+      }
+
+      await client.subscription.create({
+        data: {
+          userId,
+          productId,
+          pricingOptionId: freeOption.id,
+          status: SubscriptionStatus.ACTIVE,
+          billingMode: BillingMode.NONE,
+          currentPeriodStart: new Date(),
+          currentPeriodEnd: new Date(new Date().setFullYear(new Date().getFullYear() + 100)),
+          nextCreditResetAt: new Date(),
+        },
+      });
+
+      this.logger.log(`Provisioned new Free subscription for user ${userId} (fallback)`);
+    };
+
+    if (tx) {
+      await doProvision(tx);
+    } else {
+      await this.prisma.$transaction(doProvision);
+    }
+  }
+
+  async ensureFreePlanAfterTerminal(
+    subscription: Subscription & { pricingOption: PricingOption },
+  ): Promise<void> {
+    const isFreePlan = Number(subscription.pricingOption?.price ?? 0) === 0;
+    if (isFreePlan) {
+      this.logger.log(
+        `Terminal subscription ${subscription.id} was already Free – skipping free provision`,
+      );
+      return;
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: subscription.userId },
+      select: { id: true, providerCustomerId: true },
+    });
+
+    if (user?.providerCustomerId) {
+      const stripeFreeSub = await this.stripeService.ensureFreeSubscription(
+        user.providerCustomerId,
+      );
+      if (stripeFreeSub) {
+        this.logger.log(
+          `Created Stripe Free subscription for user ${user.id} – credits will be granted by invoice.paid`,
+        );
+        return;
+      }
+    }
+
+    const productId = subscription.productId ?? subscription.pricingOption?.productId;
+    if (productId) {
+      this.logger.log(
+        `Stripe unavailable – local Free fallback for user ${subscription.userId}`,
+      );
+      await this.provisionFreePlanFallback(subscription.userId, productId);
+    }
   }
 }

@@ -82,8 +82,8 @@ export class PaidInvoiceSyncService {
     }
 
     const plan = pricingOption.plan;
-    const periodStart = new Date(paidInvoice.periodStart * 1000);
-    const periodEnd = new Date(paidInvoice.periodEnd * 1000);
+    const periodStart = new Date((lineToUse?.periodStart ?? paidInvoice.periodStart) * 1000);
+    const periodEnd = new Date((lineToUse?.periodEnd ?? paidInvoice.periodEnd) * 1000);
     const resetMonths = plan.creditPolicy?.resetInterval === 'MONTHLY' 
       ? 1 
       : Math.max(1, Math.round((plan.creditPolicy?.intervalDays || 30) / 30));
@@ -104,6 +104,7 @@ export class PaidInvoiceSyncService {
     }
 
     const isInitial = paidInvoice.billingReason === "subscription_create";
+    const isCycleChange = paidInvoice.billingReason === "subscription_update";
     const eventType = isInitial
       ? SubscriptionEventType.CREATED
       : SubscriptionEventType.RENEWED;
@@ -158,18 +159,38 @@ export class PaidInvoiceSyncService {
           `Subscription ${subscription.id} repointed: ${subscription.providerSubscriptionId} → ${stripeSubscriptionId}`,
         );
       }
+
+      const fallbackSubs = await tx.subscription.findMany({
+        where: {
+          userId: subscription.userId,
+          productId: plan.productId,
+          id: { not: subscription.id },
+          status: SubscriptionStatus.ACTIVE,
+        }
+      });
+      for (const fallback of fallbackSubs) {
+        await tx.subscription.update({ where: { id: fallback.id }, data: { status: SubscriptionStatus.EXPIRED }});
+        await this.creditService.revokeSubscriptionCredits({
+          userId: subscription.userId,
+          productId: plan.productId,
+          description: `Fallback free plan expired upon Pro recovery`,
+          subscriptionId: fallback.id,
+          idempotencyKey: `revoke_fallback_${fallback.id}_${invoice.id}`,
+        }, tx);
+        this.logger.log(`Expired fallback Free subscription ${fallback.id} upon Pro recovery`);
+      }
       this.logger.log(
         `Subscription ${subscription.id} updated: status=ACTIVE, currentPeriodStart=${periodStart.toISOString()}, currentPeriodEnd=${periodEnd.toISOString()}, nextCreditResetAt=${nextCreditResetAt.toISOString()}`,
       );
 
-      const isUpdate = paidInvoice.billingReason === "subscription_update";
+      const creditsGranted = isCycleChange ? 0 : (plan.creditPolicy?.creditAmount ?? 0);
 
-      if (!isUpdate) {
+      if (!isCycleChange) {
         await this.creditService.revokeSubscriptionCredits(
           {
             userId: subscription.userId,
             productId: plan.productId,
-            description: `Unused credits expired before renewal`,
+            description: `Unused credits expired before renewal/upgrade`,
             subscriptionId: subscription.id,
             invoiceId: invoice.id,
             idempotencyKey: `revoke_sub_${invoice.id}`,
@@ -187,6 +208,7 @@ export class PaidInvoiceSyncService {
             invoiceId: invoice.id,
             sourceType: CreditGrantSourceType.SUBSCRIPTION_ALLOCATION,
             idempotencyKey: `grant_sub_${invoice.id}`,
+            expiresAt: nextCreditResetAt,
           },
           tx,
         );
@@ -195,10 +217,10 @@ export class PaidInvoiceSyncService {
       await tx.subscriptionEvent.create({
         data: {
           subscriptionId: subscription.id,
-          type: eventType,
+          type: isCycleChange ? SubscriptionEventType.UPGRADED : eventType,
           metadata: {
             stripeInvoiceId: paidInvoice.id,
-            creditsGranted: plan.creditPolicy?.creditAmount ?? 0,
+            creditsGranted,
             billingReason: paidInvoice.billingReason ?? null,
             periodStart: periodStart.toISOString(),
             periodEnd: periodEnd.toISOString(),
@@ -207,7 +229,7 @@ export class PaidInvoiceSyncService {
       });
 
       this.logger.log(
-        `Credits granted: subscription=${subscription.id} +${plan.creditPolicy?.creditAmount ?? 0} (${plan.name}, ${paidInvoice.billingReason})`,
+        `Credits granted: subscription=${subscription.id} +${creditsGranted} (${plan.name}, ${paidInvoice.billingReason})`,
       );
     });
   }
