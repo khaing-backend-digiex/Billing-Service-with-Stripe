@@ -14,7 +14,7 @@ import {
   ApiBearerAuth,
   ApiResponse as SwaggerResponse,
 } from "@nestjs/swagger";
-import { PaymentProvider } from "@prisma/client";
+import { PaymentProvider, SubscriptionStatus } from "@prisma/client";
 import { PaymentsService } from "./payments.service";
 import { CreateCustomerDto } from "./dto/create-customer.dto";
 import { CancelSubscriptionDto } from "./dto/cancel-subscription.dto";
@@ -103,7 +103,12 @@ export class PaymentsController {
     }
 
     const subscription = await this.prisma.subscription.findFirst({
-      where: { userId },
+      where: {
+        userId,
+        status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE] },
+        pricingOption: { plan: { isFree: false } },
+      },
+      orderBy: { createdAt: "desc" },
     });
 
     if (!subscription || !subscription.providerSubscriptionId) {

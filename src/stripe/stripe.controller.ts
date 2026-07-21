@@ -120,9 +120,9 @@ export class StripeController {
     const customerId = await this.stripeService.ensureValidCustomerId(user);
     const paymentMethod = await this.paymentMethodSync.getDefaultOrThrow(userId, customerId);
 
-
-    await this.stripeService.cancelFreeSubscriptionOnStripe(customerId);
-
+    // KHÔNG hủy Stripe sub Free ở đây: checkout có thể cần 3DS / bị bỏ dở → row Free phải
+    // còn nguyên (§8). Sub Free chỉ bị hủy SAU KHI invoice.paid của Pro commit và supersede
+    // row Free — do invoice-paid.strategy đảm nhiệm (cancel superseded Stripe sub post-commit).
     const result = await this.stripeService.createOffSessionSubscription(
       userId,
       pricingOption.providerPriceId,
