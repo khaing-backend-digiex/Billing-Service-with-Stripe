@@ -3,6 +3,7 @@ import { isAddonUsable, SUBSCRIPTION_SOURCES } from "./credit.types";
 import { PrismaService } from "../database/prisma.service";
 import { CreditTransactionType, CreditGrantSourceType, SubscriptionStatus, ReferenceType } from "@prisma/client";
 
+
 type TxClient = Parameters<Parameters<PrismaService["$transaction"]>[0]>[0];
 
 export interface TransactionEntry {
@@ -29,8 +30,6 @@ export interface LockedBalances {
 
 @Injectable()
 export class CreditRepository {
-  constructor(private readonly prisma: PrismaService) {}
-
   async applyDelta(
     userId: string,
     delta: number,
@@ -47,7 +46,6 @@ export class CreditRepository {
       }
     }
 
-
     await tx.creditGrant.update({
       where: { id: entry.grantId },
       data: {
@@ -55,7 +53,6 @@ export class CreditRepository {
       },
     });
 
-   
     await tx.creditTransaction.create({
       data: {
         userId,
@@ -81,8 +78,9 @@ export class CreditRepository {
       FROM "Subscription" s
       JOIN "PricingOption" po ON po."id" = s."pricingOptionId"
       JOIN "Plan" p ON p."id" = po."planId"
-      WHERE s."userId" = ${userId}
+      WHERE s."userId" = ${userId} and s.status = ${SubscriptionStatus.ACTIVE} and po."productId" = ${productId}
       FOR UPDATE OF s
+      LIMIT 1
     `;
     const sub = subRows[0] ?? null;
 
@@ -99,18 +97,12 @@ export class CreditRepository {
       ORDER BY "priority" ASC, "expiresAt" ASC NULLS LAST, "id" ASC
       FOR UPDATE
     `;
-
     return {
       grants: grantRows || [],
       addonIsActive: isAddonUsable(sub?.isFree, sub?.status),
     };
   }
 
-  /**
-   * Revoke quét CẢ HAI nguồn subscription: credit cấp theo hoá đơn và credit do cron reset
-   * đều là credit của gói, hết kỳ là hết. Liệt kê thiếu một giá trị ở đây nghĩa là credit
-   * kỳ cũ sống sót qua kỳ mới mà không ai thấy.
-   */
   async lockForRevokeSubscription(userId: string, productId: string, tx: TxClient): Promise<LockedGrant[]> {
     const grantRows = await tx.$queryRaw<
       [{ id: string; sourceType: CreditGrantSourceType; amountRemaining: number }]

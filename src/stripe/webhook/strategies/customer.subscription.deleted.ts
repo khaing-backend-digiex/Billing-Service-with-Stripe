@@ -12,6 +12,11 @@ import { creditKey } from "../../../credits/credit.types";
 import { SubscriptionSyncService } from "../../sync/subscription-sync.service";
 import { StripeService } from "../../stripe.service";
 
+const LIVE_STATUSES: SubscriptionStatus[] = [
+  SubscriptionStatus.ACTIVE,
+  SubscriptionStatus.PAST_DUE,
+  SubscriptionStatus.TRIALING,
+];
 @Injectable()
 export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
   private readonly logger = new Logger(CustomerSubscriptionDeletedStrategy.name);
@@ -43,7 +48,14 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
       return;
     }
 
-    
+    if (subscription.status === SubscriptionStatus.EXPIRED) {
+      this.logger.log(
+        `Subscription ${subscription.id} is EXPIRED (superseded by a newer subscription) – ` +
+        `ignoring deleted event for Stripe subscription ${sub.id}`,
+      );
+      return;
+    }
+
     if (subscription.status !== SubscriptionStatus.CANCELLED) {
       await this.prisma.$transaction(async (tx) => {
         await tx.subscription.update({
@@ -72,7 +84,6 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
           },
           tx,
         );
-
       });
 
       this.logger.log(`Subscription ${subscription.id} cancelled`);

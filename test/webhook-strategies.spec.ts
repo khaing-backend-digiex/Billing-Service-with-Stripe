@@ -1,4 +1,5 @@
 import {
+  BillingMode,
   CreditGrantSourceType,
   CreditTransactionType,
   InvoiceStatus,
@@ -58,7 +59,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
     jest.clearAllMocks();
   });
 
-  const creditRepo = new CreditRepository(ctx.prisma);
+  const creditRepo = new CreditRepository();
   const creditService = new CreditService(ctx.prisma, creditRepo);
 
   // ───────────────────────── invoice.paid ─────────────────────────
@@ -182,10 +183,12 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       );
     });
 
-    // Nâng cấp Free → PRO: Stripe tạo sub MỚI. Nếu invoice.paid không dời con trỏ,
-    // hàng local vẫn trỏ vào sub Free cũ → bấm "Huỷ gói" sẽ huỷ nhầm sub Free,
-    // còn sub PRO tiếp tục thu tiền.
-    it("repoints providerSubscriptionId to the new Stripe subscription on upgrade", async () => {
+    // Nâng cấp Free → PRO: Stripe tạo sub MỚI, nên Model B tạo ROW mới và cho row Free về
+    // terminal (§8) — thay cho "repoint" của slot model mà bản cũ của test này kỳ vọng.
+    // Mối lo gốc vẫn được giữ nguyên và vẫn là điều được assert: sau khi lên gói, row LIVE
+    // của product phải trỏ vào sub PRO. Trỏ nhầm thì bấm "Huỷ gói" sẽ huỷ sub Free trong khi
+    // sub PRO tiếp tục thu tiền. Model B đáp ứng bằng row mới, không bằng việc ghi đè.
+    it("puts the paid subscription on a NEW row and expires the free one on upgrade", async () => {
       const user = await ctx.createUser();
       const oldFreeSubId = `sub_free_${rand()}`;
       const sub = await ctx.createSubscription(user.id, {
@@ -205,11 +208,23 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
         ),
       );
 
-      const after = await ctx.prisma.subscription.findUniqueOrThrow({
+      // Row Free cũ: terminal, con trỏ Stripe giữ nguyên (bất biến — nó là lịch sử).
+      const oldRow = await ctx.prisma.subscription.findUniqueOrThrow({
         where: { id: sub.id },
       });
-      expect(after.providerSubscriptionId).toBe(newPaidSubId);
-      expect(after.pricingOptionId).toBe(ctx.basicOption.id);
+      expect(oldRow.status).toBe(SubscriptionStatus.EXPIRED);
+      expect(oldRow.providerSubscriptionId).toBe(oldFreeSubId);
+      expect(oldRow.pricingOptionId).toBe(ctx.freeOption.id);
+
+      // Đúng 1 row live cho product, và nó trỏ vào sub PRO — đây là điều test gốc bảo vệ.
+      const live = await ctx.prisma.subscription.findMany({
+        where: { userId: user.id, productId: ctx.product.id, status: SubscriptionStatus.ACTIVE },
+      });
+      expect(live).toHaveLength(1);
+      expect(live[0].id).not.toBe(sub.id);
+      expect(live[0].providerSubscriptionId).toBe(newPaidSubId);
+      expect(live[0].pricingOptionId).toBe(ctx.basicOption.id);
+
       expect(await ctx.subscriptionCredits(user.id)).toBe(
         ctx.plan.creditPolicy.creditAmount,
       );
@@ -290,6 +305,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
     const strategy = () =>
       new InvoicePaymentFailedStrategy(
         ctx.prisma,
+        new InvoiceRecordService(ctx.prisma),
         stripeServiceMock as any,
         creditService,
       );

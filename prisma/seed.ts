@@ -12,24 +12,10 @@ import {
   stripeProductId,
 } from './stripe-catalog';
 
-/**
- * Dựng catalog dev từ DB trắng, chạy được nhiều lần.
- *
- * Đích: clone repo -> `npx prisma migrate reset` -> đăng ký free plan chạy end-to-end.
- * `migrate reset` tự gọi seed này (khai ở prisma.config.ts, mục `migrations.seed`).
- *
- * `formatDatabaseAmountToStripe` là hàm thuần đổi định dạng tiền của Stripe (zero-decimal),
- * không phải service business — import để dùng chung là đúng, chép lại mới nguy hiểm vì
- * lệch nghĩa là sai số tiền. Ngược lại, seed KHÔNG mượn heuristic suy `interval` từ
- * `durationDay` trong PricingService: seed biết SKU của chính nó nên khai `recurring`
- * thẳng, đỡ phụ thuộc vào một quy tắc có thể đổi.
- */
-
 interface OptionSeed {
   cycleName: string;
   durationDay: number;
   currency: string;
-  /** Đơn vị của DB (đô la), không phải cent. Đổi sang cent ngay trước khi gửi Stripe. */
   price: number;
   recurring: RecurringSpec;
 }
@@ -52,23 +38,6 @@ interface ProductSeed {
 const MONTHLY: RecurringSpec = { interval: 'month', intervalCount: 1 };
 const YEARLY: RecurringSpec = { interval: 'year', intervalCount: 1 };
 
-/**
- * Catalog này CHÉP LẠI đúng thứ đang chạy trên DB dev, không phải thứ tôi thấy hợp lý:
- * tiền tệ vnd, cycle tên MONTHLY/ANUALLY, tên gói tiếng Việt, giá 0 / 300k / 3tr.
- * ("ANUALLY" sai chính tả, nhưng nó là tên có thật trong DB — seed phải khớp thực tế, sửa
- * tên là việc riêng và phải migrate dữ liệu.)
- *
- * Bản trước tôi tự đặt usd + cycle "Monthly": khoá upsert
- * (planId, billingCycleId, currency, provider) không khớp catalog vnd có sẵn nên đẻ ra
- * option FREE thứ hai, làm getFreePriceId() — vốn lấy pricingOptions[0] — thành tung đồng
- * xu. Tự ý đổi đơn vị tiền là đổi business rule, không phải chi tiết kỹ thuật.
- *
- * vnd là zero-decimal: formatDatabaseAmountToStripe không nhân 100 (300000 vnd -> 300000).
- *
- * CHỈ MỘT product có plan FREE, có chủ đích — xem cảnh báo ở cuối file.
- * Mọi Plan đều phải có CreditPolicy: thiếu policy thì cấp credit bị log error rồi skip,
- * tức sub gắn vào plan đó không bao giờ nhận credit (invariant của C4, `npm run db:doctor`).
- */
 const CATALOG: ProductSeed[] = [
   {
     code: 'AI',
@@ -133,7 +102,6 @@ function requireStripe(): Stripe {
   return new Stripe(key);
 }
 
-/** BillingCycle.name chưa có @@unique nên upsert theo name là không được (xem cảnh báo cuối file). */
 async function ensureBillingCycle(name: string, durationDay: number) {
   const existing = await prisma.billingCycle.findFirst({ where: { name, durationDay } });
   if (existing) return existing;
@@ -177,8 +145,6 @@ async function main() {
       });
       console.log(`  Plan ${plan.code}: ${plan.id} (${planSeed.creditAmount} credits)`);
 
-      // Product bên Stripe chỉ dựng khi thật sự phải tạo Price mới. Nếu mọi option của plan
-      // đều nhận nuôi được price có sẵn thì không đẻ thêm Product rác vào tài khoản Stripe.
       let stripeProductIdCache: string | null = null;
       const productForPrice = async (): Promise<string> => {
         if (stripeProductIdCache) return stripeProductIdCache;
@@ -207,8 +173,6 @@ async function main() {
           optionSeed.currency,
         );
 
-        // Price mà DB đã biết được ưu tiên tuyệt đối: sub thật đang chạy trên nó. Tạo price
-        // mới rồi ghi đè sẽ làm findByProviderPriceId() trả null -> webhook gia hạn gãy.
         const existing = await prisma.pricingOption.findUnique({
           where: { planId_billingCycleId_currency_provider: optionKey },
         });
@@ -232,9 +196,6 @@ async function main() {
 
         await prisma.pricingOption.upsert({
           where: { planId_billingCycleId_currency_provider: optionKey },
-          // KHÔNG đụng `price` và `providerPriceId` của option đã có: giá là dữ liệu thật,
-          // và price id thì sub đang chạy trên đó. Seed dựng thứ còn thiếu, không cải tạo
-          // thứ đang chạy.
           update: { providerPriceId: priceId, isActive: true },
           create: {
             ...optionKey,
@@ -248,8 +209,6 @@ async function main() {
     }
   }
 
-  // Nghiệm thu chính của C3, kiểm ngay tại đây thay vì để user phát hiện lúc đăng ký.
-  // Đọc y hệt StripeService.getFreePriceId() — nếu đây null thì free plan flow chết.
   const freePlan = await prisma.plan.findFirst({
     where: { code: 'FREE' },
     include: { pricingOptions: true },
@@ -269,18 +228,3 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
-
-/*
- * HAI THỨ SEED NÀY ĐANG PHẢI NÉ, KHÔNG PHẢI CHỌN CHO ĐẸP:
- *
- * 1. StripeService.getFreePriceId() (src/stripe — Dev B) tra `plan.findFirst({ code:'FREE' })`
- *    KHÔNG kèm productId, rồi lấy `pricingOptions[0]`. Nhưng Plan.code là
- *    @@unique([productId, code]) — FREE tồn tại theo TỪNG product. Nên seed product thứ hai
- *    có plan FREE là hàm đó thành tung đồng xu, và user rơi vào free plan của sai product.
- *    Vì vậy CATALOG ở trên cố ý chỉ có một product. Sửa thật thuộc về Dev B: hàm cần nhận
- *    productId. Đây là chặn, không phải ý thích.
- *
- * 2. BillingCycle chưa có @@unique([name, durationDay]) nên không upsert được — phải
- *    findFirst rồi mới create, tức có khe đua nếu hai seed chạy song song. Với seed dev thì
- *    chấp nhận được, nhưng ràng buộc nên vào schema (schema đang đóng băng sau PR1).
- */

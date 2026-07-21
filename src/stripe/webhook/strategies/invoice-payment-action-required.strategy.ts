@@ -55,7 +55,6 @@ export class InvoicePaymentActionRequiredStrategy implements WebhookStrategy {
       subscription.id,
     );
 
-    
     const isInitial = invoice.billingReason === STRIPE_BILLING_REASON.SUBSCRIPTION_CREATE;
     const status = isInitial
       ? SubscriptionStatus.INCOMPLETE

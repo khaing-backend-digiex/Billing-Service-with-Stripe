@@ -115,16 +115,39 @@ model Subscription {
   cancelledAt                  DateTime?
   createdAt                    DateTime            @default(now())
   updatedAt                    DateTime            @updatedAt
+
+  // ─── EXPAND: cột mới, chưa có implementation cho tới PR3 (Dev B) ───
+
+  /// Denormalize từ pricingOption.plan.productId để làm partial unique index
+  /// `(userId, productId) WHERE status IN ('ACTIVE','PAST_DUE')` (§13.1) — Postgres không
+  /// index xuyên join nên cột này phải nằm vật lý trên row.
+  /// NOT NULL từ 20260717050000: để nullable thì NULL là DISTINCT trong unique index nên
+  /// index hoá trơ, và composite FK dưới đây là MATCH SIMPLE nên hàng NULL né FK hoàn toàn.
+  productId   String
+  /// Row Free = NONE (không Stripe sub phía sau), Enterprise = MANUAL (thay A10).
+  billingMode BillingMode @default(PROVIDER)
+
+  // ─── CONTRACT: sẽ xoá ở PR4, giữ để branch luôn compile ───
+
+  /// @deprecated Số dư dời sang CreditGrant. PR2 (Dev A) chuyển implementation, PR4 xoá.
+  /// `@default(0)` để code mới của PR3 khỏi phải điền một cột đã chết.
+  subscriptionCreditsRemaining Int       @default(0)
+  /// @deprecated D12 bỏ trial hoàn toàn. Xoá ở PR4.
   trialEnd                     DateTime?
   trialStart                   DateTime?
-  userId                       String
-  subscriptionCreditsRemaining Int                 @default(0)
-  billingMode                  BillingMode         @default(PROVIDER)
-  productId                    String?
-  invoices                     Invoice[]
-  pricingOption                PricingOption       @relation(fields: [pricingOptionId], references: [id])
-  user                         User                @relation(fields: [userId], references: [id])
-  events                       SubscriptionEvent[]
+
+  /// @unique giữ tới PR3: bỏ bây giờ làm vỡ 27 chỗ trong src/credits (call-site mà PR2
+  /// sẽ tự xoá) và ép User.subscription thành 1-n. Dev B drop ở PR3 khi đã sạch.
+  userId String
+
+  invoices               Invoice[]
+  // Composite FK, KHÔNG phải FK đơn `pricingOptionId`: FK đơn để `productId` trôi tự do khỏi
+  // pricingOption.plan.productId, tức cột chống lưng cho partial unique index §13.1 có thể
+  // nói dối. Composite thì DB từ chối — không có PricingOption nào (id=X, productId=Y) lệch.
+  // Cùng pattern PricingOption→Plan ở trên. Đòi unique PricingOption(id, productId).
+  pricingOption          PricingOption       @relation(fields: [pricingOptionId, productId], references: [id, productId])
+  user                   User                @relation(fields: [userId], references: [id])
+  events                 SubscriptionEvent[]
 
   @@unique([provider, providerSubscriptionId])
   @@unique([userId, productId], map: "Subscription_live_user_product_key", where: raw("(status = 'ACTIVE'::\"SubscriptionStatus\")"))

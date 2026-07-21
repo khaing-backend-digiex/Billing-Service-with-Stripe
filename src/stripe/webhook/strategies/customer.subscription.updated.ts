@@ -2,15 +2,12 @@ import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
 import {
   SubscriptionStatus,
-  SubscriptionEventType,
-  CreditTransactionType,
-  ReferenceType,
+  SubscriptionEventType
 } from "@prisma/client";
 
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { SubscriptionSyncService } from "../../sync/subscription-sync.service";
-import { Subscription } from "@prisma/client";
 
 const EVENT_TYPE = "customer.subscription.updated";
 
@@ -132,48 +129,49 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
       return;
     }
 
-    if (subscription.status !== SubscriptionStatus.EXPIRED) {
-      await this.prisma.$transaction(async (tx) => {
-        await tx.subscription.update({
-          where: { id: subscription.id },
-          data: {
-            status: SubscriptionStatus.EXPIRED,
-          },
-        });
-
-        await tx.subscriptionEvent.create({
-          data: {
-            subscriptionId: subscription.id,
-            type: SubscriptionEventType.EXPIRED,
-            metadata: {
-              stripeSubscriptionId: stripeSubscription.id,
-              stripeStatus: stripeSubscription.status,
-              reason: CANCELLATION_REASON.PAYMENT_FAILED,
-            },
-          },
-        });
-
-        await this.creditService.revokeSubscriptionCredits(
-          {
-            userId: subscription.userId,
-            productId: subscription.pricingOption.productId,
-            description: "Credits forfeited – subscription expired (payment failed)",
-            subscriptionId: subscription.id,
-            idempotencyKey: creditKey.subscriptionRevoke(subscription.id, stripeSubscription.id),
-          },
-          tx,
-        );
-        
+    await this.prisma.$transaction(async (tx) => {
+      const updateResult = await tx.subscription.updateMany({
+        where: { 
+          id: subscription.id,
+          status: { not: SubscriptionStatus.EXPIRED }
+        },
+        data: {
+          status: SubscriptionStatus.EXPIRED,
+        },
       });
 
-      this.logger.log(
-        `Subscription ${subscription.id} EXPIRED after exhausted payment retries (stripe status: ${stripeSubscription.status})`,
+      if (updateResult.count === 0) {
+        this.logger.log(`Subscription ${subscription.id} already EXPIRED (concurrent delivery)`);
+        return;
+      }
+
+      await tx.subscriptionEvent.create({
+        data: {
+          subscriptionId: subscription.id,
+          type: SubscriptionEventType.EXPIRED,
+          metadata: {
+            stripeSubscriptionId: stripeSubscription.id,
+            stripeStatus: stripeSubscription.status,
+            reason: CANCELLATION_REASON.PAYMENT_FAILED,
+          },
+        },
+      });
+
+      await this.creditService.revokeSubscriptionCredits(
+        {
+          userId: subscription.userId,
+          productId: subscription.pricingOption.productId,
+          description: "Credits forfeited – subscription expired (payment failed)",
+          subscriptionId: subscription.id,
+          idempotencyKey: creditKey.subscriptionRevoke(subscription.id, stripeSubscription.id),
+        },
+        tx,
       );
-    } else {
-      this.logger.log(`Subscription ${subscription.id} already EXPIRED`);
-    }
+    });
 
-
+    this.logger.log(
+      `Subscription ${subscription.id} processed for expiration after exhausted payment retries (stripe status: ${stripeSubscription.status})`,
+    );
     const productId = subscription.productId ?? subscription.pricingOption?.productId;
     if (productId) {
       await this.subscriptionSyncService.provisionFreePlanFallback(subscription.userId, productId);

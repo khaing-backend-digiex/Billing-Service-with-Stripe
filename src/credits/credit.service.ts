@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { CreditRepository, TransactionEntry, LockedGrant } from './credit.repository';
 import { allocateCredits } from './credit-allocation';
@@ -32,9 +32,25 @@ export class CreditService {
   ) {}
 
   async consume(cmd: ConsumeCmd, tx?: TxClient): Promise<ConsumeResult> {
+    if (cmd.amount <= 0) {
+      throw new BadRequestException(`Consumption amount must be greater than 0, got ${cmd.amount}`);
+    }
+
     const exec = async (client: TxClient): Promise<ConsumeResult> => {
       // 1. Lock rows
       const balances = await this.repo.lockForConsume(cmd.userId, cmd.productId, client);
+
+      const getRemaining = (allocs: { grantId: string, amount: number }[] = []) => {
+        let sub = 0;
+        let addon = 0;
+        for (const grant of balances.grants) {
+          const used = allocs.find(a => a.grantId === grant.id)?.amount || 0;
+          const finalAmt = grant.amountRemaining - used;
+          if (isSubscriptionSource(grant.sourceType)) sub += finalAmt;
+          else addon += finalAmt;
+        }
+        return { sub, addon };
+      };
 
       const existing = await client.creditTransaction.findMany({
         where: {
@@ -57,24 +73,19 @@ export class CreditService {
            }
         }
 
-        let remainingSub = 0;
-        let remainingAddon = 0;
-        for (const grant of balances.grants) {
-          if (isSubscriptionSource(grant.sourceType)) remainingSub += grant.amountRemaining;
-          else remainingAddon += grant.amountRemaining;
-        }
+        const rem = getRemaining();
 
         return {
           allocations: [],
           totalAllocated: fromSub + fromAddon,
-          remainingSubscription: remainingSub,
-          remainingAddon: remainingAddon,
+          remainingSubscription: rem.sub,
+          remainingAddon: rem.addon,
         };
       }
 
       const sources: AllocationSource[] = [];
       for (const grant of balances.grants) {
-        if (grant.sourceType === 'ADDON' && !balances.addonIsActive) {
+        if (grant.sourceType === CreditGrantSourceType.ADDON && !balances.addonIsActive) {
            continue;
         }
         sources.push({
@@ -110,22 +121,13 @@ export class CreditService {
         );
       }
       
-      let remainingSub = 0;
-      let remainingAddon = 0;
-      for (const grant of balances.grants) {
-        let finalAmt = grant.amountRemaining;
-        const used = allocation.allocations.find(a => a.grantId === grant.id);
-        if (used) finalAmt -= used.amount;
-
-        if (isSubscriptionSource(grant.sourceType)) remainingSub += finalAmt;
-        else remainingAddon += finalAmt;
-      }
+      const rem = getRemaining(allocation.allocations);
 
       return {
         allocations: allocation.allocations,
         totalAllocated: allocation.totalAllocated,
-        remainingSubscription: remainingSub,
-        remainingAddon: remainingAddon,
+        remainingSubscription: rem.sub,
+        remainingAddon: rem.addon,
       };
     };
 
@@ -149,8 +151,6 @@ export class CreditService {
           userId: cmd.userId,
           productId: cmd.productId,
           sourceType: cmd.sourceType,
-          // Entity, không phải hoá đơn: reconcile hỏi "sub này đã được cấp cho kỳ này chưa",
-          // nên grant phải neo vào chính sub đó mới trả lời được.
           sourceRef: cmd.subscriptionId,
           amountGranted: cmd.amount,
           amountRemaining: cmd.amount,
@@ -202,7 +202,6 @@ export class CreditService {
           amount: cmd.amount,
           description: cmd.grantDescription,
           subscriptionId: cmd.subscriptionId,
-          // Reset là cron cấp trong kỳ, không có hoá đơn nào đứng sau — nên không invoiceId.
           sourceType: CreditGrantSourceType.SUBSCRIPTION_RESET,
           idempotencyKey: creditKey.grantStep(cmd.idempotencyKey),
           expiresAt: cmd.expiresAt,
@@ -289,7 +288,6 @@ export class CreditService {
   }
 
   async getUserPackageStatus(userId: string): Promise<UserPackageStatus[]> {
-    // In preparation for Step 3, we fetch all active subscriptions for the user
     const subscriptions = await this.prisma.subscription.findMany({
       where: { 
         userId,
@@ -331,7 +329,7 @@ export class CreditService {
     const statuses: UserPackageStatus[] = [];
     
     for (const sub of subscriptions) {
-       const productId = (sub as any).productId ?? sub.pricingOption.plan.productId;
+       const productId = sub.productId ?? sub.pricingOption.plan.productId;
        const credits = productCredits.get(productId) ?? { sub: 0, addon: 0 };
 
        statuses.push({

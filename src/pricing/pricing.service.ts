@@ -113,10 +113,10 @@ export class PricingService {
 
   async createAddonPackage(data: { code: string; name: string; credits: number; price: number; currency: string; productId: string; }) {
     try {
-      const productId = await this.adapter.createProduct(data.name);
+      const stripeProductId = await this.adapter.createProduct(data.name);
 
       const priceId = await this.adapter.createOneTimePrice(
-        productId,
+        stripeProductId,
         formatDatabaseAmountToStripe(data.price, data.currency),
         data.currency
       );
@@ -125,12 +125,12 @@ export class PricingService {
         data: {
           code: data.code,
           name: data.name,
+          productId: data.productId,
           credits: data.credits,
           price: data.price,
           currency: data.currency,
           provider: PaymentProvider.STRIPE,
           providerPriceId: priceId,
-          productId: data.productId,
         },
       });
     } catch (error) {

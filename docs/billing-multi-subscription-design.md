@@ -1,12 +1,12 @@
 # Billing Refactor: Single-Subscription → Multi-Subscription
 
-> **Trạng thái**: Thiết kế đã chốt toàn bộ (D1–D12, xem §16) — chưa triển khai code. Thứ tự build ở §12 (dev, data mẫu, không migration).
-> **Ngày**: 2026-07-15
+> **Trạng thái**: Thiết kế đã chốt toàn bộ (D1–D12, xem §16). Thứ tự build ở §12 (dev, data mẫu, không migration).
+> **Ngày**: 2026-07-15 — **sửa D2 ngày 2026-07-17** (row Free có Stripe subscription, xem §8/§14.1/§16)
 > **Phạm vi**: Domain model, entity relationship, Stripe integration, credit lifecycle, implementation path.
 >
 > **Đã chốt (2026-07-16)** — toàn bộ quyết định D1–D12, chi tiết §16:
 > 1. **D1**: Mỗi product = một Stripe Subscription riêng, không gộp items. Thẻ đã lưu (default payment method) tự trừ từng subscription — nhiều invoice/tháng là chấp nhận được (§8).
-> 2. **D2 + D3**: Row semantics = Model B (contract instance) **và Free cũng là một subscription row** — mỗi user × product luôn có đúng 1 row live, row cũ chuyển terminal để giữ history tường minh (§8, §14.1).
+> 2. **D2 + D3**: Row semantics = Model B (contract instance) **và Free cũng là một subscription row** — mỗi user × product luôn có đúng 1 row live, row cũ chuyển terminal để giữ history tường minh (§8, §14.1). *(Sửa 2026-07-17: row Free **có Stripe subscription thật** trên price giá 0 — `billingMode = PROVIDER`. Lên Pro = hủy sub Free trên Stripe + row Free về terminal. Mọi row đều map 1-1 với một Stripe sub, không còn ngoại lệ.)*
 > 3. **D4**: Không có kế hoạch B2B/team billing → **không** đưa `BillingAccount` vào.
 > 4. **D5**: Credit/add-on **luôn thuộc về một product cụ thể** (mua 1000 credit AI, 1000GB Storage...) — không có credit universal dùng chéo product.
 > 5. **D6 — phạm vi hiện tại**: chỉ có product **AI**, Free plan chỉ tồn tại cho AI. OCR/Storage là hướng mở tương lai — không build trước, cấu trúc bảng chỉ chỉnh khi thật sự cần (§5, §15).
@@ -148,7 +148,8 @@ PricingOption **không** chứa business rule credit — chỉ là giá.
 
 - Bỏ `userId @unique` → thêm `productId` (denormalize từ `pricingOption.plan.productId` để làm constraint, §13) + partial unique index.
 - **Bỏ `subscriptionCreditsRemaining`** — số dư dời sang CreditGrant. Subscription chỉ giữ lifecycle: status, period, `nextCreditResetAt`, provider refs. (`trialStart`/`trialEnd` bỏ luôn — D12: không dùng trial.)
-- Thêm `billingMode: PROVIDER | MANUAL | NONE` — mở đường cho Enterprise (hóa đơn tay) và là mode của row Free (thay A10). `providerSubscriptionId` bắt buộc khi `PROVIDER`, cấm khi khác.
+- Thêm `billingMode: PROVIDER | MANUAL | NONE` — mở đường cho Enterprise (hóa đơn tay) (thay A10). `providerSubscriptionId` bắt buộc khi `PROVIDER`, cấm khi khác.
+  **Row Free cũng là `PROVIDER`** (sửa 2026-07-17, xem D2): Free có Stripe subscription thật trên price giá 0, nên nó mang `providerSubscriptionId` như mọi row trả tiền. `NONE` do đó **hiện không có người dùng** — giữ lại trong enum cho row không gắn nguồn billing nào, nếu sau này thật sự cần.
 
 ### Quyết định Stripe (đã chốt 2026-07-16): mỗi Subscription nội bộ = một Stripe Subscription riêng
 
@@ -180,26 +181,28 @@ Nếu mỗi lần đổi gói tạo row mới **và Free cũng là row**, chuỗ
 
 **Lifecycle row Free** (quy tắc "luôn đúng 1 live, còn lại inactive"):
 
-- User mới (hoặc lần đầu chạm một product) → tạo row Free `ACTIVE`, `billingMode = NONE`, `providerSubscriptionId = null`.
-- **Khởi tạo row Free** (spec tường minh — các cột NOT NULL): `currentPeriodStart` = thời điểm tạo row; `nextCreditResetAt` = start + resetInterval của CreditPolicy plan Free; `currentPeriodEnd` = `nextCreditResetAt` (với Free, "period" chính là cửa sổ reset credit); cron reset đẩy cả ba mốc mỗi kỳ. Idempotency của grant free vẫn neo `sub:{id}:reset:{nextCreditResetAt}` như hiện tại.
-- Free → Pro: **`invoice.paid` đầu tiên** (`billing_reason = subscription_create`) là sự kiện tạo row Pro — trong **một DB transaction**: expire row Free (`EXPIRED`) + insert row Pro `ACTIVE` + grant credit (atomicity). Checkout bỏ dở (sub `incomplete`/`incomplete_expired`) không đụng DB — row Free còn nguyên.
-- Pro → hủy/hết hạn: row Pro chuyển `CANCELLED` (terminal, từ `customer.subscription.deleted`) + tạo **row Free mới** `ACTIVE` trong cùng transaction — không revive row Free cũ, giữ nguyên tắc "row là contract instance, đã terminal thì bất biến".
+- User mới (hoặc lần đầu chạm một product) → tạo **Stripe subscription trên price Free** (giá 0) → row Free `ACTIVE`, `billingMode = PROVIDER`, `providerSubscriptionId` = id của Stripe sub vừa tạo. Row Free vì thế map 1-1 với Stripe y như row trả tiền.
+- **Khởi tạo row Free** (spec tường minh — các cột NOT NULL): `currentPeriodStart` / `currentPeriodEnd` lấy từ chính Stripe sub Free (như mọi row `PROVIDER` khác — không tự bịa mốc); `nextCreditResetAt` = `currentPeriodStart` + resetInterval của CreditPolicy plan Free. Cron reset đẩy `nextCreditResetAt` mỗi kỳ; `currentPeriod*` do Stripe đẩy qua webhook. Idempotency của grant free vẫn neo `sub:{id}:reset:{nextCreditResetAt}` như hiện tại.
+- Free → Pro: **`invoice.paid` đầu tiên** của Stripe sub Pro (`billing_reason = subscription_create`) là sự kiện tạo row Pro — trong **một DB transaction**: expire row Free (`EXPIRED`) + insert row Pro `ACTIVE` + grant credit (atomicity). **Sau khi transaction commit**, hủy Stripe sub Free (`subscriptions.cancel`): hai Stripe sub không được sống song song trên cùng product. Gọi Stripe *ngoài* transaction vì nó là side-effect không rollback được — transaction fail thì không được lỡ tay hủy sub Free. Checkout bỏ dở (sub `incomplete`/`incomplete_expired`) không đụng DB và không hủy gì — row Free còn nguyên.
+- Pro → hủy/hết hạn: row Pro chuyển `CANCELLED` (terminal, từ `customer.subscription.deleted`) + tạo **Stripe sub Free mới** + row Free mới `ACTIVE` — không revive row Free cũ (cũng không revive Stripe sub Free cũ, Stripe không cho un-cancel sub đã hủy), giữ nguyên tắc "row là contract instance, đã terminal thì bất biến".
+- **`deleted` của chính sub Free KHÔNG được đẻ row Free mới** — hệ quả trực tiếp của việc Free có Stripe sub: hủy sub Free lúc lên Pro cũng phát `customer.subscription.deleted`. Nếu handler cứ thấy `deleted` là tạo Free mới thì nó sẽ đá vào partial unique index (row Pro đang live), hoặc tệ hơn là đẻ vòng lặp Free → cancel → Free. Quy tắc: **chỉ tạo row Free mới khi (user, product) không còn row live nào khác** — kiểm tra trong cùng transaction với việc terminal row cũ.
 - **Webhook tolerance — out-of-order**: Stripe không đảm bảo thứ tự delivery. Mọi handler phải chịu được "row chưa/không tồn tại": `updated`/`deleted` cho sub chưa có row local → ignore + log, không throw (khác `paid-invoice-sync.service.ts:38` hiện tại — trong Model B "row chưa tồn tại" là tình huống thường xuyên, không phải lỗi); `invoice.paid` tự upsert row theo unique `(provider, providerSubscriptionId)` nên không phụ thuộc event `created` đến trước.
-- **Race tạo row Free**: webhook `deleted` (có retry) và reconciliation cron đều có thể tạo row Free — partial unique index chặn bản sao; handler phải coi unique-violation là **success** (idempotent), không được fail webhook.
+- **Race tạo row Free**: webhook `deleted` (có retry) và reconciliation cron đều có thể tạo row Free — partial unique index chặn bản sao; handler phải coi unique-violation là **success** (idempotent), không được fail webhook. Lưu ý race này giờ đắt hơn: mỗi lần thử tạo row Free là một lần tạo **Stripe sub** thật, mà unique-violation xảy ra *sau* khi Stripe đã tạo. Bên thua race phải **hủy lại Stripe sub vừa tạo**, nếu không lại đẻ đúng loại zombie mà quy tắc trên đang chống. Rẻ hơn: kiểm tra row live *trước* khi gọi Stripe, và coi index là lưới cuối.
 - Invariant: mỗi user × product có **đúng 1 row live** — partial unique index (§13) áp dụng cho cả Free. `free-plan-reconciliation.cron` giữ lại làm lưới an toàn cho invariant này, generalize theo product.
 
-**Ranh giới quan trọng**: đổi price trong cùng một Stripe subscription (proration — với catalog hiện tại chỉ còn trường hợp đổi chu kỳ PRO monthly ↔ yearly, D10) vẫn là *update trên cùng row*, vì Stripe sub ID không đổi. Với row trả tiền: **row mới khi và chỉ khi Stripe subscription mới**; với row Free: row mới khi user rơi về free. Sau khi set, `providerSubscriptionId` là immutable (row Free không bao giờ set). **Tuyên bố bất biến, nói chính xác**: row bất biến theo Stripe sub ID, *không* bất biến theo pricing (`pricingOptionId` đổi khi đổi chu kỳ) — vì vậy **Invoice lưu snapshot `pricingOptionId`** tại thời điểm charge, để "invoice này theo giá nào" trả lời được từ chính Invoice, không phải reconstruct từ SubscriptionEvent.
+**Ranh giới quan trọng**: đổi price trong cùng một Stripe subscription (proration — với catalog hiện tại chỉ còn trường hợp đổi chu kỳ PRO monthly ↔ yearly, D10) vẫn là *update trên cùng row*, vì Stripe sub ID không đổi. **Row mới khi và chỉ khi Stripe subscription mới** — áp dụng cho *mọi* row, kể cả Free (từ 2026-07-17 Free cũng có Stripe sub, nên không còn ngoại lệ nào). Sau khi set, `providerSubscriptionId` là immutable. **Tuyên bố bất biến, nói chính xác**: row bất biến theo Stripe sub ID, *không* bất biến theo pricing (`pricingOptionId` đổi khi đổi chu kỳ) — vì vậy **Invoice lưu snapshot `pricingOptionId`** tại thời điểm charge, để "invoice này theo giá nào" trả lời được từ chính Invoice, không phải reconstruct từ SubscriptionEvent.
 
 **Reactivation — đổi ý sau khi hủy gia hạn**: trước khi hết kỳ, un-cancel = set `cancel_at_period_end = false` trên **cùng** Stripe sub → cùng row local, `autoRenew` về true qua webhook `updated` — không row mới, không checkout mới. API mua gói bắt buộc check "đã có sub live cùng product": nếu có → điều hướng sang reactivate (hoặc đổi chu kỳ), **không** tạo Stripe sub thứ hai (sẽ vỡ partial unique index và user bị charge trên sub không hiển thị trong app).
 
 Kịch bản Free → Pro → hủy với thiết kế này: Free ACTIVE → Free EXPIRED + Pro ACTIVE → Pro CANCELLED + Free mới ACTIVE. Tổng cộng **3 row, toàn bộ là lịch sử chuyển gói tường minh**.
 
 Cái giá phải trả (chấp nhận có chủ đích):
-- Số row tăng theo số lần chuyển gói × số product; bảng Subscription chứa cả row không gắn với hợp đồng billing thật.
-- "Row mới ⇔ Stripe subscription mới" không còn tuyệt đối — row Free đứng ngoài mapping Stripe; constraint `billingMode` (§13.4) phải cho phép nhánh `NONE`.
-- Giữ `free-plan-reconciliation.cron` (không xóa được như phương án fallback), nhân theo product khi multi-product.
+- Số row tăng theo số lần chuyển gói × số product.
+- **Mỗi user Free = một Stripe subscription thật** (sửa 2026-07-17): số object trên Stripe bằng số user, và mỗi kỳ Free đẻ một invoice $0 → một `invoice.paid` cho mỗi user mỗi tháng. Webhook noise tăng tuyến tính theo user, kể cả user không trả đồng nào. Đây là cái giá chính của D2 bản mới.
+- **Mỗi lần chuyển gói là 2 lệnh gọi Stripe** (tạo sub mới + hủy sub cũ), không còn là một. Chúng không nằm chung transaction với DB được, nên luôn tồn tại cửa sổ "đã commit DB mà chưa hủy xong Stripe" → cần reconciliation dọn (xem dưới).
+- Giữ `free-plan-reconciliation.cron` (không xóa được như phương án fallback), nhân theo product khi multi-product. Giờ nó gánh thêm việc: **dò Stripe sub Free mồ côi** (row local đã terminal nhưng Stripe sub vẫn `active`) và hủy chúng — đây là lưới an toàn cho cửa sổ ở gạch đầu dòng trên.
 
-Đổi lại: không cần cron grant free credit theo User, không cần lớp compose "free ảo" cho `GET /subscription`.
+Đổi lại: không cần cron grant free credit theo User, không cần lớp compose "free ảo" cho `GET /subscription`, và **mapping "row ⇔ Stripe sub" trở lại tuyệt đối 1-1** — không còn row nào đứng ngoài Stripe, nên `billingMode = NONE` không còn người dùng và `paid-invoice-sync` không cần nhánh riêng cho Free.
 
 ## 9. CreditWallet: refactor — thay bằng CreditGrant ledger
 
@@ -271,7 +274,10 @@ Mọi loại tiêu qua **một đường consume duy nhất** nhờ `priority` +
 - [ ] `customer.subscription.updated.ts`: xử lý reactivation (`cancel_at_period_end=false` → `autoRenew=true`) + cycle change (đổi `pricingOptionId` trên cùng row); **ignore + log** khi row local chưa tồn tại (out-of-order tolerance) thay vì throw như `paid-invoice-sync.service.ts:38` hiện tại.
 - [ ] `invoice.payment_failed.ts` / `invoice-payment-action-required.strategy.ts`: mirror `PAST_DUE`, đếm `attempts`; **không** thêm timer nội bộ (dunning là cấu hình Stripe).
 - [ ] `payments.service.ts`: API mua gói check "đã có sub live cùng product" → điều hướng reactivate/cycle-change, **không** tạo Stripe sub thứ hai (M6); `upgradeSubscriptionTier` chặn `newPricingOptionId` khác product.
-- [ ] `provisioning/user-provisioning.service.ts`: user mới tạo row Free `ACTIVE`, `billingMode=NONE` (spec khởi tạo row Free — §8).
+- [ ] `provisioning/user-provisioning.service.ts`: user mới → tạo Stripe sub trên price Free rồi ghi row Free `ACTIVE`, `billingMode=PROVIDER`, `providerSubscriptionId` = sub vừa tạo (spec khởi tạo row Free — §8).
+- [ ] `invoice-paid.strategy.ts`: sau khi commit row Pro, **hủy Stripe sub Free** của cùng (user, product). Hiện **chưa có** — đoạn hủy ở `subscription-sync.service.ts:146` đã chết từ `9d84f12` (tìm `existing` theo `providerSubscriptionId: sub.id` rồi hỏi nó khác `sub.id`, vĩnh viễn false), nên sub Free đang bị bỏ rơi trên Stripe.
+- [ ] `invoice-paid.strategy.ts`: lookup row phải **lọc status live**. Hiện tìm theo `providerSubscriptionId` không kèm status, nên `invoice.paid` của sub Free zombie (gia hạn $0 mỗi kỳ) **hồi sinh row Free đã EXPIRED về ACTIVE** → hai row live cùng product → vỡ partial unique index §13.1.
+- [ ] `customer.subscription.deleted.ts`: chỉ tạo row Free mới khi (user, product) **không còn row live nào khác** — nếu không, `deleted` của chính sub Free lúc lên Pro sẽ đẻ vòng lặp (§8).
 
 **Bước 4 — Cron: generalize theo product** (`src/cron/*`)
 - [ ] `credit-reset.cron.ts`: reset theo `CreditPolicy.resetInterval` (bỏ `Math.round(resetIntervalDay/30)`); phục vụ cả row Free lẫn yearly-plan-monthly-reset; grant reset neo `sub:{id}:reset:{nextCreditResetAt}`.
@@ -309,7 +315,9 @@ Mọi loại tiêu qua **một đường consume duy nhất** nhờ `priority` +
 
 ### 14.1. Free tier: row (đã chốt 2026-07-16) — không dùng fallback
 
-**Free là một subscription row.** Phương án fallback ("không có sub live = hưởng free tier") từng được đề xuất để tránh row Free tích lũy khi chuyển gói, nhưng bị bác vì mục tiêu chính của multi-row là **history tường minh**: chuỗi Free → Pro → Free đọc thẳng từ bảng Subscription, không phải suy từ khoảng trống giữa các row trả tiền. Lợi ích kèm theo: `nextCreditResetAt` neo trên row Free → cron reset hiện có phục vụ luôn Free (chung cơ chế với yearly-reset; monthly trả tiền vẫn grant qua webhook), không cần cron grant free credit riêng neo theo User. Chi phí chấp nhận: giữ reconciliation cron, và row Free là ngoại lệ của mapping Stripe (`billingMode = NONE`, không `providerSubscriptionId` — xem §8).
+**Free là một subscription row.** Phương án fallback ("không có sub live = hưởng free tier") từng được đề xuất để tránh row Free tích lũy khi chuyển gói, nhưng bị bác vì mục tiêu chính của multi-row là **history tường minh**: chuỗi Free → Pro → Free đọc thẳng từ bảng Subscription, không phải suy từ khoảng trống giữa các row trả tiền. Lợi ích kèm theo: `nextCreditResetAt` neo trên row Free → cron reset hiện có phục vụ luôn Free (chung cơ chế với yearly-reset; monthly trả tiền vẫn grant qua webhook), không cần cron grant free credit riêng neo theo User. Chi phí chấp nhận: giữ reconciliation cron.
+
+**Sửa 2026-07-17 — Free có Stripe subscription**: bản đầu của D2 cho row Free đứng ngoài Stripe (`billingMode = NONE`, không `providerSubscriptionId`). Đã đảo: user mới vẫn được tạo **Stripe sub trên price Free** (đúng hành vi `subscribeToFreePlan` đang chạy), rồi khi lên Pro thì **hủy sub Free trên Stripe** và cho row Free về terminal để giữ history. Hệ quả: row Free là `billingMode = PROVIDER`, mapping row ⇔ Stripe sub trở lại 1-1 tuyệt đối, không còn ngoại lệ; đổi lại mỗi user Free tốn một Stripe sub + một invoice $0 mỗi kỳ (§8).
 
 **Phạm vi hiện tại (D6)**: Free plan chỉ tồn tại cho product **AI** — mỗi user có đúng 1 row Free (AI) khi không có sub AI trả tiền. Product tương lai (OCR/Storage) có free tier hay không sẽ quyết định khi làm product đó; không tạo sẵn row Free cho product chưa ra mắt.
 
@@ -331,7 +339,7 @@ Mọi loại tiêu qua **một đường consume duy nhất** nhờ `priority` +
 | # | Quyết định | Nội dung đã chốt | Trạng thái |
 |---|-----------|---------|-----------|
 | D1 | Stripe: một Stripe Subscription per product, hay gộp items? | Một Stripe Subscription riêng per product; thẻ lưu sẵn tự trừ từng sub nên không cần gộp hóa đơn (§8) | **Đã chốt 2026-07-16** |
-| D2 | Free tier: row hay fallback? | **Row** — Free là subscription row; luôn 1 row live, row cũ terminal giữ history (§8, §14.1) | **Đã chốt 2026-07-16** |
+| D2 | Free tier: row hay fallback? | **Row** — Free là subscription row; luôn 1 row live, row cũ terminal giữ history (§8, §14.1). **Sửa 2026-07-17**: row Free **có Stripe subscription** (price giá 0, `billingMode = PROVIDER`) chứ không đứng ngoài Stripe như bản đầu; lên Pro thì hủy sub Free trên Stripe + row Free về terminal. Mapping row ⇔ Stripe sub 1-1 tuyệt đối; giá phải trả là mỗi user Free tốn 1 Stripe sub + 1 invoice $0 mỗi kỳ | **Đã chốt 2026-07-16, sửa 2026-07-17** |
 | D3 | Row semantics: slot (A) hay contract instance (B)? | Model B — row trả tiền mới khi và chỉ khi Stripe subscription mới; row Free mới khi user rơi về free | **Đã chốt 2026-07-16** |
 | D4 | Có đưa `BillingAccount` vào không? | Không — không có kế hoạch B2B/team billing | **Đã chốt 2026-07-16** |
 | D5 | Credit universal hay per product? | Per product — add-on là SKU riêng của từng product (1000 credit AI, 1000GB Storage...); `CreditGrant.productId` bắt buộc | **Đã chốt 2026-07-16** |

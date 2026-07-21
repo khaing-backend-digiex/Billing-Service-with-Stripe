@@ -20,8 +20,6 @@ const LIVE_STATUSES: SubscriptionStatus[] = [
   SubscriptionStatus.PAST_DUE,
 ];
 
-
-
 @Injectable()
 export class SubscriptionSyncService {
   private readonly logger = new Logger(SubscriptionSyncService.name);
@@ -32,7 +30,6 @@ export class SubscriptionSyncService {
     private readonly stripeService: StripeService,
     private readonly creditService: CreditService,
   ) { }
-
 
   async syncFromStripe(sub: PaymentSubscription): Promise<Subscription | null> {
     const user = await this.prisma.user.findFirst({
@@ -72,7 +69,6 @@ export class SubscriptionSyncService {
       where: { providerSubscriptionId: sub.id },
       include: { pricingOption: true },
     });
-
 
     const localSubscription = await this.prisma.$transaction(async (tx) => {
       let upserted;
@@ -147,7 +143,6 @@ export class SubscriptionSyncService {
       return upserted;
     });
 
-
     if (
       existing &&
       existing.providerSubscriptionId &&
@@ -162,11 +157,6 @@ export class SubscriptionSyncService {
 
   async provisionFreePlanFallback(userId: string, productId: string, tx?: any) {
     const doProvision = async (client: any) => {
-      await client.user.update({
-        where: { id: userId },
-        data: { updatedAt: new Date() }
-      });
-
       const freePlan = await client.plan.findFirst({
         where: { isFree: true, productId },
         include: { pricingOptions: true, creditPolicy: true },
@@ -221,10 +211,18 @@ export class SubscriptionSyncService {
       this.logger.log(`Provisioned new Free subscription for user ${userId} (fallback)`);
     };
 
-    if (tx) {
-      await doProvision(tx);
-    } else {
-      await this.prisma.$transaction(doProvision);
+    try {
+      if (tx) {
+        await doProvision(tx);
+      } else {
+        await this.prisma.$transaction(doProvision);
+      }
+    } catch (err: any) {
+      if (err.code === 'P2002') {
+        this.logger.log(`Live plan already exists for user ${userId} (caught concurrent creation), skipping fallback provision`);
+        return;
+      }
+      throw err;
     }
   }
 }

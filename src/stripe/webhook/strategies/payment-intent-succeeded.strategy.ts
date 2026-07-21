@@ -54,6 +54,11 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
       return;
     }
 
+    if (!addon.productId) {
+      this.logger.error(`Addon ${addon.id} has no productId. Cannot grant credits.`);
+      return;
+    }
+
     await this.prisma.$transaction(async (tx) => {
       const payment = await this.paymentService.recordSucceeded(
         {

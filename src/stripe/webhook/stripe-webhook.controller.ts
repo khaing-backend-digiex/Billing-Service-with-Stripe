@@ -1,14 +1,12 @@
 import {
   Controller,
   Post,
-  Req,
   Headers,
   BadRequestException,
   Logger,
   RawBody,
 } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiExcludeEndpoint } from "@nestjs/swagger";
-import { Request } from "express";
 import { Public } from "../../common/decorators/public.decorator";
 import { StripeService } from "../stripe.service";
 import { StripeWebhookService } from "./stripe-webhook.service";
@@ -46,9 +44,8 @@ export class StripeWebhookController {
       );
 
       this.logger.log(`Received Stripe event: ${webhookEvent.type} (${webhookEvent.id})`);
-
       await this.webhookService.handleEvent(webhookEvent.data as any);
-
+      
       return { received: true };
     } catch (error) {
       this.logger.error(
