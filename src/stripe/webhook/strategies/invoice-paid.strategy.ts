@@ -99,16 +99,7 @@ export class InvoicePaidStrategy implements WebhookStrategy {
     let supersededStripeSubIds: string[] = [];
 
     if (existing) {
-      subscription = await this.prisma.subscription.update({
-        where: { id: existing.id },
-        data: {
-          status: SubscriptionStatus.ACTIVE,
-          pricingOptionId: pricingOption.id,
-          currentPeriodStart: periodStart,
-          currentPeriodEnd: periodEnd,
-          nextCreditResetAt: periodEnd,
-        }
-      });
+      subscription = existing;
     } else {
       const result = await this.prisma.$transaction(async (tx) => {
         const superseded = await tx.subscription.findMany({
