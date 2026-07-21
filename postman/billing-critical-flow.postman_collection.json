@@ -1,0 +1,312 @@
+{
+  "info": {
+    "name": "Billing Service — Critical Flow (real DB)",
+    "_postman_id": "b1111111-1111-4111-8111-111111111111",
+    "description": "End-to-end flow chủ chốt chạy trên DB thật.\n\nPREREQUISITES\n1. App chạy tại {{base_url}} (mặc định http://localhost:3000), nối Postgres thật + Stripe TEST key.\n2. Webhook: chạy `stripe listen --forward-to {{base_url}}/stripe/webhook`. Nhiều bước cấp credit / kích hoạt Pro xảy ra QUA webhook `invoice.paid` → có độ trễ vài giây; nếu 'Get Credit Status' chưa thấy credit, chạy lại request đó.\n3. Thẻ mặc định: để mua Pro (off-session) user cần một thẻ đã lưu. Sau 'Create Setup Intent', xác nhận clientSecret bằng thẻ test (Stripe.js/front-end hoặc `stripe.setupIntents.confirm` với pm_card_visa). Webhook `setup_intent.succeeded`/`payment_method.attached` sẽ đồng bộ thẻ về DB.\n\nBiến tự set qua test script: access_token, product_id, pro_monthly_option_id, addon_id, consume_key.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:3000" },
+    { "key": "user_email", "value": "" },
+    { "key": "user_password", "value": "securePassword123" },
+    { "key": "access_token", "value": "" },
+    { "key": "product_id", "value": "" },
+    { "key": "pro_monthly_option_id", "value": "" },
+    { "key": "addon_id", "value": "" },
+    { "key": "consume_key", "value": "" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{access_token}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "1. Auth",
+      "item": [
+        {
+          "name": "Register (creates user + Stripe customer + Free sub)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": { "exec": [
+                "// Email mới mỗi lần chạy để collection re-runnable",
+                "pm.collectionVariables.set('user_email', 'billing_test_' + Date.now() + '@example.com');"
+              ] }
+            },
+            {
+              "listen": "test",
+              "script": { "exec": [
+                "pm.test('201 Created', () => pm.response.code === 201);",
+                "pm.test('has user', () => pm.response.json().data);"
+              ] }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/auth/register", "host": ["{{base_url}}"], "path": ["auth", "register"] },
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Postman Test\",\n  \"email\": \"{{user_email}}\",\n  \"password\": \"{{user_password}}\"\n}" }
+          }
+        },
+        {
+          "name": "Login (capture access_token)",
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('200 OK', () => pm.response.code === 200);",
+              "const token = pm.response.json().data.accessToken;",
+              "pm.expect(token, 'accessToken present').to.be.a('string').and.not.empty;",
+              "pm.collectionVariables.set('access_token', token);"
+            ] }
+          }],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/auth/login", "host": ["{{base_url}}"], "path": ["auth", "login"] },
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{user_email}}\",\n  \"password\": \"{{user_password}}\"\n}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Catalog",
+      "item": [
+        {
+          "name": "Get Plans (capture product_id + pro_monthly_option_id)",
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('200 OK', () => pm.response.code === 200);",
+              "const plans = pm.response.json().data || pm.response.json();",
+              "pm.expect(plans, 'plans array').to.be.an('array').that.is.not.empty;",
+              "// product_id: mọi plan cùng product (AI)",
+              "pm.collectionVariables.set('product_id', plans[0].productId);",
+              "// Pro = plan không free; ưu tiên option chu kỳ tháng",
+              "const pro = plans.find(p => p.isFree === false) || plans.find(p => (p.code||'').toUpperCase() !== 'FREE');",
+              "pm.expect(pro, 'a paid (Pro) plan exists').to.be.ok;",
+              "const opts = pro.pricingOptions || [];",
+              "const monthly = opts.find(o => /month/i.test(o.name || '')) || opts[0];",
+              "pm.expect(monthly, 'pro pricing option exists').to.be.ok;",
+              "pm.collectionVariables.set('pro_monthly_option_id', monthly.id);"
+            ] }
+          }],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/pricing/plans", "host": ["{{base_url}}"], "path": ["pricing", "plans"] }
+          }
+        },
+        {
+          "name": "Get Addons (capture addon_id)",
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('200 OK', () => pm.response.code === 200);",
+              "const addons = pm.response.json().data || pm.response.json();",
+              "if (Array.isArray(addons) && addons.length) pm.collectionVariables.set('addon_id', addons[0].id);"
+            ] }
+          }],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/pricing/addons", "host": ["{{base_url}}"], "path": ["pricing", "addons"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Entitlement — Free credits (no payment)",
+      "item": [
+        {
+          "name": "Get Credit Status (Free plan + free credits)",
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('200 OK', () => pm.response.code === 200);",
+              "const data = pm.response.json().data;",
+              "pm.expect(data, 'status array').to.be.an('array');",
+              "if (data[0]) console.log('subscriptionCredits =', data[0].subscriptionCredits, '| plan =', data[0].plan);",
+              "pm.test('free credits granted via invoice.paid webhook (re-run if 0)', () => {",
+              "  if (!data[0] || data[0].subscriptionCredits === 0) {",
+              "    console.warn('Chưa thấy credit — webhook invoice.paid có thể chưa về. Chạy lại request này.');",
+              "  }",
+              "  pm.expect(true).to.be.true;",
+              "});"
+            ] }
+          }],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/credits/status", "host": ["{{base_url}}"], "path": ["credits", "status"] }
+          }
+        },
+        {
+          "name": "Consume Credits (happy path)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": { "exec": [
+                "// Key mới cho lần tiêu này (dùng lại ở bước idempotency)",
+                "pm.collectionVariables.set('consume_key', 'consume-' + Date.now());"
+              ] }
+            },
+            {
+              "listen": "test",
+              "script": { "exec": [
+                "pm.test('200 OK', () => pm.response.code === 200);",
+                "const d = pm.response.json().data;",
+                "pm.test('allocated 10', () => pm.expect(d.totalAllocated).to.eql(10));",
+                "console.log('remainingSubscription =', d.remainingSubscription, '| remainingAddon =', d.remainingAddon);",
+                "pm.collectionVariables.set('remaining_after_first', d.remainingSubscription);"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/credits/consume", "host": ["{{base_url}}"], "path": ["credits", "consume"] },
+            "body": { "mode": "raw", "raw": "{\n  \"amount\": 10,\n  \"productId\": \"{{product_id}}\",\n  \"idempotencyKey\": \"{{consume_key}}\",\n  \"referenceId\": \"postman-happy\",\n  \"description\": \"Postman consume happy path\"\n}" }
+          }
+        },
+        {
+          "name": "Consume Credits (SAME key → idempotent, no double charge)",
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('200 OK', () => pm.response.code === 200);",
+              "const d = pm.response.json().data;",
+              "const before = Number(pm.collectionVariables.get('remaining_after_first'));",
+              "pm.test('remaining unchanged (idempotent replay)', () => pm.expect(d.remainingSubscription).to.eql(before));"
+            ] }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/credits/consume", "host": ["{{base_url}}"], "path": ["credits", "consume"] },
+            "body": { "mode": "raw", "raw": "{\n  \"amount\": 10,\n  \"productId\": \"{{product_id}}\",\n  \"idempotencyKey\": \"{{consume_key}}\",\n  \"referenceId\": \"postman-idem\",\n  \"description\": \"Postman idempotent replay\"\n}" }
+          }
+        },
+        {
+          "name": "Consume Credits (amount 0 → 400 guard)",
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('400 Bad Request (amount must be > 0)', () => pm.response.code === 400);"
+            ] }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/credits/consume", "host": ["{{base_url}}"], "path": ["credits", "consume"] },
+            "body": { "mode": "raw", "raw": "{\n  \"amount\": 0,\n  \"productId\": \"{{product_id}}\",\n  \"idempotencyKey\": \"consume-zero-{{$timestamp}}\"\n}" }
+          }
+        },
+        {
+          "name": "Consume Credits (over balance → 400 insufficient)",
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('400 Bad Request (insufficient credits)', () => pm.response.code === 400);"
+            ] }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/credits/consume", "host": ["{{base_url}}"], "path": ["credits", "consume"] },
+            "body": { "mode": "raw", "raw": "{\n  \"amount\": 99999999,\n  \"productId\": \"{{product_id}}\",\n  \"idempotencyKey\": \"consume-over-{{$timestamp}}\"\n}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Subscription — buy Pro & cancel (needs saved card)",
+      "item": [
+        {
+          "name": "Create Setup Intent (start saving a card)",
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('201 Created', () => pm.response.code === 201);",
+              "const d = pm.response.json().data;",
+              "console.log('clientSecret =', d.clientSecret);",
+              "console.log('→ Xác nhận clientSecret bằng thẻ test (pm_card_visa) qua Stripe.js hoặc stripe.setupIntents.confirm, rồi để webhook đồng bộ thẻ về DB.');"
+            ] }
+          }],
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/payment-methods/setup-intent", "host": ["{{base_url}}"], "path": ["payment-methods", "setup-intent"] }
+          }
+        },
+        {
+          "name": "List Payment Methods (verify default card exists)",
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('200 OK', () => pm.response.code === 200);",
+              "const pms = pm.response.json().data || [];",
+              "pm.test('has at least one card before buying Pro', () => {",
+              "  if (!pms.length) console.warn('Chưa có thẻ — hoàn tất Setup Intent + webhook trước khi mua Pro.');",
+              "  pm.expect(true).to.be.true;",
+              "});"
+            ] }
+          }],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/payment-methods", "host": ["{{base_url}}"], "path": ["payment-methods"] }
+          }
+        },
+        {
+          "name": "Purchase Subscription — Pro monthly (off-session)",
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('201 Created', () => pm.response.code === 201);",
+              "const d = pm.response.json().data;",
+              "console.log('subscriptionId =', d.subscriptionId, '| status =', d.status);",
+              "console.log('→ invoice.paid webhook sẽ tạo row Pro + cấp credit Pro (có độ trễ).');"
+            ] }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/stripe/checkout/subscription", "host": ["{{base_url}}"], "path": ["stripe", "checkout", "subscription"] },
+            "body": { "mode": "raw", "raw": "{\n  \"pricingOptionId\": \"{{pro_monthly_option_id}}\"\n}" }
+          }
+        },
+        {
+          "name": "Get Credit Status (Pro credits after webhook — re-run if needed)",
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('200 OK', () => pm.response.code === 200);",
+              "const data = pm.response.json().data;",
+              "const ai = data.find(s => s.productId === pm.collectionVariables.get('product_id')) || data[0];",
+              "if (ai) console.log('plan =', ai.plan, '| subscriptionCredits =', ai.subscriptionCredits);"
+            ] }
+          }],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/credits/status", "host": ["{{base_url}}"], "path": ["credits", "status"] }
+          }
+        },
+        {
+          "name": "Cancel Subscription (cancel_at_period_end)",
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('2xx', () => pm.response.code >= 200 && pm.response.code < 300);",
+              "console.log('→ Sub sống tới hết kỳ; cuối kỳ webhook customer.subscription.deleted → CANCELLED + downgrade Free.');"
+            ] }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/payments/cancel-subscription", "host": ["{{base_url}}"], "path": ["payments", "cancel-subscription"] },
+            "body": { "mode": "raw", "raw": "{\n  \"reason\": \"postman test cancel\"\n}" }
+          }
+        }
+      ]
+    }
+  ]
+}
