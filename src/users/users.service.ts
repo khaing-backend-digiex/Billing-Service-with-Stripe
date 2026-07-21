@@ -4,8 +4,13 @@ import {
   Logger,
 } from "@nestjs/common";
 import { PrismaService } from "../database/prisma.service";
-import { User } from "@prisma/client";
+import { User, SubscriptionStatus } from "@prisma/client";
 import { randomUUID } from "crypto";
+
+const LIVE_STATUSES: SubscriptionStatus[] = [
+  SubscriptionStatus.ACTIVE,
+  SubscriptionStatus.PAST_DUE,
+];
 
 @Injectable()
 export class UsersService {
@@ -36,8 +41,11 @@ export class UsersService {
   }): Promise<User[]> {
     return this.prisma.user.findMany({
       where: {
-        createdAt: { lt: params.createdBefore },
-        OR: [{ providerCustomerId: null }, { subscriptions: { none: {} } }],
+        createdAt: { lt: params.createdBefore },  
+        OR: [
+          { providerCustomerId: null },
+          { subscriptions: { none: { status: { in: LIVE_STATUSES } } } },
+        ],
       },
       orderBy: { createdAt: "asc" },
       take: params.limit,

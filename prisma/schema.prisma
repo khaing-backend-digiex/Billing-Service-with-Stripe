@@ -150,7 +150,7 @@ model Subscription {
   events                 SubscriptionEvent[]
 
   @@unique([provider, providerSubscriptionId])
-  @@unique([userId, productId], map: "Subscription_live_user_product_key", where: raw("(status = 'ACTIVE'::\"SubscriptionStatus\")"))
+  @@unique([userId, productId], map: "Subscription_live_user_product_key", where: raw("(status = ANY (ARRAY['ACTIVE'::\"SubscriptionStatus\", 'PAST_DUE'::\"SubscriptionStatus\"]))"))
 }
 
 model CreditWallet {

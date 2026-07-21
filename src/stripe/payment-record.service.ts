@@ -10,6 +10,7 @@ export interface RecordPaymentInput {
   currency: string;
   invoiceId?: string | null;
   addonPackageId?: string | null;
+  paidAt?: Date | null;
 }
 
 @Injectable()
@@ -38,14 +39,15 @@ export class PaymentRecordService {
     input: RecordPaymentInput,
     tx?: Prisma.TransactionClient,
   ): Promise<Payment> {
+    const paidAt = input.paidAt ?? new Date();
     return this.db(tx).payment.upsert({
       where: { providerPaymentId: input.providerPaymentId },
       create: {
         ...this.createData(input),
         status: PaymentStatus.SUCCEEDED,
-        paidAt: new Date(),
+        paidAt,
       },
-      update: { status: PaymentStatus.SUCCEEDED, paidAt: new Date() },
+      update: { status: PaymentStatus.SUCCEEDED, paidAt },
     });
   }
 

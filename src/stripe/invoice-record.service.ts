@@ -40,13 +40,14 @@ export class InvoiceRecordService {
     tx: Prisma.TransactionClient,
     invoiceId: string,
     billingReason: string | null,
+    paidAt: Date = new Date(),
   ): Promise<boolean> {
     const claimed = await tx.invoice.updateMany({
       where: { id: invoiceId, status: { not: InvoiceStatus.PAID } },
       data: {
         status: InvoiceStatus.PAID,
         billingReason,
-        paidAt: new Date(),
+        paidAt,
       },
     });
 
