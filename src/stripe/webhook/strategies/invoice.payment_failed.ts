@@ -79,17 +79,22 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
           },
         });
       } else {
-        invoice = await tx.invoice.update({
+        // Chưa có sub local (sub incomplete / event tới trước invoice.paid). KHÔNG dùng
+        // tx.invoice.update ở đây: update trên record không tồn tại ném P2025 → webhook throw
+        // → Stripe retry vô hạn. findUnique không ném, để guard "tolerate missing invoice" chạy đúng.
+        const existingInvoice = await tx.invoice.findUnique({
           where: { providerInvoiceId: stripeInvoice.id },
-          data: retryData,
         });
 
-        if (!invoice) {
+        if (!existingInvoice) {
           this.logger.error(`No local invoice found for Stripe invoice ${stripeInvoice.id}`);
           return null;
         }
 
-
+        invoice = await tx.invoice.update({
+          where: { id: existingInvoice.id },
+          data: retryData,
+        });
       }
 
       if (!stripeSubscriptionId) return { invoice, subscription: null };

@@ -129,46 +129,56 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
       return;
     }
 
-    if (subscription.status !== SubscriptionStatus.EXPIRED) {
-      await this.prisma.$transaction(async (tx) => {
-        await tx.subscription.update({
-          where: { id: subscription.id },
-          data: {
-            status: SubscriptionStatus.EXPIRED,
-          },
-        });
+    // Out-of-order tolerance: row đã terminal thì bỏ qua (giống syncSubscription). Nếu không,
+    // một `updated`(payment_failed) tới trễ sau `deleted` sẽ regress CANCELLED→EXPIRED và
+    // revokeSubscriptionCredits(userId, product) xoá nhầm credit của row live hiện tại (H1).
+    if (
+      subscription.status === SubscriptionStatus.CANCELLED ||
+      subscription.status === SubscriptionStatus.EXPIRED
+    ) {
+      this.logger.log(
+        `Subscription ${subscription.id} already ${subscription.status} – ignoring late payment-failure update`,
+      );
+      return;
+    }
 
-        await tx.subscriptionEvent.create({
-          data: {
-            subscriptionId: subscription.id,
-            type: SubscriptionEventType.EXPIRED,
-            metadata: {
-              stripeSubscriptionId: stripeSubscription.id,
-              stripeStatus: stripeSubscription.status,
-              reason: CANCELLATION_REASON.PAYMENT_FAILED,
-            },
-          },
-        });
-
-        await this.creditService.revokeSubscriptionCredits(
-          {
-            userId: subscription.userId,
-            productId: subscription.pricingOption.productId,
-            description: "Credits forfeited – subscription expired (payment failed)",
-            subscriptionId: subscription.id,
-            idempotencyKey: creditKey.subscriptionRevoke(subscription.id, stripeSubscription.id),
-          },
-          tx,
-        );
-        
+    await this.prisma.$transaction(async (tx) => {
+      await tx.subscription.update({
+        where: { id: subscription.id },
+        data: {
+          status: SubscriptionStatus.EXPIRED,
+        },
       });
 
-      this.logger.log(
-        `Subscription ${subscription.id} EXPIRED after exhausted payment retries (stripe status: ${stripeSubscription.status})`,
+      await tx.subscriptionEvent.create({
+        data: {
+          subscriptionId: subscription.id,
+          type: SubscriptionEventType.EXPIRED,
+          metadata: {
+            stripeSubscriptionId: stripeSubscription.id,
+            stripeStatus: stripeSubscription.status,
+            reason: CANCELLATION_REASON.PAYMENT_FAILED,
+          },
+        },
+      });
+
+      await this.creditService.revokeSubscriptionCredits(
+        {
+          userId: subscription.userId,
+          productId: subscription.pricingOption.productId,
+          description: "Credits forfeited – subscription expired (payment failed)",
+          subscriptionId: subscription.id,
+          idempotencyKey: creditKey.subscriptionRevoke(subscription.id, stripeSubscription.id),
+        },
+        tx,
       );
-    } else {
-      this.logger.log(`Subscription ${subscription.id} already EXPIRED`);
-    }
+    });
+
+    this.logger.log(
+      `Subscription ${subscription.id} EXPIRED after exhausted payment retries (stripe status: ${stripeSubscription.status})`,
+    );
+
+    // Chỉ provision Free sau khi VỪA chuyển terminal ở lần này (không chạy khi đã terminal).
     await this.subscriptionSyncService.ensureFreePlanAfterTerminal(subscription);
   }
 }
