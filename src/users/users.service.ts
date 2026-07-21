@@ -41,7 +41,7 @@ export class UsersService {
   }): Promise<User[]> {
     return this.prisma.user.findMany({
       where: {
-        createdAt: { lt: params.createdBefore },
+        createdAt: { lt: params.createdBefore },  
         OR: [
           { providerCustomerId: null },
           { subscriptions: { none: { status: { in: LIVE_STATUSES } } } },

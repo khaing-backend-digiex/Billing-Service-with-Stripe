@@ -46,6 +46,7 @@ export interface PaymentInvoice {
   attemptCount: number;
   nextPaymentAttempt?: number | null;
   paymentIntentId?: string | null;
+  paidAt?: number | null;
   lines: PaymentInvoiceLine[];
 }
 

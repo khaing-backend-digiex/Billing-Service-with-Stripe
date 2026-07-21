@@ -57,7 +57,7 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
           where: { id: subscription.id },
           data: {
             status: SubscriptionStatus.CANCELLED,
-            cancelledAt: new Date(),
+            cancelledAt: sub.canceled_at ? new Date(sub.canceled_at * 1000) : new Date(),
           },
         });
 

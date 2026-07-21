@@ -455,6 +455,7 @@ export class StripeAdapter implements IPaymentAdapter {
       dueDate: i.due_date,
       attemptCount: i.attempt_count,
       nextPaymentAttempt: i.next_payment_attempt,
+      paidAt: (i as any).status_transitions?.paid_at ?? null,
       paymentIntentId: typeof i.payment_intent === 'string' ? i.payment_intent : (i.payment_intent as any)?.id,
       lines: i.lines.data.map(l => ({
         type: l.type as string,
