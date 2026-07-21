@@ -5,6 +5,7 @@ import api from '@/lib/api';
 import { format } from 'date-fns';
 import { Zap, AlertTriangle } from 'lucide-react';
 import Link from 'next/link';
+import LoadingSpinner from '@/components/LoadingSpinner';
 
 export default function CreditsPage() {
   const [data, setData] = useState<any>(null);
@@ -24,7 +25,7 @@ export default function CreditsPage() {
     fetchData();
   }, []);
 
-  if (loading) return <div style={{ padding: '40px' }}>Loading credits...</div>;
+  if (loading) return <LoadingSpinner message="Loading credits..." />;
 
   const { subscription, credits } = data || {};
   const isFrozen = subscription?.status === 'PAST_DUE';

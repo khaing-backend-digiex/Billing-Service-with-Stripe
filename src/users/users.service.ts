@@ -52,12 +52,28 @@ export class UsersService {
     });
   }
 
-  async findAll(limit: number = 10, offset: number = 0): Promise<User[]> {
-    return this.prisma.user.findMany({
-      take: Math.max(1, limit),
-      skip: Math.max(0, offset),
-      orderBy: { createdAt: "desc" },
-    });
+  async findAll(limit: number = 10, offset: number = 0) {
+    const [users, total] = await Promise.all([
+      this.prisma.user.findMany({
+        take: Math.max(1, limit),
+        skip: Math.max(0, offset),
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          roles: true,
+          dateOfBirth: true,
+          provider: true,
+          providerCustomerId: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      }),
+      this.prisma.user.count(),
+    ]);
+
+    return { users, total };
   }
 
   async findById(id: string): Promise<User> {

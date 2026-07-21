@@ -4,8 +4,10 @@ import { useState, useEffect } from 'react';
 import PublicNav from '@/components/PublicNav';
 import api from '@/lib/api';
 import { Check } from 'lucide-react';
-import Link from 'next/link';
+import { loadStripe } from '@stripe/stripe-js';
 import { useAuthStore } from '@/store/authStore';
+import LoadingSpinner from '@/components/LoadingSpinner';
+import Link from 'next/link';
 
 type Plan = {
   code: string;
@@ -97,7 +99,7 @@ export default function PricingPage() {
         </div>
 
         {loading ? (
-          <div style={{ color: 'var(--text-secondary)' }}>Loading pricing...</div>
+          <LoadingSpinner fullPage message="Loading pricing plans..." />
         ) : (
           <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap', justifyContent: 'center', maxWidth: '1000px', width: '100%' }}>
             {plans.map((plan) => {
@@ -154,7 +156,7 @@ export default function PricingPage() {
         <div style={{ marginTop: '80px', width: '100%', maxWidth: '1000px' }}>
           <h2 className="h2" style={{ textAlign: 'center', marginBottom: '40px' }}>Addon Credits</h2>
           {loading ? (
-            <div style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>Loading addons...</div>
+            <LoadingSpinner message="Loading addons..." />
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '24px' }}>
               {addons.filter(a => a.isActive).map(addon => (

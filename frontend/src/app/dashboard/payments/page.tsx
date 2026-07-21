@@ -3,7 +3,8 @@
 import { useState, useEffect } from 'react';
 import api from '@/lib/api';
 import { format } from 'date-fns';
-import { ExternalLink, Receipt } from 'lucide-react';
+import { History, ExternalLink, Download, Receipt } from 'lucide-react';
+import LoadingSpinner from '@/components/LoadingSpinner';
 
 export default function PaymentHistoryPage() {
   const [payments, setPayments] = useState<any[]>([]);
@@ -58,7 +59,7 @@ export default function PaymentHistoryPage() {
 
       <div className="card">
         {loading ? (
-          <div style={{ padding: '20px', color: 'var(--text-secondary)' }}>Loading payments...</div>
+          <LoadingSpinner message="Loading payments..." />
         ) : payments.length > 0 ? (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse' }}>

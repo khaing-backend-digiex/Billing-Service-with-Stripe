@@ -6,6 +6,7 @@ import { Elements } from '@stripe/react-stripe-js';
 import api from '@/lib/api';
 import AddCardForm from '@/components/AddCardForm';
 import { CreditCard, Star, Trash2 } from 'lucide-react';
+import LoadingSpinner from '@/components/LoadingSpinner';
 
 const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || '');
 
@@ -89,7 +90,7 @@ export default function PaymentMethodsPage() {
       )}
 
       {loading ? (
-        <div style={{ color: 'var(--text-secondary)' }}>Loading payment methods...</div>
+        <LoadingSpinner message="Loading payment methods..." />
       ) : methods.length > 0 ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           {methods.map((method) => (

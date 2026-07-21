@@ -5,6 +5,7 @@ import Link from 'next/link';
 import api from '@/lib/api';
 import { Zap, CreditCard, Calendar } from 'lucide-react';
 import { format } from 'date-fns';
+import LoadingSpinner from '@/components/LoadingSpinner';
 
 type DashboardData = {
   status: any;
@@ -16,6 +17,8 @@ export default function DashboardOverview() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let timeoutId: NodeJS.Timeout;
+
     const fetchData = async () => {
       try {
         const [statusRes, paymentsRes] = await Promise.all([
@@ -23,22 +26,33 @@ export default function DashboardOverview() {
           api.get('/stripe/payments')
         ]);
         
+        const dashboardData = statusRes.data.data;
+
+        if (!dashboardData.subscription) {
+          timeoutId = setTimeout(fetchData, 500);
+          return;
+        }
+
         setData({
-          status: statusRes.data.data,
+          status: dashboardData,
           payments: paymentsRes.data.data
         });
+        setLoading(false);
       } catch (err) {
         console.error('Failed to fetch dashboard data', err);
-      } finally {
         setLoading(false);
       }
     };
     
     fetchData();
+
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+    };
   }, []);
 
   if (loading) {
-    return <div style={{ padding: '40px' }}>Loading overview...</div>;
+    return <LoadingSpinner message="Loading overview..." />;
   }
 
   const { status, payments } = data || {};

@@ -7,6 +7,7 @@ import {
   Delete,
   HttpStatus,
   UseGuards,
+  Query,
 } from "@nestjs/common";
 import {
   ApiTags,
@@ -34,9 +35,16 @@ export class UsersController {
   @Roles(Role.ADMIN)
   @ApiOperation({ summary: "Get all users (Admin only)" })
   @SwaggerResponse({ status: 200, description: "Return all users" })
-  async findAll() {
-    const users = await this.usersService.findAll();
-    return new ApiResponse(HttpStatus.OK, "Users fetched successfully", users);
+  async findAll(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const pageNumber = page ? parseInt(page, 10) : 1;
+    const limitNumber = limit ? parseInt(limit, 10) : 10;
+    const offset = (pageNumber - 1) * limitNumber;
+
+    const data = await this.usersService.findAll(limitNumber, offset);
+    return new ApiResponse(HttpStatus.OK, "Users fetched successfully", data);
   }
 
   @Get("me/dashboard")

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import api from '@/lib/api';
 import { Package, Plus } from 'lucide-react';
+import LoadingSpinner from '@/components/LoadingSpinner';
 
 export default function AdminCatalogPage() {
   const [plans, setPlans] = useState<any[]>([]);
@@ -73,7 +74,7 @@ export default function AdminCatalogPage() {
       </div>
 
       {loading ? (
-        <div style={{ color: 'var(--text-secondary)' }}>Loading catalog...</div>
+        <LoadingSpinner message="Loading catalog..." />
       ) : activeTab === 'plans' ? (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '24px' }}>
           {plans.map((plan: any) => (

@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import api from '@/lib/api';
 import Link from 'next/link';
 import { Users, Package } from 'lucide-react';
+import LoadingSpinner from '@/components/LoadingSpinner';
 
 export default function AdminOverview() {
   const [stats, setStats] = useState({ users: 0, plans: 0, addons: 0 });
@@ -19,7 +20,7 @@ export default function AdminOverview() {
         ]);
         
         setStats({
-          users: usersRes.data.data?.length || 0,
+          users: usersRes.data.data?.total || 0,
           plans: plansRes.data?.length || 0,
           addons: addonsRes.data?.length || 0,
         });
@@ -32,7 +33,7 @@ export default function AdminOverview() {
     fetchStats();
   }, []);
 
-  if (loading) return <div style={{ padding: '40px' }}>Loading admin dashboard...</div>;
+  if (loading) return <LoadingSpinner message="Loading admin dashboard..." />;
 
   return (
     <div style={{ padding: '40px', maxWidth: '1000px', margin: '0 auto' }}>

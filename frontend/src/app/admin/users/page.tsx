@@ -3,18 +3,23 @@
 import { useState, useEffect } from 'react';
 import api from '@/lib/api';
 import { format } from 'date-fns';
-import { Search, Trash2 } from 'lucide-react';
+import { Search, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
+import LoadingSpinner from '@/components/LoadingSpinner';
 
 export default function AdminUsersPage() {
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const limit = 10;
 
   const fetchUsers = async () => {
     setLoading(true);
     try {
-      const res = await api.get('/users');
-      setUsers(res.data.data);
+      const res = await api.get(`/users?page=${page}&limit=${limit}`);
+      setUsers(res.data.data.users);
+      setTotal(res.data.data.total);
     } catch (err) {
       console.error('Failed to load users', err);
     } finally {
@@ -24,7 +29,7 @@ export default function AdminUsersPage() {
 
   useEffect(() => {
     fetchUsers();
-  }, []);
+  }, [page]);
 
   const handleDelete = async (id: string) => {
     if (!window.confirm('Are you sure you want to delete this user?')) return;
@@ -58,7 +63,7 @@ export default function AdminUsersPage() {
         </div>
 
         {loading ? (
-          <div style={{ color: 'var(--text-secondary)' }}>Loading users...</div>
+          <LoadingSpinner message="Loading users..." />
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse' }}>
@@ -110,6 +115,29 @@ export default function AdminUsersPage() {
             {filteredUsers.length === 0 && (
               <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)' }}>No users found matching "{search}"</div>
             )}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 0', marginTop: '16px', borderTop: '1px solid var(--border)' }}>
+              <div style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>
+                Showing {total > 0 ? (page - 1) * limit + 1 : 0} to {Math.min(page * limit, total)} of {total} users
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  className="btn btn-secondary"
+                  style={{ padding: '6px 12px', display: 'flex', alignItems: 'center', opacity: page === 1 ? 0.5 : 1, cursor: page === 1 ? 'not-allowed' : 'pointer' }}
+                  disabled={page === 1}
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                >
+                  <ChevronLeft size={16} style={{ marginRight: '4px' }} /> Prev
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  style={{ padding: '6px 12px', display: 'flex', alignItems: 'center', opacity: page * limit >= total ? 0.5 : 1, cursor: page * limit >= total ? 'not-allowed' : 'pointer' }}
+                  disabled={page * limit >= total}
+                  onClick={() => setPage(p => p + 1)}
+                >
+                  Next <ChevronRight size={16} style={{ marginLeft: '4px' }} />
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>

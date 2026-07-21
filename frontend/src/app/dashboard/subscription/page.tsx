@@ -5,6 +5,7 @@ import { loadStripe } from '@stripe/stripe-js';
 import api from '@/lib/api';
 import { format } from 'date-fns';
 import { Check, AlertCircle } from 'lucide-react';
+import LoadingSpinner from '@/components/LoadingSpinner';
 
 const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || '');
 
@@ -106,7 +107,7 @@ export default function SubscriptionPage() {
     }
   };
 
-  if (loading) return <div style={{ padding: '40px' }}>Loading subscription...</div>;
+  if (loading) return <LoadingSpinner message="Loading subscription..." />;
 
   const currentSub = statusData?.subscription;
   const isFree = currentSub?.plan?.isFree;

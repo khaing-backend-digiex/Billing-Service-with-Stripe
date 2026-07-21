@@ -3,7 +3,8 @@
 import { useState, useEffect } from 'react';
 import api from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
-import { ExternalLink, User as UserIcon } from 'lucide-react';
+import { User, Mail, ExternalLink, User as UserIcon } from 'lucide-react';
+import LoadingSpinner from '@/components/LoadingSpinner';
 import { format } from 'date-fns';
 
 export default function SettingsPage() {
@@ -49,7 +50,7 @@ export default function SettingsPage() {
     }
   };
 
-  if (loading) return <div style={{ padding: '40px' }}>Loading settings...</div>;
+  if (loading) return <LoadingSpinner message="Loading settings..." />
 
   return (
     <div style={{ padding: '40px', maxWidth: '800px', margin: '0 auto' }}>

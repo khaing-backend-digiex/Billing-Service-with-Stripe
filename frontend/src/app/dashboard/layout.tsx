@@ -5,6 +5,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { useAuthStore } from '@/store/authStore';
 import { LayoutDashboard, CreditCard, Zap, PlusSquare, History, Settings, LogOut, Bot, Users, Package } from 'lucide-react';
+import LoadingSpinner from '@/components/LoadingSpinner';
 
 export default function DashboardLayout({
   children,
@@ -28,7 +29,7 @@ export default function DashboardLayout({
   }, [mounted, isAuthenticated, router]);
 
   if (!mounted || !isAuthenticated) {
-    return <div style={{ display: 'flex', minHeight: '100vh', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>;
+    return <LoadingSpinner fullPage message="Loading..." />;
   }
 
   const isAdmin = user?.roles?.includes('admin') || user?.roles?.includes('manager');

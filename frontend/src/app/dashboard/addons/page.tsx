@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { loadStripe } from '@stripe/stripe-js';
+import { PlusSquare, AlertCircle } from 'lucide-react';
+import LoadingSpinner from '@/components/LoadingSpinner';
 import api from '@/lib/api';
 import { AlertTriangle } from 'lucide-react';
 
@@ -65,7 +67,7 @@ export default function AddonStorePage() {
     }
   };
 
-  if (loading) return <div style={{ padding: '40px' }}>Loading store...</div>;
+  if (loading) return <LoadingSpinner message="Loading store..." />;
 
   const isFreePlan = status?.subscription?.plan?.isFree;
   const formatPrice = (price: number) => new Intl.NumberFormat('vi-VN').format(price) + '₫';
