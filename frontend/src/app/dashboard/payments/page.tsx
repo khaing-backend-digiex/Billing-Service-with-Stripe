@@ -41,7 +41,9 @@ export default function PaymentHistoryPage() {
     }
   };
 
-  const formatPrice = (price: number) => new Intl.NumberFormat('vi-VN').format(price) + '₫';
+  const formatPrice = (price: number, currency: string = 'VND') => {
+    return new Intl.NumberFormat('vi-VN', { style: 'currency', currency }).format(price);
+  };
 
   return (
     <div style={{ padding: '40px', maxWidth: '800px', margin: '0 auto' }}>
@@ -78,7 +80,7 @@ export default function PaymentHistoryPage() {
                       {format(new Date(payment.createdAt), 'MMM d, yyyy h:mm a')}
                     </td>
                     <td style={{ padding: '16px 0', fontWeight: 500 }}>
-                      {formatPrice(payment.amount)}
+                      {formatPrice(payment.amount, payment.currency)}
                     </td>
                     <td style={{ padding: '16px 0' }}>
                       <span style={{ 

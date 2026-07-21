@@ -112,7 +112,9 @@ export default function SubscriptionPage() {
   const currentSub = statusData?.subscription;
   const isFree = currentSub?.plan?.isFree;
   const currentPlanCode = currentSub?.plan?.code;
-  const formatPrice = (price: number) => new Intl.NumberFormat('vi-VN').format(price) + '₫';
+  const formatPrice = (price: number, currency: string = 'VND') => {
+    return new Intl.NumberFormat('vi-VN', { style: 'currency', currency }).format(price);
+  };
 
   return (
     <div style={{ padding: '40px', maxWidth: '800px', margin: '0 auto' }}>
@@ -149,7 +151,7 @@ export default function SubscriptionPage() {
                 </div>
                 {!isFree && (
                   <div style={{ color: 'var(--text-secondary)' }}>
-                    {formatPrice(currentSub.pricingOption.price)} / {currentSub.pricingOption.billingCycle?.name?.toLowerCase()}
+                    {formatPrice(currentSub.pricingOption.price, currentSub.pricingOption.currency)} / {currentSub.pricingOption.billingCycle?.name?.toLowerCase()}
                   </div>
                 )}
               </div>
@@ -205,7 +207,7 @@ export default function SubscriptionPage() {
                         flexDirection: 'column'
                       }}>
                         <div style={{ fontWeight: 500, marginBottom: '8px' }}>{opt.billingCycle?.name}</div>
-                        <div style={{ fontSize: '18px', marginBottom: '16px' }}>{formatPrice(opt.price)}</div>
+                        <div style={{ fontSize: '18px', marginBottom: '16px' }}>{formatPrice(opt.price, opt.currency)}</div>
                         {!isCurrent ? (
                           <button 
                             className="btn btn-secondary" 
@@ -254,7 +256,7 @@ export default function SubscriptionPage() {
                       disabled={actionLoading}
                       className="btn btn-primary"
                     >
-                      {opt.billingCycle?.name} ({formatPrice(opt.price)})
+                      {opt.billingCycle?.name} ({formatPrice(opt.price, opt.currency)})
                     </button>
                   ))}
                 </div>

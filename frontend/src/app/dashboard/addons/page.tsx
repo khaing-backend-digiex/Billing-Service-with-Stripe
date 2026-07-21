@@ -70,7 +70,9 @@ export default function AddonStorePage() {
   if (loading) return <LoadingSpinner message="Loading store..." />;
 
   const isFreePlan = status?.subscription?.plan?.isFree;
-  const formatPrice = (price: number) => new Intl.NumberFormat('vi-VN').format(price) + '₫';
+  const formatPrice = (price: number, currency: string = 'VND') => {
+    return new Intl.NumberFormat('vi-VN', { style: 'currency', currency }).format(price);
+  };
 
   return (
     <div style={{ padding: '40px', maxWidth: '1000px', margin: '0 auto' }}>
@@ -103,7 +105,7 @@ export default function AddonStorePage() {
               +{addon.credits} credits
             </div>
             <div style={{ fontSize: '32px', fontWeight: 700, margin: '8px 0 24px' }}>
-              {formatPrice(addon.price)}
+              {formatPrice(addon.price, addon.currency)}
             </div>
             
             <button 

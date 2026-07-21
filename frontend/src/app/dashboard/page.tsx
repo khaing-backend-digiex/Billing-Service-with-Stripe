@@ -60,7 +60,9 @@ export default function DashboardOverview() {
   const pricingOption = status?.subscription?.pricingOption;
   const credits = status?.credits;
   
-  const formatPrice = (price: number) => new Intl.NumberFormat('vi-VN').format(price) + '₫';
+  const formatPrice = (price: number, currency: string = 'VND') => {
+    return new Intl.NumberFormat('vi-VN', { style: 'currency', currency }).format(price);
+  };
 
   return (
     <div style={{ padding: '40px', maxWidth: '1200px', margin: '0 auto' }}>
@@ -80,7 +82,7 @@ export default function DashboardOverview() {
                 {currentPlan.name}
               </div>
               <div style={{ color: 'var(--text-secondary)', marginBottom: '16px' }}>
-                {pricingOption ? `${formatPrice(pricingOption.price)} / ${pricingOption.billingCycle.name.toLowerCase()}` : 'Free'}
+                {pricingOption ? `${formatPrice(pricingOption.price, pricingOption.currency)} / ${pricingOption.billingCycle.name.toLowerCase()}` : 'Free'}
               </div>
               
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '24px' }}>
@@ -156,7 +158,7 @@ export default function DashboardOverview() {
               <div key={payment.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '16px', borderBottom: '1px solid var(--border)' }}>
                 <div>
                   <div style={{ fontWeight: 500, marginBottom: '4px' }}>
-                    {formatPrice(payment.amount)}
+                    {formatPrice(payment.amount, payment.currency)}
                   </div>
                   <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
                     {format(new Date(payment.createdAt), 'MMM d, yyyy h:mm a')}

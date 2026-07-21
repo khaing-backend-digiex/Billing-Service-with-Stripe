@@ -64,8 +64,8 @@ export default function PricingPage() {
     fetchPricing();
   }, []);
 
-  const formatPrice = (price: number) => {
-    return new Intl.NumberFormat('vi-VN').format(price) + '₫';
+  const formatPrice = (price: number, currency: string = 'VND') => {
+    return new Intl.NumberFormat('vi-VN', { style: 'currency', currency }).format(price);
   };
 
   return (
@@ -116,7 +116,7 @@ export default function PricingPage() {
                     {!plan.isFree && <span style={{ color: 'var(--accent)', marginLeft: '8px' }}>✦</span>}
                   </h2>
                   <div style={{ fontSize: '32px', fontWeight: 700, margin: '24px 0 8px' }}>
-                    {plan.isFree ? '0₫' : formatPrice(option?.price || 0)}
+                    {plan.isFree ? '0₫' : formatPrice(option?.price || 0, option?.currency)}
                     <span style={{ fontSize: '16px', fontWeight: 400, color: 'var(--text-secondary)' }}>
                       /{billingCycle.toLowerCase()}
                     </span>
@@ -164,7 +164,7 @@ export default function PricingPage() {
                   <h3 className="h3" style={{ marginBottom: '8px' }}>{addon.name}</h3>
                   <div style={{ color: 'var(--text-secondary)', marginBottom: '16px' }}>{addon.credits} credits</div>
                   <div style={{ fontSize: '24px', fontWeight: 600, marginBottom: '24px' }}>
-                    {formatPrice(addon.price)}
+                    {formatPrice(addon.price, addon.currency)}
                   </div>
                   <Link 
                     href={isAuthenticated ? "/dashboard/addons" : "/register"}

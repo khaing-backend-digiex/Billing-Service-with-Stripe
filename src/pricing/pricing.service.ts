@@ -48,7 +48,22 @@ export class PricingService {
   }
 
   async getPlans() {
-    return this.prisma.plan.findMany({ include: { pricingOptions: true } });
+    return this.prisma.plan.findMany({ 
+      include: { 
+        pricingOptions: {
+          where: {
+            billingCycle: {
+              name: {
+                in: ['MONTHLY', 'ANUALLY', 'monthly', 'anually', 'annually', 'YEARLY', 'yearly', 'Yearly']
+              }
+            }
+          },
+          include: {
+            billingCycle: true
+          }
+        } 
+      } 
+    });
   }
 
   async createBillingCycle(data: { name: string; durationDay: number }) {

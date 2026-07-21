@@ -31,7 +31,9 @@ export default function AdminCatalogPage() {
     fetchCatalog();
   }, []);
 
-  const formatPrice = (price: number) => new Intl.NumberFormat('vi-VN').format(price) + '₫';
+  const formatPrice = (price: number, currency: string = 'VND') => {
+    return new Intl.NumberFormat('vi-VN', { style: 'currency', currency }).format(price);
+  };
 
   return (
     <div style={{ padding: '40px', maxWidth: '1000px', margin: '0 auto' }}>
@@ -101,7 +103,7 @@ export default function AdminCatalogPage() {
                 {plan.pricingOptions?.map((opt: any) => (
                   <div key={opt.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', fontSize: '14px' }}>
                     <span>{opt.billingCycle.name}</span>
-                    <span style={{ fontWeight: 500 }}>{formatPrice(opt.price)}</span>
+                    <span style={{ fontWeight: 500 }}>{formatPrice(opt.price, opt.currency)}</span>
                   </div>
                 ))}
                 {plan.isFree && <div style={{ fontSize: '14px', fontStyle: 'italic' }}>Free Plan</div>}
@@ -130,7 +132,7 @@ export default function AdminCatalogPage() {
               
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'auto' }}>
                 <div style={{ fontSize: '18px', fontWeight: 600, color: 'var(--accent)' }}>+{addon.credits} credits</div>
-                <div style={{ fontSize: '18px', fontWeight: 600 }}>{formatPrice(addon.price)}</div>
+                <div style={{ fontSize: '18px', fontWeight: 600 }}>{formatPrice(addon.price, addon.currency)}</div>
               </div>
             </div>
           ))}
