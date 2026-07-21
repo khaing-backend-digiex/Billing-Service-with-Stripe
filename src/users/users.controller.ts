@@ -20,6 +20,7 @@ import { RolesGuard } from "../common/guards/roles.guard";
 import { Roles } from "../common/decorators/roles.decorator";
 import { ApiResponse } from "../common/dto/api-response.dto";
 
+import { GetUser } from "../common/decorators/get-user.decorator";
 import { Role } from "../common/constants/roles.enum";
 
 @ApiTags("Users")
@@ -36,6 +37,14 @@ export class UsersController {
   async findAll() {
     const users = await this.usersService.findAll();
     return new ApiResponse(HttpStatus.OK, "Users fetched successfully", users);
+  }
+
+  @Get("me/dashboard")
+  @Roles(Role.ADMIN, Role.USER)
+  @ApiOperation({ summary: "Get user dashboard data" })
+  async getDashboardData(@GetUser("id") userId: string) {
+    const data = await this.usersService.getDashboardData(userId);
+    return new ApiResponse(HttpStatus.OK, "Dashboard data fetched successfully", data);
   }
 
   @Get(":id")

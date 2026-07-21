@@ -83,4 +83,48 @@ export class UsersService {
   async deleteUser(id: string): Promise<void> {
     await this.prisma.user.delete({ where: { id } });
   }
+
+  async getDashboardData(userId: string) {
+    const subscription = await this.prisma.subscription.findFirst({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        pricingOption: {
+          include: {
+            plan: {
+              include: {
+                creditPolicy: true,
+              }
+            },
+            billingCycle: true,
+          }
+        }
+      }
+    });
+
+    const grants = await this.prisma.creditGrant.findMany({
+      where: { userId, amountRemaining: { gt: 0 } },
+      orderBy: { expiresAt: 'asc' }
+    });
+
+    const balance = grants.reduce((sum, g) => sum + g.amountRemaining, 0);
+
+    return {
+      subscription: subscription ? {
+        id: subscription.id,
+        status: subscription.status,
+        currentPeriodStart: subscription.currentPeriodStart,
+        currentPeriodEnd: subscription.currentPeriodEnd,
+        nextCreditResetAt: subscription.currentPeriodEnd,
+        autoRenew: subscription.autoRenew,
+        cancelledAt: subscription.cancelledAt,
+        plan: subscription.pricingOption?.plan || null,
+        pricingOption: subscription.pricingOption || null,
+      } : null,
+      credits: {
+        balance,
+        grants,
+      }
+    };
+  }
 }
