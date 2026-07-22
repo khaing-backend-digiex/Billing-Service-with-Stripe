@@ -18,6 +18,7 @@ import { PaymentMethodSyncService } from "./sync/payment-method-sync.service";
 import { PurchaseSubscriptionDto, PurchaseAddonDto } from "../payments/dto/purchase.dto";
 import { CreateCustomerDto } from "../payments/dto/create-customer.dto";
 import { ApiResponse } from "../common/dto/api-response.dto";
+import { PaginationQueryDto } from "../common/dto/pagination-query.dto";
 import { GetUser } from "../common/decorators/get-user.decorator";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { UsersService } from "../users/users.service";
@@ -207,19 +208,17 @@ export class StripeController {
   @ApiOperation({ summary: "Get payment history for the current user" })
   async getPayments(
     @GetUser("id") userId: string,
-    @Query('page') page: string = '1',
-    @Query('limit') limit: string = '10'
+    @Query() query: PaginationQueryDto
   ) {
-    const pageNumber = parseInt(page, 10) || 1;
-    const limitNumber = parseInt(limit, 10) || 10;
-    const skip = (pageNumber - 1) * limitNumber;
+    const { page = 1, limit = 10 } = query;
+    const skip = (page - 1) * limit;
 
     const [payments, total] = await Promise.all([
       this.prisma.payment.findMany({
         where: { userId },
         orderBy: { createdAt: 'desc' },
         skip,
-        take: limitNumber,
+        take: limit,
       }),
       this.prisma.payment.count({ where: { userId } })
     ]);
@@ -227,9 +226,9 @@ export class StripeController {
     return new ApiResponse(HttpStatus.OK, "Payments fetched successfully", {
       data: payments,
       total,
-      page: pageNumber,
-      limit: limitNumber,
-      totalPages: Math.ceil(total / limitNumber),
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
     });
   }
 }

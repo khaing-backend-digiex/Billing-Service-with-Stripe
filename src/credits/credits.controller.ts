@@ -6,6 +6,7 @@ import { ApiBearerAuth } from '@nestjs/swagger';
 import { Public } from '../common/decorators/public.decorator';
 import { ApiResponse } from '../common/dto/api-response.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 
 @ApiBearerAuth("JWT-auth")
 @UseGuards(JwtAuthGuard)
@@ -47,15 +48,13 @@ export class CreditsController {
   @Get('transactions')
   async getTransactions(
     @Req() req: any,
-    @Query('page') page: string = '1',
-    @Query('limit') limit: string = '10'
+    @Query() query: PaginationQueryDto
   ) {
     const userId = req.user.id;
-    const pageNumber = parseInt(page, 10) || 1;
-    const limitNumber = parseInt(limit, 10) || 10;
-    const skip = (pageNumber - 1) * limitNumber;
+    const { page = 1, limit = 10 } = query;
+    const skip = (page - 1) * limit;
 
-    const result = await this.creditService.getTransactionHistory(userId, skip, limitNumber);
+    const result = await this.creditService.getTransactionHistory(userId, skip, limit);
     return new ApiResponse(
       HttpStatus.OK,
       'Transactions retrieved successfully',

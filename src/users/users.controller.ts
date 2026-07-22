@@ -20,6 +20,7 @@ import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { Roles } from "../common/decorators/roles.decorator";
 import { ApiResponse } from "../common/dto/api-response.dto";
+import { PaginationQueryDto } from "../common/dto/pagination-query.dto";
 
 import { GetUser } from "../common/decorators/get-user.decorator";
 import { Role } from "../common/constants/roles.enum";
@@ -35,15 +36,11 @@ export class UsersController {
   @Roles(Role.ADMIN)
   @ApiOperation({ summary: "Get all users (Admin only)" })
   @SwaggerResponse({ status: 200, description: "Return all users" })
-  async findAll(
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-  ) {
-    const pageNumber = page ? parseInt(page, 10) : 1;
-    const limitNumber = limit ? parseInt(limit, 10) : 10;
-    const offset = (pageNumber - 1) * limitNumber;
+  async findAll(@Query() query: PaginationQueryDto) {
+    const { page = 1, limit = 10 } = query;
+    const offset = (page - 1) * limit;
 
-    const data = await this.usersService.findAll(limitNumber, offset);
+    const data = await this.usersService.findAll(limit, offset);
     return new ApiResponse(HttpStatus.OK, "Users fetched successfully", data);
   }
 
