@@ -6,6 +6,7 @@ import {
   HttpStatus,
   UseGuards,
   BadRequestException,
+  Query,
 } from "@nestjs/common";
 import {
   ApiTags,
@@ -120,9 +121,6 @@ export class StripeController {
     const customerId = await this.stripeService.ensureValidCustomerId(user);
     const paymentMethod = await this.paymentMethodSync.getDefaultOrThrow(userId, customerId);
 
-    // KHÔNG hủy Stripe sub Free ở đây: checkout có thể cần 3DS / bị bỏ dở → row Free phải
-    // còn nguyên (§8). Sub Free chỉ bị hủy SAU KHI invoice.paid của Pro commit và supersede
-    // row Free — do invoice-paid.strategy đảm nhiệm (cancel superseded Stripe sub post-commit).
     const result = await this.stripeService.createOffSessionSubscription(
       userId,
       pricingOption.providerPriceId,
@@ -207,11 +205,31 @@ export class StripeController {
 
   @Get("payments")
   @ApiOperation({ summary: "Get payment history for the current user" })
-  async getPayments(@GetUser("id") userId: string) {
-    const payments = await this.prisma.payment.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
+  async getPayments(
+    @GetUser("id") userId: string,
+    @Query('page') page: string = '1',
+    @Query('limit') limit: string = '10'
+  ) {
+    const pageNumber = parseInt(page, 10) || 1;
+    const limitNumber = parseInt(limit, 10) || 10;
+    const skip = (pageNumber - 1) * limitNumber;
+
+    const [payments, total] = await Promise.all([
+      this.prisma.payment.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limitNumber,
+      }),
+      this.prisma.payment.count({ where: { userId } })
+    ]);
+    
+    return new ApiResponse(HttpStatus.OK, "Payments fetched successfully", {
+      data: payments,
+      total,
+      page: pageNumber,
+      limit: limitNumber,
+      totalPages: Math.ceil(total / limitNumber),
     });
-    return new ApiResponse(HttpStatus.OK, "Payments fetched successfully", payments);
   }
 }

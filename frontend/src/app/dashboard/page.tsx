@@ -47,7 +47,7 @@ export default function DashboardOverview() {
 
         setData({
           status: dashboardData,
-          payments: paymentsRes.data.data
+          payments: paymentsRes.data.data.data || []
         });
         setLoading(false);
       } catch (err) {
