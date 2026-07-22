@@ -15,9 +15,12 @@ type DashboardData = {
 export default function DashboardOverview() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let timeoutId: NodeJS.Timeout;
+    let retryCount = 0;
+    const MAX_RETRIES = 20; // 10 seconds total
 
     const fetchData = async () => {
       try {
@@ -28,7 +31,14 @@ export default function DashboardOverview() {
         
         const dashboardData = statusRes.data.data;
 
-        if (!dashboardData.subscription) {
+        const hasGrants = dashboardData.credits?.grants && dashboardData.credits.grants.length > 0;
+        if (!dashboardData.subscription || !hasGrants) {
+          if (retryCount >= MAX_RETRIES) {
+            setError("We're experiencing delays setting up your account. Please refresh the page in a few moments, or contact support if the issue persists.");
+            setLoading(false);
+            return;
+          }
+          retryCount++;
           timeoutId = setTimeout(fetchData, 500);
           return;
         }
@@ -40,6 +50,7 @@ export default function DashboardOverview() {
         setLoading(false);
       } catch (err) {
         console.error('Failed to fetch dashboard data', err);
+        setError("Failed to load dashboard data. Please check your connection and try again.");
         setLoading(false);
       }
     };
@@ -55,6 +66,18 @@ export default function DashboardOverview() {
     return <LoadingSpinner message="Loading overview..." />;
   }
 
+  if (error) {
+    return (
+      <div style={{ padding: '80px 20px', maxWidth: '600px', margin: '0 auto', textAlign: 'center' }}>
+        <h1 className="h2" style={{ marginBottom: '16px', color: 'var(--danger)' }}>Account Setup Delayed</h1>
+        <p style={{ color: 'var(--text-secondary)', marginBottom: '32px', lineHeight: 1.6 }}>{error}</p>
+        <button className="btn btn-primary" onClick={() => window.location.reload()}>
+          Refresh Page
+        </button>
+      </div>
+    );
+  }
+
   const { status, payments } = data || {};
   const currentPlan = status?.subscription?.plan;
   const pricingOption = status?.subscription?.pricingOption;
@@ -68,6 +91,18 @@ export default function DashboardOverview() {
     <div style={{ padding: '40px', maxWidth: '1200px', margin: '0 auto' }}>
       <h1 className="h1" style={{ marginBottom: '32px' }}>Overview</h1>
       
+      {status?.subscription?.status === 'PAST_DUE' && (
+        <div style={{ padding: '16px', backgroundColor: 'rgba(239, 65, 70, 0.1)', color: 'var(--danger)', borderRadius: '8px', marginBottom: '32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 600 }}>Payment Failed</h3>
+            <p style={{ margin: 0, fontSize: '14px' }}>Your subscription is past due. Please update your payment method to restore access to your credits and services.</p>
+          </div>
+          <Link href="/dashboard/payment-methods" className="btn btn-primary" style={{ whiteSpace: 'nowrap', marginLeft: '16px' }}>
+            Update Payment Method
+          </Link>
+        </div>
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '24px', marginBottom: '48px' }}>
         
         {/* Subscription Card */}

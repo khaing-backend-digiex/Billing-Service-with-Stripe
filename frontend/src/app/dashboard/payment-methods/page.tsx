@@ -1,14 +1,14 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { loadStripe } from '@stripe/stripe-js';
+import { getStripe } from '@/lib/stripe';
 import { Elements } from '@stripe/react-stripe-js';
 import api from '@/lib/api';
 import AddCardForm from '@/components/AddCardForm';
 import { CreditCard, Star, Trash2 } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
 
-const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || '');
+const stripePromise = getStripe();
 
 type PaymentMethod = {
   id: string;

@@ -115,11 +115,17 @@ export class PaymentsController {
       throw new BadRequestException("Active subscription not found.");
     }
 
+    if (dto.immediate) {
+      await this.paymentsService.cancelSubscriptionNow(
+        subscription.providerSubscriptionId!,
+        provider,
+      );
+      return new ApiResponse(HttpStatus.OK, "Subscription cancelled immediately", null);
+    }
     await this.paymentsService.cancelSubscriptionAtPeriodEnd(
       subscription.providerSubscriptionId!,
       provider,
     );
-
     return new ApiResponse(HttpStatus.OK, "Subscription will cancel at period end", null);
   }
 
@@ -209,6 +215,7 @@ export class PaymentsController {
       amount_due: preview.amount_due,
       currency: preview.currency,
       next_payment_date: preview.period_end,
+      lines: preview.lines?.data || [],
     };
     return new ApiResponse(HttpStatus.OK, "Upcoming invoice preview generated successfully", result);
   }

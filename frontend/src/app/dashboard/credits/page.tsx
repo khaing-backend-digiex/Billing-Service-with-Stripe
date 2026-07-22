@@ -28,7 +28,7 @@ export default function CreditsPage() {
   if (loading) return <LoadingSpinner message="Loading credits..." />;
 
   const { subscription, credits } = data || {};
-  const isFrozen = subscription?.status === 'PAST_DUE';
+  const isFrozen = subscription?.status === 'PAST_DUE' || subscription?.status === 'PAUSED';
 
   const getSourceTypeStyles = (sourceType: string) => {
     switch (sourceType) {
@@ -65,19 +65,19 @@ export default function CreditsPage() {
       <h1 className="h1" style={{ marginBottom: '32px' }}>Credits</h1>
 
       {isFrozen && (
-        <div style={{ padding: '16px', backgroundColor: 'rgba(245, 166, 35, 0.1)', color: 'var(--warning)', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ padding: '16px', backgroundColor: 'rgba(239, 65, 70, 0.1)', color: 'var(--danger)', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <AlertTriangle size={20} />
-          Your credits are currently frozen due to a failed payment. Please update your payment method.
+          Your credits are currently frozen due to a paused or past-due subscription. Please update your payment method or resume your subscription to use them.
         </div>
       )}
 
-      <div className="card" style={{ marginBottom: '32px' }}>
+      <div className="card" style={{ marginBottom: '32px', opacity: isFrozen ? 0.6 : 1 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
           <Zap color="var(--accent)" />
           <h2 className="h2">Total Balance</h2>
         </div>
         
-        <div style={{ fontSize: '48px', fontWeight: 700, marginBottom: '8px' }}>
+        <div style={{ fontSize: '48px', fontWeight: 700, marginBottom: '8px', color: isFrozen ? 'var(--danger)' : 'inherit' }}>
           {credits?.balance || 0}
         </div>
         
@@ -86,9 +86,13 @@ export default function CreditsPage() {
           <div style={{ fontSize: '13px', marginTop: '4px' }}>Subscription credits are reset at the end of each billing cycle. Addon credits roll over.</div>
         </div>
 
-        <Link href="/dashboard/addons" className="btn btn-secondary">
-          Buy More Credits
-        </Link>
+        {isFrozen ? (
+          <button className="btn btn-secondary" disabled>Buy More Credits</button>
+        ) : (
+          <Link href="/dashboard/addons" className="btn btn-secondary">
+            Buy More Credits
+          </Link>
+        )}
       </div>
 
       <div className="card">
