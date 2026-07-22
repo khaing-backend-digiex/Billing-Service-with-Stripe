@@ -22,7 +22,7 @@ export default function PublicNav() {
         DigiCredit
       </Link>
       <div style={{ display: 'flex', gap: '24px', alignItems: 'center' }}>
-        <Link href="/pricing" style={{ color: pathname === '/pricing' ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+        <Link href="/pricing" className={`nav-link ${pathname === '/pricing' ? 'nav-link-active' : ''}`}>
           Pricing
         </Link>
         {isAuthenticated ? (

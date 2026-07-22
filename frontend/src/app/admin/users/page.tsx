@@ -5,8 +5,10 @@ import api from '@/lib/api';
 import { format } from 'date-fns';
 import { Search, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
+import { useToast } from '@/components/Toast';
 
 export default function AdminUsersPage() {
+  const toast = useToast();
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -37,7 +39,7 @@ export default function AdminUsersPage() {
       await api.delete(`/users/${id}`);
       fetchUsers();
     } catch (err: any) {
-      alert(err.response?.data?.message || 'Failed to delete user');
+      toast.error(err.response?.data?.message || 'Failed to delete user');
     }
   };
 
@@ -85,7 +87,7 @@ export default function AdminUsersPage() {
                       {user.roles.map((r: string) => (
                         <span key={r} style={{ 
                           padding: '2px 8px', 
-                          backgroundColor: r === 'admin' ? 'rgba(16, 163, 127, 0.1)' : 'var(--bg-tertiary)', 
+                          backgroundColor: r === 'admin' ? 'var(--accent-bg)' : 'var(--bg-tertiary)',
                           color: r === 'admin' ? 'var(--accent)' : 'var(--text-primary)',
                           borderRadius: '4px',
                           fontSize: '12px',

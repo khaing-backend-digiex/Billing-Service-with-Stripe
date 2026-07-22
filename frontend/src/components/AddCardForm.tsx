@@ -56,17 +56,19 @@ export default function AddCardForm({ onSuccess, onCancel }: AddCardFormProps) {
   const CARD_ELEMENT_OPTIONS = {
     style: {
       base: {
-        color: '#ECECEC', // var(--text-primary)
+        // Stripe renders CardElement in an iframe that can't read CSS vars,
+        // so these must be literal hex values matching the design tokens.
+        color: '#F8FAFC', // var(--text-primary)
         fontFamily: 'Inter, sans-serif',
         fontSmoothing: 'antialiased',
         fontSize: '16px',
         '::placeholder': {
-          color: '#666680', // var(--text-muted)
+          color: '#64748B', // var(--text-muted)
         },
       },
       invalid: {
-        color: '#EF4146', // var(--danger)
-        iconColor: '#EF4146',
+        color: '#EF4444', // var(--danger)
+        iconColor: '#EF4444',
       },
     },
   };
@@ -88,7 +90,7 @@ export default function AddCardForm({ onSuccess, onCancel }: AddCardFormProps) {
         <CardElement options={CARD_ELEMENT_OPTIONS} />
       </div>
 
-      {error && <div style={{ color: 'var(--danger)', marginBottom: '16px', fontSize: '14px', backgroundColor: 'rgba(239, 65, 70, 0.1)', padding: '12px', borderRadius: '6px' }}>{error}</div>}
+      {error && <div style={{ color: 'var(--danger)', marginBottom: '16px', fontSize: '14px', backgroundColor: 'var(--danger-bg)', padding: '12px', borderRadius: '6px' }}>{error}</div>}
 
       <div style={{ display: 'flex', gap: '12px' }}>
         <button type="submit" disabled={!stripe || loading} className="btn btn-primary" style={{ flex: 1 }}>

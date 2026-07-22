@@ -7,6 +7,7 @@ import api from '@/lib/api';
 import AddCardForm from '@/components/AddCardForm';
 import { CreditCard, Star, Trash2 } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
+import { useToast } from '@/components/Toast';
 
 const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || '');
 
@@ -20,6 +21,7 @@ type PaymentMethod = {
 };
 
 export default function PaymentMethodsPage() {
+  const toast = useToast();
   const [methods, setMethods] = useState<PaymentMethod[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -46,7 +48,7 @@ export default function PaymentMethodsPage() {
       fetchMethods();
     } catch (err) {
       console.error('Failed to set default', err);
-      alert('Failed to set default payment method');
+      toast.error('Failed to set default payment method');
     }
   };
 
@@ -58,7 +60,7 @@ export default function PaymentMethodsPage() {
       fetchMethods();
     } catch (err) {
       console.error('Failed to delete', err);
-      alert('Failed to delete payment method');
+      toast.error('Failed to delete payment method');
     }
   };
 
@@ -110,8 +112,8 @@ export default function PaymentMethodsPage() {
                         alignItems: 'center', 
                         gap: '4px',
                         padding: '2px 8px', 
-                        backgroundColor: 'rgba(16, 163, 127, 0.1)', 
-                        color: 'var(--accent)',
+                        backgroundColor: 'var(--success-bg)',
+                        color: 'var(--success)',
                         borderRadius: '12px',
                         fontSize: '12px',
                         fontWeight: 500

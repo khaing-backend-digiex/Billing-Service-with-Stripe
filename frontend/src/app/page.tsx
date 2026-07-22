@@ -27,21 +27,21 @@ export default function LandingPage() {
 
         <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '32px', width: '100%', maxWidth: '1000px' }}>
           <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '32px' }}>
-            <div style={{ padding: '12px', backgroundColor: 'rgba(16, 163, 127, 0.1)', borderRadius: '8px', marginBottom: '20px' }}>
+            <div style={{ padding: '12px', backgroundColor: 'var(--accent-bg)', borderRadius: '8px', marginBottom: '20px' }}>
               <Zap size={24} color="var(--accent)" />
             </div>
             <h3 className="h3" style={{ marginBottom: '12px' }}>Lightning Fast</h3>
             <p style={{ color: 'var(--text-secondary)' }}>Experience zero latency and instant credit updates with our optimized infrastructure.</p>
           </div>
           <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '32px' }}>
-            <div style={{ padding: '12px', backgroundColor: 'rgba(16, 163, 127, 0.1)', borderRadius: '8px', marginBottom: '20px' }}>
+            <div style={{ padding: '12px', backgroundColor: 'var(--accent-bg)', borderRadius: '8px', marginBottom: '20px' }}>
               <CreditCard size={24} color="var(--accent)" />
             </div>
             <h3 className="h3" style={{ marginBottom: '12px' }}>Flexible Billing</h3>
             <p style={{ color: 'var(--text-secondary)' }}>Choose between free tier, monthly subscriptions, or one-time credit addons when you need more.</p>
           </div>
           <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '32px' }}>
-            <div style={{ padding: '12px', backgroundColor: 'rgba(16, 163, 127, 0.1)', borderRadius: '8px', marginBottom: '20px' }}>
+            <div style={{ padding: '12px', backgroundColor: 'var(--accent-bg)', borderRadius: '8px', marginBottom: '20px' }}>
               <Shield size={24} color="var(--accent)" />
             </div>
             <h3 className="h3" style={{ marginBottom: '12px' }}>Enterprise Secure</h3>

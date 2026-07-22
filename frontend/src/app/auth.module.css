@@ -67,7 +67,7 @@
 
 .error {
   color: var(--danger);
-  background-color: rgba(239, 65, 70, 0.1);
+  background-color: var(--danger-bg);
   padding: 12px;
   border-radius: 6px;
   font-size: 14px;

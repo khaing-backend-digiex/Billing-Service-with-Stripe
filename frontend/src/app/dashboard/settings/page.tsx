@@ -6,8 +6,10 @@ import { useAuthStore } from '@/store/authStore';
 import { User, Mail, ExternalLink, User as UserIcon } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { format } from 'date-fns';
+import { useToast } from '@/components/Toast';
 
 export default function SettingsPage() {
+  const toast = useToast();
   const { user } = useAuthStore();
   const [userData, setUserData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -44,7 +46,7 @@ export default function SettingsPage() {
       }
     } catch (err) {
       console.error('Failed to open billing portal', err);
-      alert('Failed to open billing portal. Please try again.');
+      toast.error('Failed to open billing portal. Please try again.');
     } finally {
       setPortalLoading(false);
     }

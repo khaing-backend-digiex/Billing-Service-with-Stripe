@@ -69,16 +69,7 @@ export default function DashboardLayout({
                 <Link
                   key={item.name}
                   href={item.href}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '12px',
-                    padding: '8px 12px',
-                    borderRadius: '6px',
-                    backgroundColor: isActive ? 'var(--bg-tertiary)' : 'transparent',
-                    color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
-                    fontWeight: isActive ? 500 : 400,
-                  }}
+                  className={`nav-item ${isActive ? 'nav-item-active' : ''}`}
                 >
                   <item.icon size={18} color={isActive ? 'var(--accent)' : 'currentColor'} />
                   {item.name}
@@ -97,16 +88,7 @@ export default function DashboardLayout({
                     <Link
                       key={item.name}
                       href={item.href}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '12px',
-                        padding: '8px 12px',
-                        borderRadius: '6px',
-                        backgroundColor: isActive ? 'var(--bg-tertiary)' : 'transparent',
-                        color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
-                        fontWeight: isActive ? 500 : 400,
-                      }}
+                      className={`nav-item ${isActive ? 'nav-item-active' : ''}`}
                     >
                       <item.icon size={18} color={isActive ? 'var(--accent)' : 'currentColor'} />
                       {item.name}
@@ -124,18 +106,7 @@ export default function DashboardLayout({
               logout();
               router.push('/login');
             }}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px',
-              padding: '8px 12px',
-              width: '100%',
-              borderRadius: '6px',
-              backgroundColor: 'transparent',
-              color: 'var(--text-secondary)',
-              border: 'none',
-              textAlign: 'left'
-            }}
+            className="nav-item nav-item-logout"
           >
             <LogOut size={18} />
             Log out
