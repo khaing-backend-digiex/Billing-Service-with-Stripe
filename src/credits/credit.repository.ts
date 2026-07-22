@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { isAddonUsable, SUBSCRIPTION_SOURCES } from "./credit.types";
 import { PrismaService } from "../database/prisma.service";
 import { CreditTransactionType, CreditGrantSourceType, SubscriptionStatus, ReferenceType } from "@prisma/client";
@@ -31,14 +31,16 @@ export interface LockedBalances {
 
 @Injectable()
 export class CreditRepository {
+  private readonly logger = new Logger(CreditRepository.name);
   constructor(private readonly prisma: PrismaService) {}
 
   async applyDelta(
     userId: string,
-    delta: number,
     entry: TransactionEntry,
     tx: TxClient,
+    expiresAt?: Date,
   ): Promise<boolean> {
+    this.logger.log(`Applying delta for user ${userId}: ${entry.amount} credits, grantId=${entry.grantId}, type=${entry.type}, idempotencyKey=${entry.idempotencyKey}`);
     if (entry.idempotencyKey) {
       const existing = await tx.creditTransaction.findUnique({
         where: { idempotencyKey: entry.idempotencyKey },
@@ -52,10 +54,10 @@ export class CreditRepository {
     await tx.creditGrant.update({
       where: { id: entry.grantId },
       data: {
-        amountRemaining: { increment: delta },
+        amountRemaining: { increment: entry.amount },
+        ...(expiresAt !== undefined && { expiresAt }),
       },
     });
-
     await tx.creditTransaction.create({
       data: {
         userId,
@@ -116,7 +118,8 @@ export class CreditRepository {
       WHERE "userId" = ${userId}
         AND "productId" = ${productId}
         AND "sourceType" = ANY(${SUBSCRIPTION_SOURCES}::"CreditGrantSourceType"[])
-        AND "amountRemaining" > 0
+        AND "amountRemaining" >= 0
+        AND "expiresAt" > NOW()
       ORDER BY "priority" ASC, "expiresAt" ASC NULLS LAST, "id" ASC
       FOR UPDATE
     `;

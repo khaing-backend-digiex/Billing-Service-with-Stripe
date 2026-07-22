@@ -32,7 +32,9 @@ export default function DashboardOverview() {
         const dashboardData = statusRes.data.data;
 
         const hasGrants = dashboardData.credits?.grants && dashboardData.credits.grants.length > 0;
-        if (!dashboardData.subscription || !hasGrants) {
+        const isSetup = dashboardData.credits?.isSetup;
+        
+        if (!dashboardData.subscription || (!hasGrants && !isSetup)) {
           if (retryCount >= MAX_RETRIES) {
             setError("We're experiencing delays setting up your account. Please refresh the page in a few moments, or contact support if the issue persists.");
             setLoading(false);
@@ -45,7 +47,7 @@ export default function DashboardOverview() {
 
         setData({
           status: dashboardData,
-          payments: paymentsRes.data.data
+          payments: paymentsRes.data.data.data || []
         });
         setLoading(false);
       } catch (err) {

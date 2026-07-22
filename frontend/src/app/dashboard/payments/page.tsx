@@ -3,27 +3,31 @@
 import { useState, useEffect } from 'react';
 import api from '@/lib/api';
 import { format } from 'date-fns';
-import { History, ExternalLink, Download, Receipt } from 'lucide-react';
+import { ExternalLink, Receipt, ChevronLeft, ChevronRight } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
 
 export default function PaymentHistoryPage() {
-  const [payments, setPayments] = useState<any[]>([]);
+  const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [portalLoading, setPortalLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const limit = 10;
+
+  const fetchPayments = async (pageNumber: number) => {
+    setLoading(true);
+    try {
+      const res = await api.get(`/stripe/payments?page=${pageNumber}&limit=${limit}`);
+      setData(res.data.data);
+    } catch (err) {
+      console.error('Failed to load payments', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchPayments = async () => {
-      try {
-        const res = await api.get('/stripe/payments');
-        setPayments(res.data.data);
-      } catch (err) {
-        console.error('Failed to load payments', err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchPayments();
-  }, []);
+    fetchPayments(page);
+  }, [page]);
 
   const handleOpenPortal = async () => {
     setPortalLoading(true);
@@ -60,49 +64,78 @@ export default function PaymentHistoryPage() {
       </div>
 
       <div className="card">
-        {loading ? (
+        {loading && !data ? (
           <LoadingSpinner message="Loading payments..." />
-        ) : payments.length > 0 ? (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)', fontSize: '13px' }}>
-                  <th style={{ padding: '12px 0', fontWeight: 500 }}>Date</th>
-                  <th style={{ padding: '12px 0', fontWeight: 500 }}>Amount</th>
-                  <th style={{ padding: '12px 0', fontWeight: 500 }}>Status</th>
-                  <th style={{ padding: '12px 0', fontWeight: 500 }}>Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                {payments.map((payment: any) => (
-                  <tr key={payment.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                    <td style={{ padding: '16px 0' }}>
-                      {format(new Date(payment.createdAt), 'MMM d, yyyy h:mm a')}
-                    </td>
-                    <td style={{ padding: '16px 0', fontWeight: 500 }}>
-                      {formatPrice(payment.amount, payment.currency)}
-                    </td>
-                    <td style={{ padding: '16px 0' }}>
-                      <span style={{ 
-                        display: 'inline-flex', 
-                        alignItems: 'center', 
-                        gap: '6px', 
-                        color: payment.status === 'SUCCEEDED' ? 'var(--accent)' : payment.status === 'FAILED' ? 'var(--danger)' : 'var(--warning)',
-                        fontSize: '13px',
-                        fontWeight: 500
-                      }}>
-                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'currentColor' }} />
-                        {payment.status}
-                      </span>
-                    </td>
-                    <td style={{ padding: '16px 0', color: 'var(--text-secondary)' }}>
-                      {payment.addonPackageId ? 'Addon Credit Purchase' : 'Subscription Charge'}
-                    </td>
+        ) : data?.data && data.data.length > 0 ? (
+          <>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse', opacity: loading ? 0.5 : 1 }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)', fontSize: '13px' }}>
+                    <th style={{ padding: '12px 0', fontWeight: 500 }}>Date</th>
+                    <th style={{ padding: '12px 0', fontWeight: 500 }}>Amount</th>
+                    <th style={{ padding: '12px 0', fontWeight: 500 }}>Status</th>
+                    <th style={{ padding: '12px 0', fontWeight: 500 }}>Description</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {data.data.map((payment: any) => (
+                    <tr key={payment.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                      <td style={{ padding: '16px 0' }}>
+                        {format(new Date(payment.createdAt), 'MMM d, yyyy h:mm a')}
+                      </td>
+                      <td style={{ padding: '16px 0', fontWeight: 500 }}>
+                        {formatPrice(payment.amount, payment.currency)}
+                      </td>
+                      <td style={{ padding: '16px 0' }}>
+                        <span style={{ 
+                          display: 'inline-flex', 
+                          alignItems: 'center', 
+                          gap: '6px', 
+                          color: payment.status === 'SUCCEEDED' ? 'var(--accent)' : payment.status === 'FAILED' ? 'var(--danger)' : 'var(--warning)',
+                          fontSize: '13px',
+                          fontWeight: 500
+                        }}>
+                          <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'currentColor' }} />
+                          {payment.status}
+                        </span>
+                      </td>
+                      <td style={{ padding: '16px 0', color: 'var(--text-secondary)' }}>
+                        {payment.addonPackageId ? 'Addon Credit Purchase' : 'Subscription Charge'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            
+            {/* Pagination Controls */}
+            {data.totalPages > 1 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '24px', paddingTop: '16px', borderTop: '1px solid var(--border)' }}>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>
+                  Showing page {data.page} of {data.totalPages} (Total: {data.total})
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button 
+                    className="btn btn-secondary" 
+                    onClick={() => setPage(p => Math.max(1, p - 1))}
+                    disabled={data.page === 1 || loading}
+                    style={{ padding: '8px 12px' }}
+                  >
+                    <ChevronLeft size={16} /> Prev
+                  </button>
+                  <button 
+                    className="btn btn-secondary" 
+                    onClick={() => setPage(p => Math.min(data.totalPages, p + 1))}
+                    disabled={data.page === data.totalPages || loading}
+                    style={{ padding: '8px 12px' }}
+                  >
+                    Next <ChevronRight size={16} />
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
         ) : (
           <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-secondary)' }}>
             <Receipt size={48} style={{ margin: '0 auto 16px', opacity: 0.5 }} />

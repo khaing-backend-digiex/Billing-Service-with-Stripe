@@ -87,8 +87,6 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
       this.logger.log(`Subscription ${subscription.id} already CANCELLED`);
     }
 
-    // Downgrade về Free dùng chung một đường với updated(unpaid): Stripe Free sub trước
-    // (PROVIDER, credit qua invoice.paid), fallback row NONE local nếu Stripe fail.
     await this.subscriptionSyncService.ensureFreePlanAfterTerminal(subscription);
   }
 }

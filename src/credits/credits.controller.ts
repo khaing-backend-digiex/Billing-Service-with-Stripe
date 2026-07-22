@@ -1,4 +1,4 @@
-import { Controller, Post, Body, HttpCode, HttpStatus, UsePipes, ValidationPipe, Get, Req, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus, UsePipes, ValidationPipe, Get, Req, UseGuards, Query } from '@nestjs/common';
 import { CreditService } from './credit.service';
 import { ConsumeCreditsDto } from './dto/consume-credits.dto';
 import { creditKey } from './credit.types';
@@ -41,6 +41,25 @@ export class CreditsController {
       HttpStatus.OK,
       'User package status retrieved successfully',
       status,
+    );
+  }
+
+  @Get('transactions')
+  async getTransactions(
+    @Req() req: any,
+    @Query('page') page: string = '1',
+    @Query('limit') limit: string = '10'
+  ) {
+    const userId = req.user.id;
+    const pageNumber = parseInt(page, 10) || 1;
+    const limitNumber = parseInt(limit, 10) || 10;
+    const skip = (pageNumber - 1) * limitNumber;
+
+    const result = await this.creditService.getTransactionHistory(userId, skip, limitNumber);
+    return new ApiResponse(
+      HttpStatus.OK,
+      'Transactions retrieved successfully',
+      result,
     );
   }
 }
