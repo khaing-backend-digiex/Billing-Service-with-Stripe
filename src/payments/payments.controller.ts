@@ -34,7 +34,7 @@ export class PaymentsController {
     private readonly paymentsService: PaymentsService,
     private readonly usersService: UsersService,
     private readonly prisma: PrismaService,
-  ) { }
+  ) {}
 
   @Post("customers")
   async createCustomer(
@@ -45,7 +45,9 @@ export class PaymentsController {
     const provider = dto.provider || PaymentProvider.STRIPE;
 
     if (provider === PaymentProvider.STRIPE && user.providerCustomerId) {
-      throw new BadRequestException("User already has a Stripe customer account");
+      throw new BadRequestException(
+        "User already has a Stripe customer account",
+      );
     }
 
     const customer = await this.paymentsService.createCustomer(
@@ -55,7 +57,11 @@ export class PaymentsController {
       provider,
     );
 
-    return new ApiResponse(HttpStatus.CREATED, "Customer created successfully", customer);
+    return new ApiResponse(
+      HttpStatus.CREATED,
+      "Customer created successfully",
+      customer,
+    );
   }
 
   @Post("billing-portal")
@@ -72,7 +78,9 @@ export class PaymentsController {
     const provider = dto?.provider || PaymentProvider.STRIPE;
 
     if (provider === PaymentProvider.STRIPE && !user.providerCustomerId) {
-      throw new BadRequestException("User does not have a Stripe customer account. Create one first.");
+      throw new BadRequestException(
+        "User does not have a Stripe customer account. Create one first.",
+      );
     }
 
     const customerId = user.providerCustomerId || "";
@@ -82,7 +90,11 @@ export class PaymentsController {
       provider,
     );
 
-    return new ApiResponse(HttpStatus.CREATED, "Billing portal session created successfully", session);
+    return new ApiResponse(
+      HttpStatus.CREATED,
+      "Billing portal session created successfully",
+      session,
+    );
   }
 
   @Post("cancel-subscription")
@@ -99,13 +111,17 @@ export class PaymentsController {
     const provider = dto.provider || PaymentProvider.STRIPE;
 
     if (provider === PaymentProvider.STRIPE && !user.providerCustomerId) {
-      throw new BadRequestException("User does not have a Stripe customer account.");
+      throw new BadRequestException(
+        "User does not have a Stripe customer account.",
+      );
     }
 
     const subscription = await this.prisma.subscription.findFirst({
       where: {
         userId,
-        status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE] },
+        status: {
+          in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE],
+        },
         pricingOption: { plan: { isFree: false } },
       },
       orderBy: { createdAt: "desc" },
@@ -144,11 +160,12 @@ export class PaymentsController {
       dto.pricingOptionId,
       dto.provider,
     );
-    return new ApiResponse(HttpStatus.OK, "Subscription tier upgraded successfully", updatedSub);
   }
 
   @Post("subscriptions/upgrade-cycle")
-  @ApiOperation({ summary: "Upgrade subscription billing cycle (e.g. Monthly to Yearly)" })
+  @ApiOperation({
+    summary: "Upgrade subscription billing cycle (e.g. Monthly to Yearly)",
+  })
   @SwaggerResponse({
     status: 200,
     description: "Subscription billing cycle upgraded successfully",
@@ -162,11 +179,17 @@ export class PaymentsController {
       dto.pricingOptionId,
       dto.provider,
     );
-    return new ApiResponse(HttpStatus.OK, "Subscription billing cycle upgraded successfully", updatedSub);
+    return new ApiResponse(
+      HttpStatus.OK,
+      "Subscription billing cycle upgraded successfully",
+      updatedSub,
+    );
   }
 
   @Get("subscriptions/preview-upgrade-tier")
-  @ApiOperation({ summary: "Preview subscription tier upgrade (same billing cycle)" })
+  @ApiOperation({
+    summary: "Preview subscription tier upgrade (same billing cycle)",
+  })
   @SwaggerResponse({
     status: 200,
     description: "Returns the upcoming invoice preview for the tier upgrade",
@@ -189,11 +212,18 @@ export class PaymentsController {
       currency: preview.currency,
       next_payment_date: preview.period_end,
     };
-    return new ApiResponse(HttpStatus.OK, "Upcoming invoice preview generated successfully", result);
+    return new ApiResponse(
+      HttpStatus.OK,
+      "Upcoming invoice preview generated successfully",
+      result,
+    );
   }
 
   @Get("subscriptions/preview-upgrade-cycle")
-  @ApiOperation({ summary: "Preview subscription billing cycle upgrade (e.g. Monthly to Yearly)" })
+  @ApiOperation({
+    summary:
+      "Preview subscription billing cycle upgrade (e.g. Monthly to Yearly)",
+  })
   @SwaggerResponse({
     status: 200,
     description: "Returns the upcoming invoice preview for the cycle upgrade",
@@ -217,6 +247,10 @@ export class PaymentsController {
       next_payment_date: preview.period_end,
       lines: preview.lines?.data || [],
     };
-    return new ApiResponse(HttpStatus.OK, "Upcoming invoice preview generated successfully", result);
+    return new ApiResponse(
+      HttpStatus.OK,
+      "Upcoming invoice preview generated successfully",
+      result,
+    );
   }
 }

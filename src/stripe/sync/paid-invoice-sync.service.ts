@@ -111,10 +111,9 @@ export class PaidInvoiceSyncService {
     const description = isInitial
       ? `Credits granted – ${plan.name} (initial)`
       : `Credits granted – ${plan.name} (renewal)`;
-    const paymentIntentId = paidInvoice.paymentIntentId ?? null;
-    // Mốc trả tiền thật của Stripe (không phải lúc xử lý webhook).
+    const providerPaymentId = paidInvoice.paymentIntentId ?? paidInvoice.id;
+  
     const paidAt = paidInvoice.paidAt ? new Date(paidInvoice.paidAt * 1000) : new Date();
-
     await this.prisma.$transaction(async (tx) => {
       const claimed = await this.invoiceService.claimAsPaid(
         tx,
@@ -130,11 +129,11 @@ export class PaidInvoiceSyncService {
         return;
       }
 
-      if (paymentIntentId) {
+      if (paidInvoice.amountPaid > 0) {
         await this.paymentService.recordSucceeded(
           {
             userId: subscription.userId,
-            providerPaymentId: paymentIntentId,
+            providerPaymentId,
             providerAmount: paidInvoice.amountPaid,
             currency: paidInvoice.currency,
             invoiceId: invoice.id,
