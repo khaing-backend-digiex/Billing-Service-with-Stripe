@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react';
 import { loadStripe } from '@stripe/stripe-js';
-import { PlusSquare, AlertCircle } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import api from '@/lib/api';
 import { AlertTriangle } from 'lucide-react';
@@ -41,6 +40,7 @@ export default function AddonStorePage() {
     setError('');
     
     try {
+      const oldBalance = status?.credits?.balance || 0;
       const res = await api.post('/stripe/checkout/addon', { addonPackageId });
       const { clientSecret, status: paymentStatus } = res.data.data;
 
@@ -51,12 +51,37 @@ export default function AddonStorePage() {
         const { error: stripeError } = await stripe.confirmCardPayment(clientSecret);
         if (stripeError) {
           setError(stripeError.message || 'Payment failed');
+          setPurchasing(null);
           return;
         }
+      } else if (paymentStatus === 'requires_payment_method') {
+        setError('Payment failed. Please try a different payment method.');
+        setPurchasing(null);
+        return;
       }
       
-      alert('Addon purchased successfully!');
-      fetchData(); // Refresh credits
+      // Polling for webhook processing
+      let retries = 0;
+      let success = false;
+      while (retries < 15) {
+        await new Promise(r => setTimeout(r, 1000));
+        try {
+          const checkRes = await api.get('/users/me/dashboard');
+          const newBalance = checkRes.data.data.credits?.balance || 0;
+          if (newBalance > oldBalance) {
+            success = true;
+            break;
+          }
+        } catch (e) {}
+        retries++;
+      }
+
+      if (success) {
+        alert('Addon purchased and credits added successfully!');
+        fetchData();
+      } else {
+        setError('Payment succeeded but credits are delayed. Please refresh the page in a few minutes.');
+      }
     } catch (err: any) {
       setError(err.response?.data?.message || err.message || 'Failed to purchase addon.');
       if (err.response?.status === 400 && err.response?.data?.message?.includes('payment method')) {
@@ -70,12 +95,30 @@ export default function AddonStorePage() {
   if (loading) return <LoadingSpinner message="Loading store..." />;
 
   const isFreePlan = status?.subscription?.plan?.isFree;
+  const isPastDue = status?.subscription?.status === 'PAST_DUE' || status?.subscription?.status === 'PAUSED';
+  
   const formatPrice = (price: number, currency: string = 'VND') => {
     return new Intl.NumberFormat('vi-VN', { style: 'currency', currency }).format(price);
   };
 
   return (
-    <div style={{ padding: '40px', maxWidth: '1000px', margin: '0 auto' }}>
+    <div style={{ padding: '40px', maxWidth: '1000px', margin: '0 auto', position: 'relative' }}>
+      {purchasing && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1000,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'white'
+        }}>
+          <div style={{
+            width: '40px', height: '40px', border: '3px solid rgba(255,255,255,0.3)',
+            borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite', marginBottom: '16px'
+          }} />
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+          <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 600 }}>Activating your credits...</h2>
+          <p style={{ marginTop: '8px', opacity: 0.8 }}>Please do not close this window.</p>
+        </div>
+      )}
+
       <div style={{ marginBottom: '40px' }}>
         <h1 className="h1" style={{ marginBottom: '8px' }}>Addon Credits</h1>
         <p className="body-text" style={{ color: 'var(--text-secondary)' }}>
@@ -90,7 +133,14 @@ export default function AddonStorePage() {
         </div>
       )}
 
-      {isFreePlan && (
+      {isPastDue && (
+        <div style={{ padding: '16px', backgroundColor: 'rgba(239, 65, 70, 0.1)', color: 'var(--danger)', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <AlertTriangle size={20} />
+          Your subscription is past due or paused. Credits are temporarily frozen and cannot be purchased or used.
+        </div>
+      )}
+
+      {isFreePlan && !isPastDue && (
         <div style={{ padding: '16px', backgroundColor: 'rgba(245, 166, 35, 0.1)', color: 'var(--warning)', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <AlertTriangle size={20} />
           You need an active Pro subscription to purchase and use addon credits.
@@ -99,7 +149,7 @@ export default function AddonStorePage() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '24px' }}>
         {addons.map(addon => (
-          <div key={addon.id} className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+          <div key={addon.id} className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', opacity: isPastDue ? 0.6 : 1 }}>
             <h3 className="h2" style={{ marginBottom: '8px' }}>{addon.name}</h3>
             <div style={{ color: 'var(--accent)', fontWeight: 600, fontSize: '18px', marginBottom: '16px' }}>
               +{addon.credits} credits
@@ -112,9 +162,9 @@ export default function AddonStorePage() {
               className="btn btn-secondary" 
               style={{ width: '100%' }}
               onClick={() => handlePurchase(addon.id)}
-              disabled={isFreePlan || purchasing !== null}
+              disabled={isFreePlan || isPastDue || purchasing !== null}
             >
-              {purchasing === addon.id ? 'Processing...' : 'Buy Now'}
+              Buy Now
             </button>
           </div>
         ))}

@@ -131,15 +131,34 @@ export class PaymentsController {
       throw new BadRequestException("Active subscription not found.");
     }
 
+    if (dto.immediate) {
+      await this.paymentsService.cancelSubscriptionNow(
+        subscription.providerSubscriptionId!,
+        provider,
+      );
+      return new ApiResponse(HttpStatus.OK, "Subscription cancelled immediately", null);
+    }
     await this.paymentsService.cancelSubscriptionAtPeriodEnd(
       subscription.providerSubscriptionId!,
       provider,
     );
+    return new ApiResponse(HttpStatus.OK, "Subscription will cancel at period end", null);
+  }
 
-    return new ApiResponse(
-      HttpStatus.OK,
-      "Subscription will cancel at period end",
-      null,
+  @Post("subscriptions/upgrade-tier")
+  @ApiOperation({ summary: "Upgrade subscription tier (same billing cycle, e.g. Pro to Ultra)" })
+  @SwaggerResponse({
+    status: 200,
+    description: "Subscription tier upgraded successfully",
+  })
+  async upgradeSubscriptionTier(
+    @GetUser("id") userId: string,
+    @Body() dto: UpgradeSubscriptionDto,
+  ) {
+    const updatedSub = await this.paymentsService.upgradeSubscriptionTier(
+      userId,
+      dto.pricingOptionId,
+      dto.provider,
     );
   }
 
@@ -226,6 +245,7 @@ export class PaymentsController {
       amount_due: preview.amount_due,
       currency: preview.currency,
       next_payment_date: preview.period_end,
+      lines: preview.lines?.data || [],
     };
     return new ApiResponse(
       HttpStatus.OK,

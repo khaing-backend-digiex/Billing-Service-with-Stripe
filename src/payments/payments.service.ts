@@ -29,6 +29,13 @@ export class PaymentsService {
     await this.stripeService.cancelSubscriptionAtPeriodEnd(subscriptionId);
   }
 
+  async cancelSubscriptionNow(subscriptionId: string, provider?: PaymentProvider) {
+    if (provider && provider !== PaymentProvider.STRIPE) {
+      throw new BadRequestException(`Payment provider ${provider} is not supported.`);
+    }
+    await this.stripeService.cancelSubscriptionNow(subscriptionId);
+  }
+
   async upgradeSubscriptionTier(userId: string, newPricingOptionId: string, provider?: PaymentProvider) {
     if (provider && provider !== PaymentProvider.STRIPE) {
       throw new BadRequestException(`Payment provider ${provider} is not supported.`);
