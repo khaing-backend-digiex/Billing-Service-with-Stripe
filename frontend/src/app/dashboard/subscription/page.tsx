@@ -6,10 +6,12 @@ import api from '@/lib/api';
 import { format } from 'date-fns';
 import { Check, AlertCircle } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
+import { useToast } from '@/components/Toast';
 
 const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || '');
 
 export default function SubscriptionPage() {
+  const toast = useToast();
   const [statusData, setStatusData] = useState<any>(null);
   const [plans, setPlans] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -20,6 +22,7 @@ export default function SubscriptionPage() {
   const [cancelModal, setCancelModal] = useState(false);
   const [cyclePreview, setCyclePreview] = useState<any>(null);
   const [cycleModal, setCycleModal] = useState<string | null>(null);
+  const [upgradeModal, setUpgradeModal] = useState<any>(null);
 
   const fetchData = async () => {
     setLoading(true);
@@ -84,7 +87,7 @@ export default function SubscriptionPage() {
       }
 
       if (success) {
-        alert('Subscription upgraded successfully!');
+        toast.success('Subscription upgraded successfully!');
         fetchData();
       } else {
         setError('Payment succeeded but subscription update is delayed. Please refresh the page in a few minutes.');
@@ -121,7 +124,7 @@ export default function SubscriptionPage() {
     setActionLoading(true);
     try {
       await api.post('/payments/subscriptions/upgrade-cycle', { pricingOptionId: cycleModal });
-      alert('Billing cycle changed successfully!');
+      toast.success('Billing cycle changed successfully!');
       setCycleModal(null);
       setCyclePreview(null);
       fetchData();
@@ -136,7 +139,7 @@ export default function SubscriptionPage() {
     setActionLoading(true);
     try {
       await api.post('/payments/cancel-subscription', { reason: 'User requested', immediate });
-      alert(immediate ? 'Subscription cancelled immediately.' : 'Subscription will be cancelled at period end.');
+      toast.success(immediate ? 'Subscription cancelled immediately.' : 'Subscription will be cancelled at period end.');
       setCancelModal(false);
       fetchData();
     } catch (err: any) {
@@ -160,7 +163,7 @@ export default function SubscriptionPage() {
       {activating && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1000,
+          backgroundColor: 'var(--overlay)', zIndex: 1000,
           display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'white'
         }}>
           <div style={{
@@ -177,7 +180,7 @@ export default function SubscriptionPage() {
       {cancelModal && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1000,
+          backgroundColor: 'var(--overlay)', zIndex: 1000,
           display: 'flex', alignItems: 'center', justifyContent: 'center'
         }}>
           <div className="card" style={{ maxWidth: '500px', width: '100%', margin: '20px' }}>
@@ -190,7 +193,7 @@ export default function SubscriptionPage() {
                 <span style={{ fontSize: '13px', opacity: 0.8, fontWeight: 400 }}>You will retain access until {format(new Date(currentSub?.currentPeriodEnd || Date.now()), 'MMM d, yyyy')}.</span>
               </button>
               
-              <button className="btn btn-danger" onClick={() => confirmCancel(true)} disabled={actionLoading} style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', backgroundColor: 'rgba(239, 65, 70, 0.1)', color: 'var(--danger)', border: '1px solid var(--danger)' }}>
+              <button className="btn btn-danger" onClick={() => confirmCancel(true)} disabled={actionLoading} style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', backgroundColor: 'var(--danger-bg)', color: 'var(--danger)', border: '1px solid var(--danger)' }}>
                 <span style={{ fontWeight: 600 }}>Cancel immediately</span>
                 <span style={{ fontSize: '13px', opacity: 0.8, fontWeight: 400 }}>You will lose access immediately. No refund will be issued.</span>
               </button>
@@ -207,7 +210,7 @@ export default function SubscriptionPage() {
       {cycleModal && cyclePreview && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1000,
+          backgroundColor: 'var(--overlay)', zIndex: 1000,
           display: 'flex', alignItems: 'center', justifyContent: 'center'
         }}>
           <div className="card" style={{ maxWidth: '500px', width: '100%', margin: '20px' }}>
@@ -238,10 +241,59 @@ export default function SubscriptionPage() {
         </div>
       )}
 
+      {/* Upgrade Confirmation Modal */}
+      {upgradeModal && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'var(--overlay)', zIndex: 1000,
+          display: 'flex', alignItems: 'center', justifyContent: 'center'
+        }}>
+          <div className="card" style={{ maxWidth: '500px', width: '100%', margin: '20px' }}>
+            <h2 className="h2" style={{ marginBottom: '8px' }}>Confirm Upgrade</h2>
+            <p className="body-text" style={{ color: 'var(--text-secondary)', marginBottom: '24px' }}>
+              Your default payment method will be charged immediately to start this subscription.
+            </p>
+
+            <div style={{ backgroundColor: 'var(--bg-primary)', padding: '16px', borderRadius: '8px', marginBottom: '24px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '14px' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Plan</span>
+                <span style={{ fontWeight: 500 }}>{upgradeModal.plan.name}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '14px' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Billing Cycle</span>
+                <span style={{ fontWeight: 500 }}>{upgradeModal.opt.billingCycle?.name}</span>
+              </div>
+              {upgradeModal.plan.creditPolicy?.creditAmount && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '14px' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>Credits</span>
+                  <span style={{ fontWeight: 500, color: 'var(--credit)' }}>{upgradeModal.plan.creditPolicy.creditAmount}/mo</span>
+                </div>
+              )}
+              <div style={{ borderTop: '1px solid var(--border)', margin: '12px 0' }}></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600, fontSize: '16px' }}>
+                <span>Amount Due Now</span>
+                <span>{formatPrice(upgradeModal.opt.price, upgradeModal.opt.currency)}</span>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button className="btn" onClick={() => setUpgradeModal(null)} disabled={actionLoading}>Cancel</button>
+              <button
+                className="btn btn-primary"
+                disabled={actionLoading}
+                onClick={() => { const o = upgradeModal.opt; setUpgradeModal(null); handleUpgrade(o.id); }}
+              >
+                Confirm & Pay {formatPrice(upgradeModal.opt.price, upgradeModal.opt.currency)}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <h1 className="h1" style={{ marginBottom: '32px' }}>Manage Subscription</h1>
 
       {error && (
-        <div style={{ padding: '16px', backgroundColor: 'rgba(239, 65, 70, 0.1)', color: 'var(--danger)', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ padding: '16px', backgroundColor: 'var(--danger-bg)', color: 'var(--danger)', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <AlertCircle size={20} />
           {error}
         </div>
@@ -259,8 +311,8 @@ export default function SubscriptionPage() {
                   {currentSub.plan.name}
                   <span style={{ 
                     padding: '2px 8px', 
-                    backgroundColor: currentSub.cancelledAt ? 'rgba(239, 65, 70, 0.1)' : (currentSub.status === 'ACTIVE' ? 'rgba(16, 163, 127, 0.1)' : 'rgba(245, 166, 35, 0.1)'), 
-                    color: currentSub.cancelledAt ? 'var(--danger)' : (currentSub.status === 'ACTIVE' ? 'var(--accent)' : 'var(--warning)'),
+                    backgroundColor: currentSub.cancelledAt ? 'var(--danger-bg)' : (currentSub.status === 'ACTIVE' ? 'var(--success-bg)' : 'var(--warning-bg)'),
+                    color: currentSub.cancelledAt ? 'var(--danger)' : (currentSub.status === 'ACTIVE' ? 'var(--success)' : 'var(--warning)'),
                     borderRadius: '4px',
                     fontSize: '12px',
                     fontWeight: 500,
@@ -362,31 +414,91 @@ export default function SubscriptionPage() {
       {/* Upgrade Options (if on Free plan) */}
       {isFree && (
         <div>
-          <h2 className="h2" style={{ marginBottom: '24px' }}>Upgrade Plan</h2>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            {plans.filter(p => !p.isFree).map(plan => (
-              <div key={plan.code} className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <h3 className="h3" style={{ marginBottom: '8px' }}>{plan.name}</h3>
-                  <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', gap: '16px', color: 'var(--text-secondary)' }}>
-                    <li>{plan.creditPolicy?.creditAmount} credits/mo</li>
-                    <li>Priority support</li>
-                  </ul>
-                </div>
-                <div style={{ display: 'flex', gap: '12px' }}>
-                  {plan.pricingOptions.map((opt: any) => (
-                    <button 
-                      key={opt.id} 
-                      onClick={() => handleUpgrade(opt.id)}
+          <h2 className="h2" style={{ marginBottom: '8px' }}>Upgrade Plan</h2>
+          <p className="body-text" style={{ color: 'var(--text-secondary)', marginBottom: '24px' }}>
+            Unlock more credits and full AI access. Pick the billing cycle that suits you.
+          </p>
+
+          <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap', justifyContent: 'center' }}>
+            {plans.filter(p => !p.isFree).flatMap(plan => {
+              // DB uses 'ANUALLY' for the yearly cycle (see seed.ts)
+              const monthlyOpt = plan.pricingOptions?.find((o: any) => o.billingCycle?.name === 'MONTHLY');
+              const sorted = [...(plan.pricingOptions || [])].sort(
+                (a: any, b: any) => (a.billingCycle?.durationDay || 0) - (b.billingCycle?.durationDay || 0)
+              );
+
+              return sorted.map((opt: any) => {
+                const isYearly = opt.billingCycle?.name === 'ANUALLY';
+                const savings = isYearly && monthlyOpt?.price > 0
+                  ? Math.round((1 - opt.price / (monthlyOpt.price * 12)) * 100)
+                  : 0;
+
+                return (
+                  <div
+                    key={opt.id}
+                    className="card card-interactive"
+                    style={{
+                      flex: '1 1 300px',
+                      maxWidth: '360px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      position: 'relative',
+                      border: isYearly ? '1px solid var(--accent)' : undefined,
+                    }}
+                  >
+                    {isYearly && savings > 0 && (
+                      <span style={{
+                        position: 'absolute', top: '16px', right: '16px',
+                        padding: '4px 10px', backgroundColor: 'var(--accent-bg)', color: 'var(--accent)',
+                        borderRadius: '999px', fontSize: '12px', fontWeight: 600,
+                      }}>
+                        Save {savings}%
+                      </span>
+                    )}
+
+                    <h3 className="h3" style={{ marginBottom: '4px' }}>
+                      {plan.name} <span style={{ color: 'var(--accent)' }}>✦</span>
+                    </h3>
+                    <div style={{ color: 'var(--text-secondary)', fontSize: '13px', textTransform: 'capitalize', marginBottom: '12px' }}>
+                      {opt.billingCycle?.name?.toLowerCase()} billing
+                    </div>
+
+                    <div style={{ fontSize: '32px', fontWeight: 700, margin: '0 0 8px' }}>
+                      {formatPrice(opt.price, opt.currency)}
+                      <span style={{ fontSize: '16px', fontWeight: 400, color: 'var(--text-secondary)' }}>
+                        {' '}/ {isYearly ? 'year' : 'month'}
+                      </span>
+                    </div>
+
+                    <div style={{ height: '1px', backgroundColor: 'var(--border)', margin: '24px 0' }} />
+
+                    <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 32px', flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                      <li style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <Check size={18} color="var(--accent)" />
+                        <span><strong style={{ color: 'var(--credit)' }}>{plan.creditPolicy?.creditAmount}</strong> credits / month</span>
+                      </li>
+                      <li style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <Check size={18} color="var(--accent)" />
+                        <span>Full AI access</span>
+                      </li>
+                      <li style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <Check size={18} color="var(--accent)" />
+                        <span>Priority support</span>
+                      </li>
+                    </ul>
+
+                    <button
+                      onClick={() => setUpgradeModal({ plan, opt })}
                       disabled={actionLoading}
-                      className="btn btn-primary"
+                      className={`btn ${isYearly ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ width: '100%', padding: '12px' }}
                     >
-                      {opt.billingCycle?.name} ({formatPrice(opt.price, opt.currency)})
+                      Choose {isYearly ? 'Yearly' : 'Monthly'}
                     </button>
-                  ))}
-                </div>
-              </div>
-            ))}
+                  </div>
+                );
+              });
+            })}
           </div>
         </div>
       )}

@@ -4,8 +4,10 @@ import { useState, useEffect } from 'react';
 import api from '@/lib/api';
 import { Package, Plus } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
+import { useToast } from '@/components/Toast';
 
 export default function AdminCatalogPage() {
+  const toast = useToast();
   const [plans, setPlans] = useState<any[]>([]);
   const [addons, setAddons] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -39,7 +41,7 @@ export default function AdminCatalogPage() {
     <div style={{ padding: '40px', maxWidth: '1000px', margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
         <h1 className="h1">Catalog Management</h1>
-        <button className="btn btn-primary" onClick={() => alert('Editing catalog via UI is coming soon! Please use the database seed script to update the catalog for now.')}>
+        <button className="btn btn-primary" onClick={() => toast.info('Editing catalog via UI is coming soon! Please use the database seed script to update the catalog for now.')}>
           <Plus size={18} style={{ marginRight: '8px' }} /> Create New
         </button>
       </div>
@@ -119,8 +121,8 @@ export default function AdminCatalogPage() {
                 <h3 className="h3">{addon.name}</h3>
                 <span style={{ 
                   padding: '2px 8px', 
-                  backgroundColor: addon.isActive ? 'rgba(16, 163, 127, 0.1)' : 'rgba(239, 65, 70, 0.1)',
-                  color: addon.isActive ? 'var(--accent)' : 'var(--danger)',
+                  backgroundColor: addon.isActive ? 'var(--success-bg)' : 'var(--danger-bg)',
+                  color: addon.isActive ? 'var(--success)' : 'var(--danger)',
                   borderRadius: '4px',
                   fontSize: '12px',
                   fontWeight: 500

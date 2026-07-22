@@ -94,7 +94,7 @@ export default function DashboardOverview() {
       <h1 className="h1" style={{ marginBottom: '32px' }}>Overview</h1>
       
       {status?.subscription?.status === 'PAST_DUE' && (
-        <div style={{ padding: '16px', backgroundColor: 'rgba(239, 65, 70, 0.1)', color: 'var(--danger)', borderRadius: '8px', marginBottom: '32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ padding: '16px', backgroundColor: 'var(--danger-bg)', color: 'var(--danger)', borderRadius: '8px', marginBottom: '32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 600 }}>Payment Failed</h3>
             <p style={{ margin: 0, fontSize: '14px' }}>Your subscription is past due. Please update your payment method to restore access to your credits and services.</p>
@@ -125,8 +125,8 @@ export default function DashboardOverview() {
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '24px' }}>
                 <span style={{ 
                   padding: '4px 8px', 
-                  backgroundColor: status.subscription.status === 'ACTIVE' ? 'rgba(16, 163, 127, 0.1)' : 'rgba(245, 166, 35, 0.1)', 
-                  color: status.subscription.status === 'ACTIVE' ? 'var(--accent)' : 'var(--warning)',
+                  backgroundColor: status.subscription.status === 'ACTIVE' ? 'var(--success-bg)' : 'var(--warning-bg)',
+                  color: status.subscription.status === 'ACTIVE' ? 'var(--success)' : 'var(--warning)',
                   borderRadius: '4px',
                   fontSize: '12px',
                   fontWeight: 500
@@ -155,7 +155,7 @@ export default function DashboardOverview() {
             <Zap color="var(--accent)" />
             <h2 className="h3">Credits</h2>
           </div>
-          <div style={{ fontSize: '32px', fontWeight: 700, marginBottom: '8px' }}>
+          <div style={{ fontSize: '32px', fontWeight: 700, marginBottom: '8px', color: 'var(--credit)' }}>
             {credits?.balance || 0}
             <span style={{ fontSize: '16px', fontWeight: 400, color: 'var(--text-secondary)' }}>
               {' '}remaining
@@ -205,7 +205,7 @@ export default function DashboardOverview() {
                   display: 'flex', 
                   alignItems: 'center', 
                   gap: '6px', 
-                  color: payment.status === 'SUCCEEDED' ? 'var(--accent)' : payment.status === 'FAILED' ? 'var(--danger)' : 'var(--warning)',
+                  color: payment.status === 'SUCCEEDED' ? 'var(--success)' : payment.status === 'FAILED' ? 'var(--danger)' : 'var(--warning)',
                   fontSize: '13px',
                   fontWeight: 500
                 }}>

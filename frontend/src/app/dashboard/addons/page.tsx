@@ -4,16 +4,19 @@ import { useState, useEffect } from 'react';
 import { loadStripe } from '@stripe/stripe-js';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import api from '@/lib/api';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Zap } from 'lucide-react';
+import { useToast } from '@/components/Toast';
 
 const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || '');
 
 export default function AddonStorePage() {
+  const toast = useToast();
   const [addons, setAddons] = useState<any[]>([]);
   const [status, setStatus] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [purchasing, setPurchasing] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [confirmAddon, setConfirmAddon] = useState<any>(null);
 
   const fetchData = async () => {
     setLoading(true);
@@ -77,7 +80,7 @@ export default function AddonStorePage() {
       }
 
       if (success) {
-        alert('Addon purchased and credits added successfully!');
+        toast.success('Addon purchased and credits added successfully!');
         fetchData();
       } else {
         setError('Payment succeeded but credits are delayed. Please refresh the page in a few minutes.');
@@ -106,16 +109,54 @@ export default function AddonStorePage() {
       {purchasing && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1000,
+          backgroundColor: 'var(--overlay)', zIndex: 1000,
           display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'white'
         }}>
           <div style={{
             width: '40px', height: '40px', border: '3px solid rgba(255,255,255,0.3)',
             borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite', marginBottom: '16px'
           }} />
-          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
           <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 600 }}>Activating your credits...</h2>
           <p style={{ marginTop: '8px', opacity: 0.8 }}>Please do not close this window.</p>
+        </div>
+      )}
+
+      {/* Purchase Confirmation Modal */}
+      {confirmAddon && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'var(--overlay)', zIndex: 1000,
+          display: 'flex', alignItems: 'center', justifyContent: 'center'
+        }}>
+          <div className="card" style={{ maxWidth: '440px', width: '100%', margin: '20px' }}>
+            <h2 className="h2" style={{ marginBottom: '8px' }}>Confirm Purchase</h2>
+            <p className="body-text" style={{ color: 'var(--text-secondary)', marginBottom: '24px' }}>
+              Your default payment method will be charged immediately for this addon pack.
+            </p>
+
+            <div style={{ backgroundColor: 'var(--bg-primary)', padding: '16px', borderRadius: '8px', marginBottom: '24px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <span>{confirmAddon.name}</span>
+                <span style={{ color: 'var(--credit)', fontWeight: 500 }}>+{confirmAddon.credits} credits</span>
+              </div>
+              <div style={{ borderTop: '1px solid var(--border)', margin: '12px 0' }}></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600, fontSize: '16px' }}>
+                <span>Total</span>
+                <span>{formatPrice(confirmAddon.price, confirmAddon.currency)}</span>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button className="btn" onClick={() => setConfirmAddon(null)} disabled={purchasing !== null}>Cancel</button>
+              <button
+                className="btn btn-primary"
+                disabled={purchasing !== null}
+                onClick={() => { const a = confirmAddon; setConfirmAddon(null); handlePurchase(a.id); }}
+              >
+                Confirm & Pay {formatPrice(confirmAddon.price, confirmAddon.currency)}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -127,41 +168,45 @@ export default function AddonStorePage() {
       </div>
 
       {error && (
-        <div style={{ padding: '16px', backgroundColor: 'rgba(239, 65, 70, 0.1)', color: 'var(--danger)', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ padding: '16px', backgroundColor: 'var(--danger-bg)', color: 'var(--danger)', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <AlertTriangle size={20} />
           {error}
         </div>
       )}
 
       {isPastDue && (
-        <div style={{ padding: '16px', backgroundColor: 'rgba(239, 65, 70, 0.1)', color: 'var(--danger)', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ padding: '16px', backgroundColor: 'var(--danger-bg)', color: 'var(--danger)', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <AlertTriangle size={20} />
           Your subscription is past due or paused. Credits are temporarily frozen and cannot be purchased or used.
         </div>
       )}
 
       {isFreePlan && !isPastDue && (
-        <div style={{ padding: '16px', backgroundColor: 'rgba(245, 166, 35, 0.1)', color: 'var(--warning)', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ padding: '16px', backgroundColor: 'var(--warning-bg)', color: 'var(--warning)', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <AlertTriangle size={20} />
           You need an active Pro subscription to purchase and use addon credits.
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '24px' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '24px', justifyContent: 'center' }}>
         {addons.map(addon => (
-          <div key={addon.id} className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', opacity: isPastDue ? 0.6 : 1 }}>
-            <h3 className="h2" style={{ marginBottom: '8px' }}>{addon.name}</h3>
-            <div style={{ color: 'var(--accent)', fontWeight: 600, fontSize: '18px', marginBottom: '16px' }}>
-              +{addon.credits} credits
+          <div key={addon.id} className="card card-interactive" style={{ flex: '1 1 280px', maxWidth: '320px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', opacity: isPastDue ? 0.6 : 1 }}>
+            <h3 className="h2" style={{ marginBottom: '16px' }}>{addon.name}</h3>
+            <div style={{
+              display: 'inline-flex', alignItems: 'center', gap: '6px',
+              padding: '6px 14px', backgroundColor: 'var(--credit-bg)', color: 'var(--credit)',
+              borderRadius: '999px', fontWeight: 600, fontSize: '15px', marginBottom: '20px'
+            }}>
+              <Zap size={16} fill="currentColor" /> +{addon.credits} credits
             </div>
-            <div style={{ fontSize: '32px', fontWeight: 700, margin: '8px 0 24px' }}>
+            <div style={{ fontSize: '32px', fontWeight: 700, marginTop: 'auto', marginBottom: '24px' }}>
               {formatPrice(addon.price, addon.currency)}
             </div>
-            
-            <button 
-              className="btn btn-secondary" 
+
+            <button
+              className="btn btn-primary"
               style={{ width: '100%' }}
-              onClick={() => handlePurchase(addon.id)}
+              onClick={() => setConfirmAddon(addon)}
               disabled={isFreePlan || isPastDue || purchasing !== null}
             >
               Buy Now

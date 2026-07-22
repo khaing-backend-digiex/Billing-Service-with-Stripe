@@ -52,14 +52,14 @@ export default function ConsumeCreditPage() {
         </p>
 
         {error && (
-          <div style={{ padding: '16px', backgroundColor: 'rgba(239, 65, 70, 0.1)', color: 'var(--danger)', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ padding: '16px', backgroundColor: 'var(--danger-bg)', color: 'var(--danger)', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
             <AlertCircle size={20} />
             {error}
           </div>
         )}
 
         {success && (
-          <div style={{ padding: '16px', backgroundColor: 'rgba(16, 163, 127, 0.1)', color: 'var(--accent)', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ padding: '16px', backgroundColor: 'var(--success-bg)', color: 'var(--success)', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
             <CheckCircle size={20} />
             {success}
           </div>

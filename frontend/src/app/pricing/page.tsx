@@ -110,7 +110,7 @@ export default function PricingPage() {
               if (!option && !plan.isFree) return null;
 
               return (
-                <div key={plan.code} className="card" style={{ flex: '1 1 300px', maxWidth: '380px', display: 'flex', flexDirection: 'column' }}>
+                <div key={plan.code} className="card card-interactive" style={{ flex: '1 1 300px', maxWidth: '380px', display: 'flex', flexDirection: 'column' }}>
                   <h2 className="h2" style={{ marginBottom: '8px' }}>
                     {plan.name}
                     {!plan.isFree && <span style={{ color: 'var(--accent)', marginLeft: '8px' }}>✦</span>}
@@ -160,7 +160,7 @@ export default function PricingPage() {
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '24px' }}>
               {addons.filter(a => a.isActive).map(addon => (
-                <div key={addon.id} className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+                <div key={addon.id} className="card card-interactive" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
                   <h3 className="h3" style={{ marginBottom: '8px' }}>{addon.name}</h3>
                   <div style={{ color: 'var(--text-secondary)', marginBottom: '16px' }}>{addon.credits} credits</div>
                   <div style={{ fontSize: '24px', fontWeight: 600, marginBottom: '24px' }}>

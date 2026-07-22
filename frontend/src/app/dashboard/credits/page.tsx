@@ -34,13 +34,13 @@ export default function CreditsPage() {
     switch (sourceType) {
       case 'SUBSCRIPTION_ALLOCATION':
       case 'SUBSCRIPTION_RESET':
-        return { bg: 'rgba(16, 163, 127, 0.1)', color: 'var(--accent)' };
+        return { bg: 'var(--success-bg)', color: 'var(--success)' };
       case 'ADDON':
-        return { bg: 'rgba(91, 158, 244, 0.1)', color: 'var(--info)' };
+        return { bg: 'var(--info-bg)', color: 'var(--info)' };
       case 'GIFT':
         return { bg: 'rgba(192, 132, 252, 0.1)', color: '#C084FC' };
       case 'PROMOTION':
-        return { bg: 'rgba(245, 166, 35, 0.1)', color: 'var(--warning)' };
+        return { bg: 'var(--warning-bg)', color: 'var(--warning)' };
       case 'ADMIN':
         return { bg: 'var(--bg-tertiary)', color: 'var(--text-secondary)' };
       default:
@@ -75,7 +75,7 @@ export default function CreditsPage() {
       </div>
 
       {isFrozen && (
-        <div style={{ padding: '16px', backgroundColor: 'rgba(239, 65, 70, 0.1)', color: 'var(--danger)', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ padding: '16px', backgroundColor: 'var(--danger-bg)', color: 'var(--danger)', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <AlertTriangle size={20} />
           Your credits are currently frozen due to a paused or past-due subscription. Please update your payment method or resume your subscription to use them.
         </div>
@@ -87,7 +87,7 @@ export default function CreditsPage() {
           <h2 className="h2">Total Balance</h2>
         </div>
         
-        <div style={{ fontSize: '48px', fontWeight: 700, marginBottom: '8px', color: isFrozen ? 'var(--danger)' : 'inherit' }}>
+        <div style={{ fontSize: '48px', fontWeight: 700, marginBottom: '8px', color: isFrozen ? 'var(--danger)' : 'var(--credit)' }}>
           {credits?.balance || 0}
         </div>
         

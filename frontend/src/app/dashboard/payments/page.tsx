@@ -5,8 +5,10 @@ import api from '@/lib/api';
 import { format } from 'date-fns';
 import { ExternalLink, Receipt, ChevronLeft, ChevronRight } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
+import { useToast } from '@/components/Toast';
 
 export default function PaymentHistoryPage() {
+  const toast = useToast();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [portalLoading, setPortalLoading] = useState(false);
@@ -39,7 +41,7 @@ export default function PaymentHistoryPage() {
       }
     } catch (err) {
       console.error('Failed to open billing portal', err);
-      alert('Failed to open billing portal. Please try again.');
+      toast.error('Failed to open billing portal. Please try again.');
     } finally {
       setPortalLoading(false);
     }
@@ -92,7 +94,7 @@ export default function PaymentHistoryPage() {
                           display: 'inline-flex', 
                           alignItems: 'center', 
                           gap: '6px', 
-                          color: payment.status === 'SUCCEEDED' ? 'var(--accent)' : payment.status === 'FAILED' ? 'var(--danger)' : 'var(--warning)',
+                          color: payment.status === 'SUCCEEDED' ? 'var(--success)' : payment.status === 'FAILED' ? 'var(--danger)' : 'var(--warning)',
                           fontSize: '13px',
                           fontWeight: 500
                         }}>
