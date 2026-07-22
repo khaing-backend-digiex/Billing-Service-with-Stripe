@@ -15,6 +15,11 @@ export default function SubscriptionPage() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState('');
+  const [activating, setActivating] = useState(false);
+  
+  const [cancelModal, setCancelModal] = useState(false);
+  const [cyclePreview, setCyclePreview] = useState<any>(null);
+  const [cycleModal, setCycleModal] = useState<string | null>(null);
 
   const fetchData = async () => {
     setLoading(true);
@@ -42,6 +47,7 @@ export default function SubscriptionPage() {
     setError('');
     
     try {
+      const oldPricingOptionId = statusData?.subscription?.pricingOption?.id;
       const res = await api.post('/stripe/checkout/subscription', { pricingOptionId });
       const { clientSecret, status } = res.data.data;
 
@@ -52,13 +58,37 @@ export default function SubscriptionPage() {
         const { error: stripeError } = await stripe.confirmCardPayment(clientSecret);
         if (stripeError) {
           setError(stripeError.message || 'Payment failed');
+          setActionLoading(false);
           return;
         }
+      } else if (status === 'requires_payment_method') {
+        setError('Payment failed. Please try a different payment method.');
+        setActionLoading(false);
+        return;
       }
       
-      // Success, refresh
-      alert('Subscription upgraded successfully!');
-      fetchData();
+      setActivating(true);
+      let retries = 0;
+      let success = false;
+      while (retries < 15) {
+        await new Promise(r => setTimeout(r, 1000));
+        try {
+          const checkRes = await api.get('/users/me/dashboard');
+          const newPricingOptionId = checkRes.data.data.subscription?.pricingOption?.id;
+          if (newPricingOptionId && newPricingOptionId !== oldPricingOptionId) {
+            success = true;
+            break;
+          }
+        } catch (e) {}
+        retries++;
+      }
+
+      if (success) {
+        alert('Subscription upgraded successfully!');
+        fetchData();
+      } else {
+        setError('Payment succeeded but subscription update is delayed. Please refresh the page in a few minutes.');
+      }
     } catch (err: any) {
       setError(err.response?.data?.message || err.message || 'Failed to upgrade subscription.');
       if (err.response?.status === 400 && err.response?.data?.message?.includes('payment method')) {
@@ -67,22 +97,34 @@ export default function SubscriptionPage() {
       }
     } finally {
       setActionLoading(false);
+      setActivating(false);
     }
   };
 
-  const handleCycleChange = async (pricingOptionId: string) => {
+  const openCycleChangeModal = async (pricingOptionId: string) => {
     setActionLoading(true);
     setError('');
     
     try {
       const previewRes = await api.get(`/payments/subscriptions/preview-upgrade-cycle?pricingOptionId=${pricingOptionId}`);
-      const { amount_due, currency } = previewRes.data.data;
-      
-      if (window.confirm(`You will be charged ${new Intl.NumberFormat('vi-VN').format(amount_due)} ${currency.toUpperCase()} immediately to switch billing cycle. Continue?`)) {
-        await api.post('/payments/subscriptions/upgrade-cycle', { pricingOptionId });
-        alert('Billing cycle changed successfully!');
-        fetchData();
-      }
+      setCyclePreview(previewRes.data.data);
+      setCycleModal(pricingOptionId);
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Failed to generate preview.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const confirmCycleChange = async () => {
+    if (!cycleModal) return;
+    setActionLoading(true);
+    try {
+      await api.post('/payments/subscriptions/upgrade-cycle', { pricingOptionId: cycleModal });
+      alert('Billing cycle changed successfully!');
+      setCycleModal(null);
+      setCyclePreview(null);
+      fetchData();
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to change billing cycle.');
     } finally {
@@ -90,15 +132,12 @@ export default function SubscriptionPage() {
     }
   };
 
-  const handleCancel = async () => {
-    if (!window.confirm('Are you sure you want to cancel your subscription? You will retain access until the end of your billing period.')) {
-      return;
-    }
-    
+  const confirmCancel = async (immediate: boolean) => {
     setActionLoading(true);
     try {
-      await api.post('/payments/cancel-subscription', { reason: 'User requested' });
-      alert('Subscription cancelled successfully.');
+      await api.post('/payments/cancel-subscription', { reason: 'User requested', immediate });
+      alert(immediate ? 'Subscription cancelled immediately.' : 'Subscription will be cancelled at period end.');
+      setCancelModal(false);
       fetchData();
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to cancel subscription.');
@@ -117,7 +156,88 @@ export default function SubscriptionPage() {
   };
 
   return (
-    <div style={{ padding: '40px', maxWidth: '800px', margin: '0 auto' }}>
+    <div style={{ padding: '40px', maxWidth: '800px', margin: '0 auto', position: 'relative' }}>
+      {activating && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1000,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'white'
+        }}>
+          <div style={{
+            width: '40px', height: '40px', border: '3px solid rgba(255,255,255,0.3)',
+            borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite', marginBottom: '16px'
+          }} />
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+          <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 600 }}>Activating your subscription...</h2>
+          <p style={{ marginTop: '8px', opacity: 0.8 }}>Please do not close this window.</p>
+        </div>
+      )}
+
+      {/* Cancel Modal */}
+      {cancelModal && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1000,
+          display: 'flex', alignItems: 'center', justifyContent: 'center'
+        }}>
+          <div className="card" style={{ maxWidth: '500px', width: '100%', margin: '20px' }}>
+            <h2 className="h2" style={{ marginBottom: '16px' }}>Cancel Subscription</h2>
+            <p className="body-text" style={{ marginBottom: '24px' }}>How would you like to cancel your subscription?</p>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '24px' }}>
+              <button className="btn btn-secondary" onClick={() => confirmCancel(false)} disabled={actionLoading} style={{ textAlign: 'left', display: 'flex', flexDirection: 'column' }}>
+                <span style={{ fontWeight: 600 }}>Cancel at end of billing period</span>
+                <span style={{ fontSize: '13px', opacity: 0.8, fontWeight: 400 }}>You will retain access until {format(new Date(currentSub?.currentPeriodEnd || Date.now()), 'MMM d, yyyy')}.</span>
+              </button>
+              
+              <button className="btn btn-danger" onClick={() => confirmCancel(true)} disabled={actionLoading} style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', backgroundColor: 'rgba(239, 65, 70, 0.1)', color: 'var(--danger)', border: '1px solid var(--danger)' }}>
+                <span style={{ fontWeight: 600 }}>Cancel immediately</span>
+                <span style={{ fontSize: '13px', opacity: 0.8, fontWeight: 400 }}>You will lose access immediately. No refund will be issued.</span>
+              </button>
+            </div>
+            
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button className="btn" onClick={() => setCancelModal(false)} disabled={actionLoading}>Nevermind</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cycle Change Modal */}
+      {cycleModal && cyclePreview && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1000,
+          display: 'flex', alignItems: 'center', justifyContent: 'center'
+        }}>
+          <div className="card" style={{ maxWidth: '500px', width: '100%', margin: '20px' }}>
+            <h2 className="h2" style={{ marginBottom: '16px' }}>Confirm Cycle Change</h2>
+            
+            <div style={{ marginBottom: '24px', backgroundColor: 'var(--bg-primary)', padding: '16px', borderRadius: '8px' }}>
+              <h4 style={{ fontSize: '14px', marginBottom: '12px', color: 'var(--text-secondary)' }}>Invoice Breakdown</h4>
+              {cyclePreview.lines.map((line: any) => (
+                <div key={line.id} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '14px' }}>
+                  <span>{line.description}</span>
+                  <span>{formatPrice(line.amount, cyclePreview.currency)}</span>
+                </div>
+              ))}
+              <div style={{ borderTop: '1px solid var(--border)', margin: '12px 0' }}></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600, fontSize: '16px' }}>
+                <span>Amount Due Now</span>
+                <span>{formatPrice(cyclePreview.amount_due, cyclePreview.currency)}</span>
+              </div>
+            </div>
+            
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button className="btn" onClick={() => { setCycleModal(null); setCyclePreview(null); }} disabled={actionLoading}>Cancel</button>
+              <button className="btn btn-primary" onClick={confirmCycleChange} disabled={actionLoading}>
+                Confirm and Pay {formatPrice(cyclePreview.amount_due, cyclePreview.currency)}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <h1 className="h1" style={{ marginBottom: '32px' }}>Manage Subscription</h1>
 
       {error && (
@@ -139,26 +259,31 @@ export default function SubscriptionPage() {
                   {currentSub.plan.name}
                   <span style={{ 
                     padding: '2px 8px', 
-                    backgroundColor: currentSub.status === 'ACTIVE' ? 'rgba(16, 163, 127, 0.1)' : 'rgba(245, 166, 35, 0.1)', 
-                    color: currentSub.status === 'ACTIVE' ? 'var(--accent)' : 'var(--warning)',
+                    backgroundColor: currentSub.cancelledAt ? 'rgba(239, 65, 70, 0.1)' : (currentSub.status === 'ACTIVE' ? 'rgba(16, 163, 127, 0.1)' : 'rgba(245, 166, 35, 0.1)'), 
+                    color: currentSub.cancelledAt ? 'var(--danger)' : (currentSub.status === 'ACTIVE' ? 'var(--accent)' : 'var(--warning)'),
                     borderRadius: '4px',
                     fontSize: '12px',
                     fontWeight: 500,
                     textTransform: 'uppercase'
                   }}>
-                    {currentSub.status}
+                    {currentSub.cancelledAt ? 'CANCELS AT END OF PERIOD' : currentSub.status}
                   </span>
                 </div>
                 {!isFree && (
                   <div style={{ color: 'var(--text-secondary)' }}>
                     {formatPrice(currentSub.pricingOption.price, currentSub.pricingOption.currency)} / {currentSub.pricingOption.billingCycle?.name?.toLowerCase()}
+                    {currentSub.cancelledAt && (
+                      <div style={{ marginTop: '4px', color: 'var(--danger)', fontSize: '13px' }}>
+                        Active until {format(new Date(currentSub.currentPeriodEnd), 'MMM d, yyyy')}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
               
               {!isFree && !currentSub.cancelledAt && (
                 <button 
-                  onClick={handleCancel}
+                  onClick={() => setCancelModal(true)}
                   disabled={actionLoading}
                   className="btn btn-danger"
                 >
@@ -212,7 +337,7 @@ export default function SubscriptionPage() {
                           <button 
                             className="btn btn-secondary" 
                             style={{ width: '100%' }}
-                            onClick={() => handleCycleChange(opt.id)}
+                            onClick={() => openCycleChangeModal(opt.id)}
                             disabled={actionLoading}
                           >
                             Switch to {opt.billingCycle?.name}
