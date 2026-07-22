@@ -5,6 +5,7 @@ import api from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import { User, Mail, ExternalLink, User as UserIcon } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
+import { toast } from 'react-hot-toast';
 import { format } from 'date-fns';
 
 export default function SettingsPage() {
@@ -44,7 +45,7 @@ export default function SettingsPage() {
       }
     } catch (err) {
       console.error('Failed to open billing portal', err);
-      alert('Failed to open billing portal. Please try again.');
+      toast.error('Failed to open billing portal. Please try again.');
     } finally {
       setPortalLoading(false);
     }

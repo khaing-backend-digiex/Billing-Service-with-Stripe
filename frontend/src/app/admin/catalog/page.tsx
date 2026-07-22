@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import api from '@/lib/api';
 import { Package, Plus } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
+import { toast } from 'react-hot-toast';
 
 export default function AdminCatalogPage() {
   const [plans, setPlans] = useState<any[]>([]);
@@ -39,7 +40,7 @@ export default function AdminCatalogPage() {
     <div style={{ padding: '40px', maxWidth: '1000px', margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
         <h1 className="h1">Catalog Management</h1>
-        <button className="btn btn-primary" onClick={() => alert('Editing catalog via UI is coming soon! Please use the database seed script to update the catalog for now.')}>
+        <button className="btn btn-primary" onClick={() => toast('Editing catalog via UI is coming soon! Please use the database seed script to update the catalog for now.', { icon: 'ℹ️' })}>
           <Plus size={18} style={{ marginRight: '8px' }} /> Create New
         </button>
       </div>

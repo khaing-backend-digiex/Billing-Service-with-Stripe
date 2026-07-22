@@ -6,6 +6,7 @@ import api from '@/lib/api';
 import { format } from 'date-fns';
 import { Check, AlertCircle } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
+import { toast } from 'react-hot-toast';
 
 const stripePromise = getStripe();
 
@@ -59,7 +60,7 @@ export default function SubscriptionPage() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState('');
-  const [activating, setActivating] = useState(false);
+  const [processingMessage, setProcessingMessage] = useState<string | null>(null);
   const [cancelModal, setCancelModal] = useState(false);
   const [cyclePreview, setCyclePreview] = useState<{
     amount_due: number;
@@ -113,7 +114,7 @@ export default function SubscriptionPage() {
         setActionLoading(false);
         return;
       }
-      setActivating(true);
+      setProcessingMessage('Activating your subscription...');
       let retries = 0;
       let success = false;
       while (retries < 15) {
@@ -130,7 +131,7 @@ export default function SubscriptionPage() {
       }
 
       if (success) {
-        alert('Subscription upgraded successfully!');
+        toast.success('Subscription upgraded successfully!');
         fetchData();
       } else {
         setError('Payment succeeded but subscription update is delayed. Please refresh the page in a few minutes.');
@@ -144,7 +145,7 @@ export default function SubscriptionPage() {
       }
     } finally {
       setActionLoading(false);
-      setActivating(false);
+      setProcessingMessage(null);
     }
   };
 
@@ -171,7 +172,7 @@ export default function SubscriptionPage() {
 
     try {
       await api.post('/payments/subscriptions/upgrade-cycle', { pricingOptionId: cycleModal });
-      alert('Billing cycle changed successfully!');
+      toast.success('Billing cycle changed successfully!');
       setCycleModal(null);
       setCyclePreview(null);
       fetchData();
@@ -188,15 +189,46 @@ export default function SubscriptionPage() {
   const confirmCancel = async (immediate: boolean) => {
     setActionLoading(true);
     try {
+      const oldCancelledAt = statusData?.subscription?.cancelledAt;
+      
       await api.post('/payments/cancel-subscription', { reason: 'User requested', immediate });
-      alert(immediate ? 'Subscription cancelled immediately.' : 'Subscription will be cancelled at period end.');
       setCancelModal(false);
+      setProcessingMessage('Cancelling your subscription...');
+      
+      let retries = 0;
+      let success = false;
+      while (retries < 15) {
+        await new Promise(r => setTimeout(r, 1000));
+        try {
+          const checkRes = await api.get('/users/me/dashboard');
+          const newSub = checkRes.data.data.subscription;
+          if (immediate) {
+            if (!newSub || newSub.status === 'CANCELED' || newSub.status === 'CANCELLED' || newSub.plan?.isFree) {
+              success = true;
+              break;
+            }
+          } else {
+            if (newSub?.cancelledAt && newSub.cancelledAt !== oldCancelledAt) {
+              success = true;
+              break;
+            }
+          }
+        } catch {}
+        retries++;
+      }
+
+      if (success) {
+        toast.success(immediate ? 'Subscription cancelled immediately.' : 'Subscription will be cancelled at period end.');
+      } else {
+        toast.success('Subscription cancellation requested. It may take a moment to update.');
+      }
       fetchData();
     } catch (error) {
       const err = error as ApiError;
       setError(err.response?.data?.message || 'Failed to cancel subscription.');
     } finally {
       setActionLoading(false);
+      setProcessingMessage(null);
     }
   };
 
@@ -211,7 +243,7 @@ export default function SubscriptionPage() {
 
   return (
     <div style={{ padding: '40px', maxWidth: '800px', margin: '0 auto', position: 'relative' }}>
-      {activating && (
+      {processingMessage && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
           backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1000,
@@ -222,7 +254,7 @@ export default function SubscriptionPage() {
             borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite', marginBottom: '16px'
           }} />
           <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-          <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 600 }}>Activating your subscription...</h2>
+          <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 600 }}>{processingMessage}</h2>
           <p style={{ marginTop: '8px', opacity: 0.8 }}>Please do not close this window.</p>
         </div>
       )}
@@ -376,6 +408,8 @@ export default function SubscriptionPage() {
                 <div style={{ display: 'flex', gap: '16px' }}>
                   {plans.find(p => p.code === currentPlanCode)?.pricingOptions.map((opt: PricingOption) => {
                     const isCurrent = opt.id === currentSub.pricingOption.id;
+                    const isDowngrade = currentSub.pricingOption.billingCycle?.name === 'ANUALLY' && opt.billingCycle?.name === 'MONTHLY';
+
                     return (
                       <div key={opt.id} style={{
                         flex: 1,
@@ -383,18 +417,25 @@ export default function SubscriptionPage() {
                         padding: '16px',
                         borderRadius: '6px',
                         display: 'flex',
-                        flexDirection: 'column'
+                        flexDirection: 'column',
+                        opacity: isDowngrade ? 0.6 : 1,
                       }}>
                         <div style={{ fontWeight: 500, marginBottom: '8px' }}>{opt.billingCycle?.name}</div>
                         <div style={{ fontSize: '18px', marginBottom: '16px' }}>{formatPrice(opt.price, opt.currency)}</div>
                         {!isCurrent ? (
                           <button
                             className="btn btn-secondary"
-                            style={{ width: '100%' }}
-                            onClick={() => openCycleChangeModal(opt.id)}
-                            disabled={actionLoading}
+                            style={{ width: '100%', cursor: isDowngrade ? 'not-allowed' : 'pointer' }}
+                            onClick={() => {
+                              if (isDowngrade) {
+                                toast.error('Downgrading to Monthly is not supported.');
+                                return;
+                              }
+                              openCycleChangeModal(opt.id);
+                            }}
+                            disabled={actionLoading || isDowngrade}
                           >
-                            Switch to {opt.billingCycle?.name}
+                            {isDowngrade ? 'Downgrade Unavailable' : `Switch to ${opt.billingCycle?.name}`}
                           </button>
                         ) : (
                           <div style={{ color: 'var(--accent)', fontSize: '14px', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '8px' }}>

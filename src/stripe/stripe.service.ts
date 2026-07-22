@@ -262,7 +262,7 @@ export class StripeService {
 
     const subs = await this.paymentAdapter.listSubscriptions(customerId);
     const existingFreeSubs = subs.filter(s => s.items[0]?.priceId === freePriceId && s.status === SubscriptionStatus.ACTIVE);
-    
+
     for (const sub of existingFreeSubs) {
       await this.paymentAdapter.cancelSubscriptionNow(sub.id);
       this.logger.log(`Cancelled Stripe Free subscription ${sub.id} for customer ${customerId}`);
@@ -275,9 +275,12 @@ export class StripeService {
         userId,
         status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE, SubscriptionStatus.TRIALING] }
       },
+      include: {
+        pricingOption: true
+      }
     });
 
-    if (!currentSub || !currentSub.providerSubscriptionId) {
+    if (!currentSub || !currentSub.providerSubscriptionId || !currentSub.pricingOption) {
       throw new BadRequestException("No active subscription found to upgrade");
     }
 
@@ -287,6 +290,10 @@ export class StripeService {
 
     if (!newPricingOption || !newPricingOption.providerPriceId) {
       throw new BadRequestException("Invalid new pricing option");
+    }
+
+    if (newPricingOption.price <= currentSub.pricingOption.price) {
+      throw new BadRequestException("Downgrading tier is not supported via this endpoint.");
     }
 
     const updatedStripeSub = await this.paymentAdapter.upgradeSubscriptionTier(
@@ -317,18 +324,28 @@ export class StripeService {
         userId,
         status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE, SubscriptionStatus.TRIALING] }
       },
+      include: {
+        pricingOption: {
+          include: { billingCycle: true }
+        }
+      }
     });
 
-    if (!currentSub || !currentSub.providerSubscriptionId) {
+    if (!currentSub || !currentSub.providerSubscriptionId || !currentSub.pricingOption) {
       throw new BadRequestException("No active subscription found to upgrade");
     }
 
     const newPricingOption = await this.prisma.pricingOption.findUnique({
       where: { id: newPricingOptionId },
+      include: { billingCycle: true }
     });
 
     if (!newPricingOption || !newPricingOption.providerPriceId) {
       throw new BadRequestException("Invalid new pricing option");
+    }
+
+    if (newPricingOption.billingCycle.durationDay <= currentSub.pricingOption.billingCycle.durationDay) {
+      throw new BadRequestException("Downgrading billing cycle is not supported via this endpoint.");
     }
 
     const updatedStripeSub = await this.paymentAdapter.upgradeSubscriptionCycle(

@@ -5,6 +5,7 @@ import { getStripe } from '@/lib/stripe';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import api from '@/lib/api';
 import { AlertTriangle } from 'lucide-react';
+import { toast } from 'react-hot-toast';
 
 const stripePromise = getStripe();
 
@@ -77,7 +78,7 @@ export default function AddonStorePage() {
       }
 
       if (success) {
-        alert('Addon purchased and credits added successfully!');
+        toast.success('Addon purchased and credits added successfully!');
         fetchData();
       } else {
         setError('Payment succeeded but credits are delayed. Please refresh the page in a few minutes.');

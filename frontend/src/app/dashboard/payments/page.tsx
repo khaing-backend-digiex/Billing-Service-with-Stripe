@@ -5,6 +5,7 @@ import api from '@/lib/api';
 import { format } from 'date-fns';
 import { ExternalLink, Receipt, ChevronLeft, ChevronRight } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
+import { toast } from 'react-hot-toast';
 
 export default function PaymentHistoryPage() {
   const [data, setData] = useState<any>(null);
@@ -39,7 +40,7 @@ export default function PaymentHistoryPage() {
       }
     } catch (err) {
       console.error('Failed to open billing portal', err);
-      alert('Failed to open billing portal. Please try again.');
+      toast.error('Failed to open billing portal. Please try again.');
     } finally {
       setPortalLoading(false);
     }

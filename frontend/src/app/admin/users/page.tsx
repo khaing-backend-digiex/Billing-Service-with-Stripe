@@ -5,6 +5,7 @@ import api from '@/lib/api';
 import { format } from 'date-fns';
 import { Search, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
+import { toast } from 'react-hot-toast';
 
 export default function AdminUsersPage() {
   const [users, setUsers] = useState<any[]>([]);
@@ -37,7 +38,7 @@ export default function AdminUsersPage() {
       await api.delete(`/users/${id}`);
       fetchUsers();
     } catch (err: any) {
-      alert(err.response?.data?.message || 'Failed to delete user');
+      toast.error(err.response?.data?.message || 'Failed to delete user');
     }
   };
 
