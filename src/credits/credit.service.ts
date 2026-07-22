@@ -115,7 +115,6 @@ export class CreditService {
 
         await this.repo.applyDelta(
           cmd.userId,
-          -alloc.amount,
           entry,
           client,
         );
@@ -232,7 +231,8 @@ export class CreditService {
 
       let revokedAny = false;
       for (const grant of grants) {
-        if (grant.amountRemaining <= 0) continue;
+        this.logger.log(`Remaining=${grant.amountRemaining}`);
+        if (grant.amountRemaining < 0) continue;
         const entry: TransactionEntry = {
           type: CreditTransactionType.EXPIRATION,
           grantId: grant.id,
@@ -243,7 +243,7 @@ export class CreditService {
           invoiceId: cmd.invoiceId,
           idempotencyKey: `req:${cmd.userId}:${cmd.idempotencyKey}:revokeSub:${grant.id}`,
         };
-        await this.repo.applyDelta(cmd.userId, -grant.amountRemaining, entry, client);
+        await this.repo.applyDelta(cmd.userId, entry, client, new Date());
         revokedAny = true;
       }
       return revokedAny;
@@ -405,5 +405,30 @@ export class CreditService {
 
     if (tx) return exec(tx);
     return this.prisma.$transaction((client) => exec(client));
+  }
+
+  async getTransactionHistory(userId: string, skip: number, take: number) {
+    const [data, total] = await Promise.all([
+      this.prisma.creditTransaction.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+        include: {
+          grant: true
+        }
+      }),
+      this.prisma.creditTransaction.count({
+        where: { userId }
+      })
+    ]);
+
+    return {
+      data,
+      total,
+      page: Math.floor(skip / take) + 1,
+      limit: take,
+      totalPages: Math.ceil(total / take)
+    };
   }
 }

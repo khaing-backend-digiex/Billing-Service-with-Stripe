@@ -6,6 +6,7 @@ import {
 import { PrismaService } from "../database/prisma.service";
 import { User, SubscriptionStatus } from "@prisma/client";
 import { randomUUID } from "crypto";
+import { isAddonUsable } from "../credits/credit.types";
 
 const LIVE_STATUSES: SubscriptionStatus[] = [
   SubscriptionStatus.ACTIVE,
@@ -127,11 +128,33 @@ export class UsersService {
     });
 
     const grants = await this.prisma.creditGrant.findMany({
-      where: { userId, amountRemaining: { gt: 0 } },
+      where: {
+        userId,
+        OR: [
+          { 
+            expiresAt: null,
+            amountRemaining: { gt: 0 }
+          },
+          { 
+            expiresAt: { gt: new Date() } 
+          }
+        ]
+      },
       orderBy: { expiresAt: 'asc' }
     });
 
-    const balance = grants.reduce((sum, g) => sum + g.amountRemaining, 0);
+    const addonUsable = isAddonUsable(
+      subscription?.pricingOption?.plan?.isFree,
+      subscription?.status
+    );
+
+    const balance = grants.reduce((sum, g) => {
+      if (g.sourceType === 'ADDON' && !addonUsable) {
+        return sum;
+      }
+      return sum + g.amountRemaining;
+    }, 0);
+    const txCount = await this.prisma.creditTransaction.count({ where: { userId } });
 
     return {
       subscription: subscription ? {
@@ -148,6 +171,7 @@ export class UsersService {
       credits: {
         balance,
         grants,
+        isSetup: txCount > 0,
       }
     };
   }

@@ -62,7 +62,17 @@ export default function CreditsPage() {
 
   return (
     <div style={{ padding: '40px', maxWidth: '800px', margin: '0 auto' }}>
-      <h1 className="h1" style={{ marginBottom: '32px' }}>Credits</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
+        <h1 className="h1" style={{ margin: 0 }}>Credits</h1>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <Link href="/dashboard/credits/consume" className="btn" style={{ padding: '8px 16px', border: '1px solid var(--border)' }}>
+            Simulate Usage
+          </Link>
+          <Link href="/dashboard/credits/history" className="btn btn-secondary" style={{ padding: '8px 16px' }}>
+            Transaction History
+          </Link>
+        </div>
+      </div>
 
       {isFrozen && (
         <div style={{ padding: '16px', backgroundColor: 'rgba(239, 65, 70, 0.1)', color: 'var(--danger)', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -112,8 +122,10 @@ export default function CreditsPage() {
               <tbody>
                 {credits.grants.map((grant: any) => {
                   const style = getSourceTypeStyles(grant.sourceType);
+                  const isAddonFrozen = grant.sourceType === 'ADDON' && subscription?.plan?.isFree;
+                  
                   return (
-                    <tr key={grant.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                    <tr key={grant.id} style={{ borderBottom: '1px solid var(--border)', opacity: isAddonFrozen ? 0.5 : 1 }}>
                       <td style={{ padding: '16px 0' }}>
                         <span style={{ 
                           padding: '4px 8px', 
@@ -125,6 +137,11 @@ export default function CreditsPage() {
                         }}>
                           {getSourceLabel(grant.sourceType)}
                         </span>
+                        {isAddonFrozen && (
+                          <span style={{ marginLeft: '8px', fontSize: '11px', color: 'var(--danger)', fontWeight: 600 }}>
+                            FROZEN
+                          </span>
+                        )}
                       </td>
                       <td style={{ padding: '16px 0' }}>{grant.amountGranted}</td>
                       <td style={{ padding: '16px 0', fontWeight: 600 }}>{grant.amountRemaining}</td>
