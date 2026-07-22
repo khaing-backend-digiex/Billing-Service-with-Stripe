@@ -4,7 +4,6 @@ import { useState, useEffect } from 'react';
 import PublicNav from '@/components/PublicNav';
 import api from '@/lib/api';
 import { Check } from 'lucide-react';
-import { loadStripe } from '@stripe/stripe-js';
 import { useAuthStore } from '@/store/authStore';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import Link from 'next/link';
@@ -76,7 +75,7 @@ export default function PricingPage() {
         <div style={{ textAlign: 'center', marginBottom: '60px' }}>
           <h1 className="h1" style={{ marginBottom: '16px' }}>Pricing</h1>
           <p className="body-text" style={{ color: 'var(--text-secondary)', fontSize: '18px' }}>
-            Choose the plan that's right for you
+            Choose the plan that&apos;s right for you
           </p>
         </div>
 

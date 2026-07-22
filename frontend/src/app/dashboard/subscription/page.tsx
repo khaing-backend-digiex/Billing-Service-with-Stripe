@@ -6,15 +6,66 @@ import api from '@/lib/api';
 import { format } from 'date-fns';
 import { Check, AlertCircle } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
+import Modal from '@/components/Modal';
 
 const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || '');
 
+interface PricingOption {
+  id: string;
+  price: number;
+  currency: string;
+  billingCycle?: {
+    name?: string;
+  };
+}
+
+interface Plan {
+  code: string;
+  name: string;
+  isFree: boolean;
+  creditPolicy?: {
+    creditAmount: number;
+  };
+  pricingOptions: PricingOption[];
+}
+
+interface Subscription {
+  plan: Plan;
+  status: string;
+  pricingOption: PricingOption;
+  cancelledAt: string | null;
+  currentPeriodStart: string;
+  currentPeriodEnd: string;
+  nextCreditResetAt: string | null;
+  autoRenew: boolean;
+}
+
+interface StatusData {
+  subscription?: Subscription | null;
+}
+
+interface ApiError {
+  response?: {
+    status?: number;
+    data?: {
+      message?: string;
+    };
+  };
+  message?: string;
+}
+
 export default function SubscriptionPage() {
-  const [statusData, setStatusData] = useState<any>(null);
-  const [plans, setPlans] = useState<any[]>([]);
+  const [statusData, setStatusData] = useState<StatusData | null>(null);
+  const [plans, setPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState('');
+  const [previewData, setPreviewData] = useState<{
+    amount_due: number;
+    currency: string;
+    pricingOptionId: string;
+    cycleName: string;
+  } | null>(null);
 
   const fetchData = async () => {
     setLoading(true);
@@ -40,7 +91,7 @@ export default function SubscriptionPage() {
   const handleUpgrade = async (pricingOptionId: string) => {
     setActionLoading(true);
     setError('');
-    
+
     try {
       const res = await api.post('/stripe/checkout/subscription', { pricingOptionId });
       const { clientSecret, status } = res.data.data;
@@ -55,11 +106,12 @@ export default function SubscriptionPage() {
           return;
         }
       }
-      
+
       // Success, refresh
       alert('Subscription upgraded successfully!');
       fetchData();
-    } catch (err: any) {
+    } catch (error) {
+      const err = error as ApiError;
       setError(err.response?.data?.message || err.message || 'Failed to upgrade subscription.');
       if (err.response?.status === 400 && err.response?.data?.message?.includes('payment method')) {
         // Hint to user they might need a default payment method
@@ -70,21 +122,42 @@ export default function SubscriptionPage() {
     }
   };
 
-  const handleCycleChange = async (pricingOptionId: string) => {
+  const handleCycleChange = async (pricingOptionId: string, cycleName: string) => {
     setActionLoading(true);
     setError('');
-    
+
     try {
       const previewRes = await api.get(`/payments/subscriptions/preview-upgrade-cycle?pricingOptionId=${pricingOptionId}`);
       const { amount_due, currency } = previewRes.data.data;
-      
-      if (window.confirm(`You will be charged ${new Intl.NumberFormat('vi-VN').format(amount_due)} ${currency.toUpperCase()} immediately to switch billing cycle. Continue?`)) {
-        await api.post('/payments/subscriptions/upgrade-cycle', { pricingOptionId });
-        alert('Billing cycle changed successfully!');
-        fetchData();
-      }
-    } catch (err: any) {
+
+      setPreviewData({
+        amount_due,
+        currency,
+        pricingOptionId,
+        cycleName
+      });
+    } catch (error) {
+      const err = error as ApiError;
+      setError(err.response?.data?.message || 'Failed to fetch preview.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const confirmCycleChange = async () => {
+    if (!previewData) return;
+    setActionLoading(true);
+    setError('');
+
+    try {
+      await api.post('/payments/subscriptions/upgrade-cycle', { pricingOptionId: previewData.pricingOptionId });
+      alert('Billing cycle changed successfully!');
+      setPreviewData(null);
+      fetchData();
+    } catch (error) {
+      const err = error as ApiError;
       setError(err.response?.data?.message || 'Failed to change billing cycle.');
+      setPreviewData(null);
     } finally {
       setActionLoading(false);
     }
@@ -94,13 +167,14 @@ export default function SubscriptionPage() {
     if (!window.confirm('Are you sure you want to cancel your subscription? You will retain access until the end of your billing period.')) {
       return;
     }
-    
+
     setActionLoading(true);
     try {
       await api.post('/payments/cancel-subscription', { reason: 'User requested' });
       alert('Subscription cancelled successfully.');
       fetchData();
-    } catch (err: any) {
+    } catch (error) {
+      const err = error as ApiError;
       setError(err.response?.data?.message || 'Failed to cancel subscription.');
     } finally {
       setActionLoading(false);
@@ -130,16 +204,16 @@ export default function SubscriptionPage() {
       {/* Current Subscription Card */}
       <div className="card" style={{ marginBottom: '40px' }}>
         <h2 className="h2" style={{ marginBottom: '24px' }}>Current Plan</h2>
-        
+
         {currentSub ? (
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' }}>
               <div>
                 <div style={{ fontSize: '24px', fontWeight: 600, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                   {currentSub.plan.name}
-                  <span style={{ 
-                    padding: '2px 8px', 
-                    backgroundColor: currentSub.status === 'ACTIVE' ? 'rgba(16, 163, 127, 0.1)' : 'rgba(245, 166, 35, 0.1)', 
+                  <span style={{
+                    padding: '2px 8px',
+                    backgroundColor: currentSub.status === 'ACTIVE' ? 'rgba(16, 163, 127, 0.1)' : 'rgba(245, 166, 35, 0.1)',
                     color: currentSub.status === 'ACTIVE' ? 'var(--accent)' : 'var(--warning)',
                     borderRadius: '4px',
                     fontSize: '12px',
@@ -155,9 +229,9 @@ export default function SubscriptionPage() {
                   </div>
                 )}
               </div>
-              
+
               {!isFree && !currentSub.cancelledAt && (
-                <button 
+                <button
                   onClick={handleCancel}
                   disabled={actionLoading}
                   className="btn btn-danger"
@@ -195,13 +269,13 @@ export default function SubscriptionPage() {
               <div>
                 <h3 className="h3" style={{ marginBottom: '16px' }}>Change Billing Cycle</h3>
                 <div style={{ display: 'flex', gap: '16px' }}>
-                  {plans.find(p => p.code === currentPlanCode)?.pricingOptions.map((opt: any) => {
+                  {plans.find(p => p.code === currentPlanCode)?.pricingOptions.map((opt: PricingOption) => {
                     const isCurrent = opt.id === currentSub.pricingOption.id;
                     return (
-                      <div key={opt.id} style={{ 
-                        flex: 1, 
-                        border: `1px solid ${isCurrent ? 'var(--accent)' : 'var(--border)'}`, 
-                        padding: '16px', 
+                      <div key={opt.id} style={{
+                        flex: 1,
+                        border: `1px solid ${isCurrent ? 'var(--accent)' : 'var(--border)'}`,
+                        padding: '16px',
                         borderRadius: '6px',
                         display: 'flex',
                         flexDirection: 'column'
@@ -209,10 +283,10 @@ export default function SubscriptionPage() {
                         <div style={{ fontWeight: 500, marginBottom: '8px' }}>{opt.billingCycle?.name}</div>
                         <div style={{ fontSize: '18px', marginBottom: '16px' }}>{formatPrice(opt.price, opt.currency)}</div>
                         {!isCurrent ? (
-                          <button 
-                            className="btn btn-secondary" 
+                          <button
+                            className="btn btn-secondary"
                             style={{ width: '100%' }}
-                            onClick={() => handleCycleChange(opt.id)}
+                            onClick={() => handleCycleChange(opt.id, opt.billingCycle?.name || '')}
                             disabled={actionLoading}
                           >
                             Switch to {opt.billingCycle?.name}
@@ -249,9 +323,9 @@ export default function SubscriptionPage() {
                   </ul>
                 </div>
                 <div style={{ display: 'flex', gap: '12px' }}>
-                  {plan.pricingOptions.map((opt: any) => (
-                    <button 
-                      key={opt.id} 
+                  {plan.pricingOptions.map((opt: PricingOption) => (
+                    <button
+                      key={opt.id}
                       onClick={() => handleUpgrade(opt.id)}
                       disabled={actionLoading}
                       className="btn btn-primary"
@@ -265,6 +339,45 @@ export default function SubscriptionPage() {
           </div>
         </div>
       )}
+
+      {/* Preview Modal */}
+      <Modal
+        isOpen={!!previewData}
+        onClose={() => setPreviewData(null)}
+        title="Confirm Upgrade"
+      >
+        {previewData && (
+          <>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '24px', lineHeight: '1.5' }}>
+              You are about to switch your billing cycle to <strong style={{ color: 'var(--text-primary)' }}>{previewData.cycleName}</strong>.
+              The prorated amount to be charged immediately is:
+            </p>
+
+            <div style={{ fontSize: '32px', fontWeight: 600, textAlign: 'center', marginBottom: '32px', color: 'var(--text-primary)' }}>
+              {formatPrice(previewData.amount_due, previewData.currency)}
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button
+                className="btn btn-secondary"
+                style={{ flex: 1 }}
+                onClick={() => setPreviewData(null)}
+                disabled={actionLoading}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                style={{ flex: 1 }}
+                onClick={confirmCycleChange}
+                disabled={actionLoading}
+              >
+                {actionLoading ? 'Processing...' : 'Accept & Pay'}
+              </button>
+            </div>
+          </>
+        )}
+      </Modal>
     </div>
   );
 }
