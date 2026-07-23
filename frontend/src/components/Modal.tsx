@@ -1,3 +1,5 @@
+'use client';
+
 import React, { useEffect } from 'react';
 
 interface ModalProps {
@@ -5,9 +7,10 @@ interface ModalProps {
   onClose: () => void;
   title: string;
   children: React.ReactNode;
+  maxWidth?: string;
 }
 
-export default function Modal({ isOpen, onClose, title, children }: ModalProps) {
+export default function Modal({ isOpen, onClose, title, children, maxWidth = '400px' }: ModalProps) {
   // Prevent body scrolling when modal is open
   useEffect(() => {
     if (isOpen) {
@@ -31,7 +34,7 @@ export default function Modal({ isOpen, onClose, title, children }: ModalProps) 
       left: 0,
       right: 0,
       bottom: 0,
-      backgroundColor: 'rgba(0, 0, 0, 0.5)',
+      backgroundColor: 'var(--overlay)',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
@@ -42,9 +45,9 @@ export default function Modal({ isOpen, onClose, title, children }: ModalProps) 
         className="card" 
         onClick={(e) => e.stopPropagation()}
         style={{ 
-          width: '100%', 
-          maxWidth: '400px', 
-          margin: '20px', 
+          width: '100%',
+          maxWidth,
+          margin: '20px',
           position: 'relative',
           animation: 'fadeIn 0.2s ease-out'
         }}

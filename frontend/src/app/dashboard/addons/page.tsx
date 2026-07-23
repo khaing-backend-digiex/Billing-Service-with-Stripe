@@ -6,6 +6,14 @@ import LoadingSpinner from '@/components/LoadingSpinner';
 import api from '@/lib/api';
 import { AlertTriangle, Zap } from 'lucide-react';
 import { useToast } from '@/components/Toast';
+import PaymentMethodRequiredModal from '@/components/PaymentMethodRequiredModal';
+import {
+  StoredPaymentMethod,
+  PaymentMethodIssue,
+  paymentMethodIssue,
+  fetchPaymentMethods,
+  isPaymentMethodError,
+} from '@/lib/paymentMethods';
 
 const stripePromise = getStripe();
 
@@ -13,20 +21,24 @@ export default function AddonStorePage() {
   const toast = useToast();
   const [addons, setAddons] = useState<any[]>([]);
   const [status, setStatus] = useState<any>(null);
+  const [cards, setCards] = useState<StoredPaymentMethod[]>([]);
   const [loading, setLoading] = useState(true);
   const [purchasing, setPurchasing] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [confirmAddon, setConfirmAddon] = useState<any>(null);
+  const [cardModal, setCardModal] = useState<{ issue: PaymentMethodIssue; itemLabel: string } | null>(null);
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [addonsRes, statusRes] = await Promise.all([
+      const [addonsRes, statusRes, cardsRes] = await Promise.all([
         api.get('/pricing/addons'),
-        api.get('/users/me/dashboard')
+        api.get('/users/me/dashboard'),
+        api.get('/payment-methods')
       ]);
       setAddons(addonsRes.data.filter((a: any) => a.isActive));
       setStatus(statusRes.data.data);
+      setCards(cardsRes.data.data || []);
     } catch (err) {
       console.error(err);
     } finally {
@@ -86,13 +98,30 @@ export default function AddonStorePage() {
         setError('Payment succeeded but credits are delayed. Please refresh the page in a few minutes.');
       }
     } catch (err: any) {
-      setError(err.response?.data?.message || err.message || 'Failed to purchase addon.');
-      if (err.response?.status === 400 && err.response?.data?.message?.includes('payment method')) {
-        setError('Please add a default payment method first.');
+      // The card may have been removed or expired since the page loaded – re-read
+      // the list so the prompt matches the real reason.
+      if (isPaymentMethodError(err)) {
+        const list = await fetchPaymentMethods();
+        setCards(list);
+        setCardModal({
+          issue: paymentMethodIssue(list) ?? 'missing',
+          itemLabel: addons.find(a => a.id === addonPackageId)?.name || 'this addon',
+        });
+      } else {
+        setError(err.response?.data?.message || err.message || 'Failed to purchase addon.');
       }
     } finally {
       setPurchasing(null);
     }
+  };
+
+  const startPurchase = (addon: any) => {
+    const issue = paymentMethodIssue(cards);
+    if (issue) {
+      setCardModal({ issue, itemLabel: addon.name });
+      return;
+    }
+    setConfirmAddon(addon);
   };
 
   if (loading) return <LoadingSpinner message="Loading store..." />;
@@ -120,6 +149,14 @@ export default function AddonStorePage() {
           <p style={{ marginTop: '8px', opacity: 0.8 }}>Please do not close this window.</p>
         </div>
       )}
+
+      <PaymentMethodRequiredModal
+        open={cardModal !== null}
+        onClose={() => setCardModal(null)}
+        issue={cardModal?.issue ?? 'missing'}
+        itemLabel={cardModal?.itemLabel}
+        returnTo="/dashboard/addons"
+      />
 
       {/* Purchase Confirmation Modal */}
       {confirmAddon && (
@@ -206,7 +243,7 @@ export default function AddonStorePage() {
             <button
               className="btn btn-primary"
               style={{ width: '100%' }}
-              onClick={() => setConfirmAddon(addon)}
+              onClick={() => startPurchase(addon)}
               disabled={isFreePlan || isPastDue || purchasing !== null}
             >
               Buy Now

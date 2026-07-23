@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { Suspense, useState, useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { getStripe } from '@/lib/stripe';
 import { Elements } from '@stripe/react-stripe-js';
 import api from '@/lib/api';
@@ -8,44 +9,68 @@ import AddCardForm from '@/components/AddCardForm';
 import { CreditCard, Star, Trash2 } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { useToast } from '@/components/Toast';
+import {
+  StoredPaymentMethod,
+  fetchPaymentMethods,
+  paymentMethodIssue,
+  safeReturnTo,
+} from '@/lib/paymentMethods';
 
 const stripePromise = getStripe();
 
-type PaymentMethod = {
-  id: string;
-  brand: string;
-  last4: string;
-  expMonth: number;
-  expYear: number;
-  isDefault: boolean;
-};
+// The first card only becomes the default once Stripe's setup_intent.succeeded
+// webhook lands, so wait for it before sending the user back to their purchase.
+const SYNC_ATTEMPTS = 10;
 
 export default function PaymentMethodsPage() {
+  return (
+    <Suspense fallback={<LoadingSpinner message="Loading payment methods..." />}>
+      <PaymentMethodsContent />
+    </Suspense>
+  );
+}
+
+function PaymentMethodsContent() {
   const toast = useToast();
-  const [methods, setMethods] = useState<PaymentMethod[]>([]);
+  const router = useRouter();
+  const returnTo = safeReturnTo(useSearchParams().get('returnTo'));
+  const [methods, setMethods] = useState<StoredPaymentMethod[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   const fetchMethods = async () => {
     setLoading(true);
     try {
       const res = await api.get('/payment-methods');
-      setMethods(res.data.data || []);
+      const list: StoredPaymentMethod[] = res.data.data || [];
+      setMethods(list);
+      return list;
     } catch (err) {
       console.error('Failed to load payment methods', err);
+      return [];
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchMethods();
-  }, []);
+    // Coming back from a blocked purchase with no card at all: skip a click and
+    // open the form. With cards already saved the user only needs a default.
+    fetchMethods().then((list) => {
+      if (returnTo && list.length === 0) setShowAddForm(true);
+    });
+  }, [returnTo]);
 
   const handleSetDefault = async (id: string) => {
     try {
       await api.post(`/payment-methods/${id}/default`);
-      fetchMethods();
+      const list = await fetchMethods();
+
+      if (returnTo && !paymentMethodIssue(list)) {
+        toast.success('Default card updated. Taking you back to your purchase...');
+        router.push(returnTo);
+      }
     } catch (err) {
       console.error('Failed to set default', err);
       toast.error('Failed to set default payment method');
@@ -64,12 +89,32 @@ export default function PaymentMethodsPage() {
     }
   };
 
-  const handleAddSuccess = () => {
+  const handleAddSuccess = async () => {
     setShowAddForm(false);
-    // Wait a moment for webhook to process and save the card
-    setTimeout(() => {
-      fetchMethods();
-    }, 1500);
+
+    if (!returnTo) {
+      // Wait a moment for webhook to process and save the card
+      setTimeout(() => {
+        fetchMethods();
+      }, 1500);
+      return;
+    }
+
+    setSyncing(true);
+    for (let attempt = 0; attempt < SYNC_ATTEMPTS; attempt++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const list = await fetchPaymentMethods();
+      setMethods(list);
+
+      if (!paymentMethodIssue(list)) {
+        toast.success('Card saved. Taking you back to your purchase...');
+        router.push(returnTo);
+        return;
+      }
+    }
+
+    setSyncing(false);
+    toast.warning('Your card is still being confirmed. Please try your purchase again in a moment.');
   };
 
   return (
@@ -77,11 +122,20 @@ export default function PaymentMethodsPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
         <h1 className="h1">Payment Methods</h1>
         {!showAddForm && (
-          <button className="btn btn-primary" onClick={() => setShowAddForm(true)}>
+          <button className="btn btn-primary" onClick={() => setShowAddForm(true)} disabled={syncing}>
             + Add new card
           </button>
         )}
       </div>
+
+      {returnTo && !loading && (
+        <div style={{ padding: '16px', backgroundColor: 'var(--accent-bg)', color: 'var(--accent)', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <CreditCard size={20} />
+          {methods.length > 0 && !methods.some((m) => m.isDefault)
+            ? "Set one of your cards as default to continue your purchase. You'll be sent back right away."
+            : "Add a card to continue your purchase. You'll be sent back as soon as it's saved."}
+        </div>
+      )}
 
       {showAddForm && (
         <div className="card animate-fade-in" style={{ marginBottom: '32px' }}>
@@ -91,7 +145,9 @@ export default function PaymentMethodsPage() {
         </div>
       )}
 
-      {loading ? (
+      {syncing ? (
+        <LoadingSpinner message="Confirming your card..." />
+      ) : loading ? (
         <LoadingSpinner message="Loading payment methods..." />
       ) : methods.length > 0 ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>

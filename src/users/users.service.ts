@@ -162,7 +162,7 @@ export class UsersService {
         status: subscription.status,
         currentPeriodStart: subscription.currentPeriodStart,
         currentPeriodEnd: subscription.currentPeriodEnd,
-        nextCreditResetAt: subscription.currentPeriodEnd,
+        nextCreditResetAt: subscription.nextCreditResetAt,
         autoRenew: subscription.autoRenew,
         cancelledAt: subscription.cancelledAt,
         plan: subscription.pricingOption?.plan || null,
