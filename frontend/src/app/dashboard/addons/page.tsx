@@ -1,13 +1,13 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { loadStripe } from '@stripe/stripe-js';
+import { getStripe } from '@/lib/stripe';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import api from '@/lib/api';
 import { AlertTriangle, Zap } from 'lucide-react';
 import { useToast } from '@/components/Toast';
 
-const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || '');
+const stripePromise = getStripe();
 
 export default function AddonStorePage() {
   const toast = useToast();

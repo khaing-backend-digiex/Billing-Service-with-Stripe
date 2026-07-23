@@ -5,6 +5,7 @@ import api from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import { User, Mail, ExternalLink, User as UserIcon } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
+import { toast } from 'react-hot-toast';
 import { format } from 'date-fns';
 import { useToast } from '@/components/Toast';
 
