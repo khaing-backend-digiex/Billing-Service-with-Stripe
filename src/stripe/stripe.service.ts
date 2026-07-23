@@ -15,6 +15,7 @@ import { PrismaService } from "../database/prisma.service";
 import { AddonPackage, SubscriptionStatus, PaymentProvider } from "@prisma/client";
 import { STRIPE_METADATA_KEY } from "../common/constants/stripe.constants";
 import { formatDatabaseAmountToStripe } from "./utils/stripe-currency.util";
+import { addCalendarMonths } from "../common/utils/date.util";
 
 type StripeCustomerOwner = {
   id: string;
@@ -302,6 +303,10 @@ export class StripeService {
     );
     this.logger.log('updatedStripeSub:::', JSON.stringify(updatedStripeSub));
 
+    const preservedNextCreditResetAt = currentSub.nextCreditResetAt > new Date()
+      ? currentSub.nextCreditResetAt
+      : addCalendarMonths(new Date(), 1);
+
     await this.prisma.subscription.update({
       where: { id: currentSub.id },
       data: {
@@ -309,7 +314,7 @@ export class StripeService {
         status: updatedStripeSub.status,
         currentPeriodStart: new Date(updatedStripeSub.currentPeriodStart * 1000),
         currentPeriodEnd: new Date(updatedStripeSub.currentPeriodEnd * 1000),
-        nextCreditResetAt: new Date(updatedStripeSub.currentPeriodEnd * 1000),
+        nextCreditResetAt: preservedNextCreditResetAt,
         cancelledAt: updatedStripeSub.cancelAt ? new Date(updatedStripeSub.cancelAt * 1000) : null,
         autoRenew: updatedStripeSub.cancelAtPeriodEnd === false,
       }
@@ -344,6 +349,10 @@ export class StripeService {
       throw new BadRequestException("Invalid new pricing option");
     }
 
+    if (newPricingOption.planId !== currentSub.pricingOption.planId) {
+      throw new BadRequestException("Cannot change billing cycle across different plans. Use the tier upgrade endpoint.");
+    }
+
     if (newPricingOption.billingCycle.durationDay <= currentSub.pricingOption.billingCycle.durationDay) {
       throw new BadRequestException("Downgrading billing cycle is not supported via this endpoint.");
     }
@@ -353,6 +362,10 @@ export class StripeService {
       newPricingOption.providerPriceId
     );
 
+    const preservedNextCreditResetAt = currentSub.nextCreditResetAt > new Date()
+      ? currentSub.nextCreditResetAt
+      : addCalendarMonths(new Date(), 1);
+
     await this.prisma.subscription.update({
       where: { id: currentSub.id },
       data: {
@@ -360,7 +373,7 @@ export class StripeService {
         status: updatedStripeSub.status,
         currentPeriodStart: new Date(updatedStripeSub.currentPeriodStart * 1000),
         currentPeriodEnd: new Date(updatedStripeSub.currentPeriodEnd * 1000),
-        nextCreditResetAt: new Date(updatedStripeSub.currentPeriodEnd * 1000),
+        nextCreditResetAt: preservedNextCreditResetAt,
         cancelledAt: updatedStripeSub.cancelAt ? new Date(updatedStripeSub.cancelAt * 1000) : null,
         autoRenew: updatedStripeSub.cancelAtPeriodEnd === false,
       }
@@ -418,18 +431,34 @@ export class StripeService {
         userId,
         status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE, SubscriptionStatus.TRIALING] }
       },
+      include: {
+        pricingOption: {
+          include: { billingCycle: true }
+        }
+      }
     });
 
-    if (!currentSub || !currentSub.providerSubscriptionId) {
+    if (!currentSub || !currentSub.providerSubscriptionId || !currentSub.pricingOption) {
       throw new BadRequestException("No active subscription found to preview upgrade");
     }
 
     const newPricingOption = await this.prisma.pricingOption.findUnique({
       where: { id: newPricingOptionId },
+      include: { billingCycle: true }
     });
 
     if (!newPricingOption || !newPricingOption.providerPriceId) {
       throw new BadRequestException("Invalid new pricing option");
+    }
+
+    // Same-plan validation: prevent cross-plan switches through cycle endpoint
+    if (newPricingOption.planId !== currentSub.pricingOption.planId) {
+      throw new BadRequestException("Cannot change billing cycle across different plans. Use the tier upgrade endpoint.");
+    }
+
+    // Downgrade guard: match the actual endpoint validation
+    if (newPricingOption.billingCycle.durationDay <= currentSub.pricingOption.billingCycle.durationDay) {
+      throw new BadRequestException("Downgrading billing cycle is not supported.");
     }
 
     return await this.paymentAdapter.previewUpgradeSubscriptionCycle(

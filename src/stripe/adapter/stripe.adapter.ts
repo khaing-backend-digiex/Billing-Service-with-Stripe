@@ -450,6 +450,7 @@ export class StripeAdapter implements IPaymentAdapter {
       currency: i.currency,
       status: i.status as string,
       billingReason: i.billing_reason,
+      metadata: i.subscription_details?.metadata as Record<string, string> ?? i.metadata ?? null,
       periodStart: i.period_start ?? i.lines?.data?.[0]?.period?.start ?? i.created ?? Math.floor(Date.now() / 1000),
       periodEnd: i.period_end ?? i.lines?.data?.[0]?.period?.end ?? i.created ?? Math.floor(Date.now() / 1000),
       dueDate: i.due_date,
@@ -489,6 +490,7 @@ export class StripeAdapter implements IPaymentAdapter {
         },
       ],
       proration_behavior: 'create_prorations',
+      metadata: { upgrade_type: 'tier' },
     });
 
     return this.mapSubscription(updatedSubscription);
@@ -530,6 +532,7 @@ export class StripeAdapter implements IPaymentAdapter {
       ],
       billing_cycle_anchor: 'now',
       proration_behavior: 'always_invoice',
+      metadata: { upgrade_type: 'cycle' },
     });
 
     return this.mapSubscription(updatedSubscription);

@@ -15,7 +15,8 @@ interface PricingOption {
   price: number;
   currency: string;
   billingCycle?: {
-    name?: string;  
+    name?: string;
+    durationDay?: number;
   };
 }
 
@@ -56,8 +57,8 @@ interface ApiError {
 
 export default function SubscriptionPage() {
   const toast = useToast();
-  const [statusData, setStatusData] = useState<any>(null);
-  const [plans, setPlans] = useState<any[]>([]);
+  const [statusData, setStatusData] = useState<StatusData | null>(null);
+  const [plans, setPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState('');
@@ -69,7 +70,7 @@ export default function SubscriptionPage() {
     lines: { id: string; description: string; amount: number; }[];
   } | null>(null);
   const [cycleModal, setCycleModal] = useState<string | null>(null);
-  const [upgradeModal, setUpgradeModal] = useState<any>(null);
+  const [upgradeModal, setUpgradeModal] = useState<{ plan: Plan; opt: PricingOption } | null>(null);
 
   const fetchData = async () => {
     setLoading(true);
@@ -128,7 +129,7 @@ export default function SubscriptionPage() {
             success = true;
             break;
           }
-        } catch {}
+        } catch { }
         retries++;
       }
 
@@ -173,10 +174,34 @@ export default function SubscriptionPage() {
     setError('');
 
     try {
+      const oldPricingOptionId = statusData?.subscription?.pricingOption?.id;
       await api.post('/payments/subscriptions/upgrade-cycle', { pricingOptionId: cycleModal });
       toast.success('Billing cycle changed successfully!');
       setCycleModal(null);
       setCyclePreview(null);
+
+      // Poll until the pricingOption changes (matching the upgrade/cancel flows)
+      setProcessingMessage('Updating billing cycle...');
+      let retries = 0;
+      let success = false;
+      while (retries < 15) {
+        await new Promise(r => setTimeout(r, 1000));
+        try {
+          const checkRes = await api.get('/users/me/dashboard');
+          const newPricingOptionId = checkRes.data.data.subscription?.pricingOption?.id;
+          if (newPricingOptionId && newPricingOptionId !== oldPricingOptionId) {
+            success = true;
+            break;
+          }
+        } catch { }
+        retries++;
+      }
+
+      if (success) {
+        toast.success('Billing cycle updated!');
+      } else {
+        toast.info('Billing cycle change is processing. Please refresh in a moment.');
+      }
       fetchData();
     } catch (error) {
       const err = error as ApiError;
@@ -185,6 +210,7 @@ export default function SubscriptionPage() {
       setCyclePreview(null);
     } finally {
       setActionLoading(false);
+      setProcessingMessage(null);
     }
   };
 
@@ -192,12 +218,12 @@ export default function SubscriptionPage() {
     setActionLoading(true);
     try {
       const oldCancelledAt = statusData?.subscription?.cancelledAt;
-      
+
       await api.post('/payments/cancel-subscription', { reason: 'User requested', immediate });
       toast.success(immediate ? 'Subscription cancelled immediately.' : 'Subscription will be cancelled at period end.');
       setCancelModal(false);
       setProcessingMessage('Cancelling your subscription...');
-      
+
       let retries = 0;
       let success = false;
       while (retries < 15) {
@@ -216,7 +242,7 @@ export default function SubscriptionPage() {
               break;
             }
           }
-        } catch {}
+        } catch { }
         retries++;
       }
 
@@ -272,19 +298,19 @@ export default function SubscriptionPage() {
           <div className="card" style={{ maxWidth: '500px', width: '100%', margin: '20px' }}>
             <h2 className="h2" style={{ marginBottom: '16px' }}>Cancel Subscription</h2>
             <p className="body-text" style={{ marginBottom: '24px' }}>How would you like to cancel your subscription?</p>
-            
+
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '24px' }}>
               <button className="btn btn-secondary" onClick={() => confirmCancel(false)} disabled={actionLoading} style={{ textAlign: 'left', display: 'flex', flexDirection: 'column' }}>
                 <span style={{ fontWeight: 600 }}>Cancel at end of billing period</span>
                 <span style={{ fontSize: '13px', opacity: 0.8, fontWeight: 400 }}>You will retain access until {format(new Date(currentSub?.currentPeriodEnd || Date.now()), 'MMM d, yyyy')}.</span>
               </button>
-              
+
               <button className="btn btn-danger" onClick={() => confirmCancel(true)} disabled={actionLoading} style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', backgroundColor: 'var(--danger-bg)', color: 'var(--danger)', border: '1px solid var(--danger)' }}>
                 <span style={{ fontWeight: 600 }}>Cancel immediately</span>
                 <span style={{ fontSize: '13px', opacity: 0.8, fontWeight: 400 }}>You will lose access immediately. No refund will be issued.</span>
               </button>
             </div>
-            
+
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
               <button className="btn" onClick={() => setCancelModal(false)} disabled={actionLoading}>Nevermind</button>
             </div>
@@ -301,7 +327,7 @@ export default function SubscriptionPage() {
         }}>
           <div className="card" style={{ maxWidth: '500px', width: '100%', margin: '20px' }}>
             <h2 className="h2" style={{ marginBottom: '16px' }}>Confirm Cycle Change</h2>
-            
+
             <div style={{ marginBottom: '24px', backgroundColor: 'var(--bg-primary)', padding: '16px', borderRadius: '8px' }}>
               <h4 style={{ fontSize: '14px', marginBottom: '12px', color: 'var(--text-secondary)' }}>Invoice Breakdown</h4>
               {cyclePreview.lines.map((line) => (
@@ -316,7 +342,7 @@ export default function SubscriptionPage() {
                 <span>{formatPrice(cyclePreview.amount_due, cyclePreview.currency)}</span>
               </div>
             </div>
-            
+
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
               <button className="btn" onClick={() => { setCycleModal(null); setCyclePreview(null); }} disabled={actionLoading}>Cancel</button>
               <button className="btn btn-primary" onClick={confirmCycleChange} disabled={actionLoading}>
@@ -395,8 +421,8 @@ export default function SubscriptionPage() {
               <div>
                 <div style={{ fontSize: '24px', fontWeight: 600, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                   {currentSub.plan.name}
-                  <span style={{ 
-                    padding: '2px 8px', 
+                  <span style={{
+                    padding: '2px 8px',
                     backgroundColor: currentSub.cancelledAt ? 'var(--danger-bg)' : (currentSub.status === 'ACTIVE' ? 'var(--success-bg)' : 'var(--warning-bg)'),
                     color: currentSub.cancelledAt ? 'var(--danger)' : (currentSub.status === 'ACTIVE' ? 'var(--success)' : 'var(--warning)'),
                     borderRadius: '4px',
@@ -420,7 +446,7 @@ export default function SubscriptionPage() {
               </div>
 
               {!isFree && !currentSub.cancelledAt && (
-                <button 
+                <button
                   onClick={() => setCancelModal(true)}
                   disabled={actionLoading}
                   className="btn btn-danger"
@@ -460,7 +486,7 @@ export default function SubscriptionPage() {
                 <div style={{ display: 'flex', gap: '16px' }}>
                   {plans.find(p => p.code === currentPlanCode)?.pricingOptions.map((opt: PricingOption) => {
                     const isCurrent = opt.id === currentSub.pricingOption.id;
-                    const isDowngrade = currentSub.pricingOption.billingCycle?.name === 'ANUALLY' && opt.billingCycle?.name === 'MONTHLY';
+                    const isDowngrade = (opt.billingCycle?.durationDay || 0) < (currentSub.pricingOption.billingCycle?.durationDay || 0);
 
                     return (
                       <div key={opt.id} style={{
@@ -516,16 +542,16 @@ export default function SubscriptionPage() {
 
           <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap', justifyContent: 'center' }}>
             {plans.filter(p => !p.isFree).flatMap(plan => {
-              // DB uses 'ANUALLY' for the yearly cycle (see seed.ts)
-              const monthlyOpt = plan.pricingOptions?.find((o: any) => o.billingCycle?.name === 'MONTHLY');
+              const monthlyOpt = plan.pricingOptions?.find((o: PricingOption) => (o.billingCycle?.durationDay || 0) <= 31);
               const sorted = [...(plan.pricingOptions || [])].sort(
-                (a: any, b: any) => (a.billingCycle?.durationDay || 0) - (b.billingCycle?.durationDay || 0)
+                (a: PricingOption, b: PricingOption) => (a.billingCycle?.durationDay || 0) - (b.billingCycle?.durationDay || 0)
               );
 
-              return sorted.map((opt: any) => {
-                const isYearly = opt.billingCycle?.name === 'ANUALLY';
-                const savings = isYearly && monthlyOpt?.price > 0
-                  ? Math.round((1 - opt.price / (monthlyOpt.price * 12)) * 100)
+              return sorted.map((opt: PricingOption) => {
+                const isYearly = (opt.billingCycle?.durationDay || 0) >= 365;
+                const monthlyPrice = monthlyOpt?.price ?? 0;
+                const savings = isYearly && monthlyPrice > 0
+                  ? Math.round((1 - opt.price / (monthlyPrice * 12)) * 100)
                   : 0;
 
                 return (
