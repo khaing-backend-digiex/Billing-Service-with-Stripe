@@ -302,6 +302,8 @@ export class StripeService {
     );
     this.logger.log('updatedStripeSub:::', JSON.stringify(updatedStripeSub));
 
+    // nextCreditResetAt is owned by the invoice.paid handler – the period end of a
+    // yearly plan is not the credit reset date, the credit policy interval is.
     await this.prisma.subscription.update({
       where: { id: currentSub.id },
       data: {
@@ -309,7 +311,6 @@ export class StripeService {
         status: updatedStripeSub.status,
         currentPeriodStart: new Date(updatedStripeSub.currentPeriodStart * 1000),
         currentPeriodEnd: new Date(updatedStripeSub.currentPeriodEnd * 1000),
-        nextCreditResetAt: new Date(updatedStripeSub.currentPeriodEnd * 1000),
         cancelledAt: updatedStripeSub.cancelAt ? new Date(updatedStripeSub.cancelAt * 1000) : null,
         autoRenew: updatedStripeSub.cancelAtPeriodEnd === false,
       }
@@ -353,6 +354,8 @@ export class StripeService {
       newPricingOption.providerPriceId
     );
 
+    // Same as the tier upgrade: the credit reset date (and the credit grant itself)
+    // lands with the invoice.paid webhook that always_invoice triggers.
     await this.prisma.subscription.update({
       where: { id: currentSub.id },
       data: {
@@ -360,7 +363,6 @@ export class StripeService {
         status: updatedStripeSub.status,
         currentPeriodStart: new Date(updatedStripeSub.currentPeriodStart * 1000),
         currentPeriodEnd: new Date(updatedStripeSub.currentPeriodEnd * 1000),
-        nextCreditResetAt: new Date(updatedStripeSub.currentPeriodEnd * 1000),
         cancelledAt: updatedStripeSub.cancelAt ? new Date(updatedStripeSub.cancelAt * 1000) : null,
         autoRenew: updatedStripeSub.cancelAtPeriodEnd === false,
       }

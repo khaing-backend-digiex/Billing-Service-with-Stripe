@@ -110,7 +110,9 @@ export class PaidInvoiceSyncService {
       : SubscriptionEventType.RENEWED;
     const description = isInitial
       ? `Credits granted – ${plan.name} (initial)`
-      : `Credits granted – ${plan.name} (renewal)`;
+      : isCycleChange
+        ? `Credits granted – ${plan.name} (upgrade)`
+        : `Credits granted – ${plan.name} (renewal)`;
     const providerPaymentId = paidInvoice.paymentIntentId ?? paidInvoice.id;
   
     const paidAt = paidInvoice.paidAt ? new Date(paidInvoice.paidAt * 1000) : new Date();
@@ -186,36 +188,37 @@ export class PaidInvoiceSyncService {
         `Subscription ${subscription.id} updated: status=ACTIVE, currentPeriodStart=${periodStart.toISOString()}, currentPeriodEnd=${periodEnd.toISOString()}, nextCreditResetAt=${nextCreditResetAt.toISOString()}`,
       );
 
-      const creditsGranted = isCycleChange ? 0 : (plan.creditPolicy?.creditAmount ?? 0);
+      // An upgrade is billed as a fresh package: the leftover allowance of the old
+      // plan is revoked and the new plan's allowance is granted right away, exactly
+      // like an initial purchase or a renewal.
+      const creditsGranted = plan.creditPolicy?.creditAmount ?? 0;
 
-      if (!isCycleChange) {
-        await this.creditService.revokeSubscriptionCredits(
-          {
-            userId: subscription.userId,
-            productId: plan.productId,
-            description: `Unused credits expired before renewal/upgrade`,
-            subscriptionId: subscription.id,
-            invoiceId: invoice.id,
-            idempotencyKey: `revoke_sub_${invoice.id}`,
-          },
-          tx,
-        );
+      await this.creditService.revokeSubscriptionCredits(
+        {
+          userId: subscription.userId,
+          productId: plan.productId,
+          description: `Unused credits expired before renewal/upgrade`,
+          subscriptionId: subscription.id,
+          invoiceId: invoice.id,
+          idempotencyKey: `revoke_sub_${invoice.id}`,
+        },
+        tx,
+      );
 
-        await this.creditService.grantSubscriptionAllowance(
-          {
-            userId: subscription.userId,
-            productId: plan.productId,
-            amount: plan.creditPolicy?.creditAmount ?? 0,
-            description,
-            subscriptionId: subscription.id,
-            invoiceId: invoice.id,
-            sourceType: CreditGrantSourceType.SUBSCRIPTION_ALLOCATION,
-            idempotencyKey: `grant_sub_${invoice.id}`,
-            expiresAt: nextCreditResetAt,
-          },
-          tx,
-        );
-      }
+      await this.creditService.grantSubscriptionAllowance(
+        {
+          userId: subscription.userId,
+          productId: plan.productId,
+          amount: creditsGranted,
+          description,
+          subscriptionId: subscription.id,
+          invoiceId: invoice.id,
+          sourceType: CreditGrantSourceType.SUBSCRIPTION_ALLOCATION,
+          idempotencyKey: `grant_sub_${invoice.id}`,
+          expiresAt: nextCreditResetAt,
+        },
+        tx,
+      );
 
       await tx.subscriptionEvent.create({
         data: {

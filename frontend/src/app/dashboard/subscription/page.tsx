@@ -7,6 +7,14 @@ import { format } from 'date-fns';
 import { Check, AlertCircle } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { useToast } from '@/components/Toast';
+import PaymentMethodRequiredModal from '@/components/PaymentMethodRequiredModal';
+import {
+  StoredPaymentMethod,
+  PaymentMethodIssue,
+  paymentMethodIssue,
+  fetchPaymentMethods,
+  isPaymentMethodError,
+} from '@/lib/paymentMethods';
 
 const stripePromise = getStripe();
 
@@ -70,16 +78,20 @@ export default function SubscriptionPage() {
   } | null>(null);
   const [cycleModal, setCycleModal] = useState<string | null>(null);
   const [upgradeModal, setUpgradeModal] = useState<any>(null);
+  const [cards, setCards] = useState<StoredPaymentMethod[]>([]);
+  const [cardModal, setCardModal] = useState<{ issue: PaymentMethodIssue; itemLabel: string } | null>(null);
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [statusRes, plansRes] = await Promise.all([
+      const [statusRes, plansRes, cardsRes] = await Promise.all([
         api.get('/users/me/dashboard'),
-        api.get('/pricing/plans')
+        api.get('/pricing/plans'),
+        api.get('/payment-methods')
       ]);
       setStatusData(statusRes.data.data);
       setPlans(plansRes.data);
+      setCards(cardsRes.data.data || []);
     } catch (err) {
       console.error(err);
       setError('Failed to load subscription details.');
@@ -91,6 +103,42 @@ export default function SubscriptionPage() {
   useEffect(() => {
     fetchData();
   }, []);
+
+  const findPricingOption = (pricingOptionId: string) => {
+    for (const plan of plans) {
+      const opt = plan.pricingOptions?.find((o: any) => o.id === pricingOptionId);
+      if (opt) return { plan, opt };
+    }
+    return null;
+  };
+
+  const labelForPricingOption = (pricingOptionId: string) => {
+    const found = findPricingOption(pricingOptionId);
+    if (!found) return 'this purchase';
+    return `${found.plan.name} – ${found.opt.billingCycle?.name?.toLowerCase() || 'plan'}`;
+  };
+
+  /** Opens the "add a card" prompt and returns true when the purchase must stop. */
+  const isBlockedByCard = (itemLabel: string) => {
+    const issue = paymentMethodIssue(cards);
+    if (!issue) return false;
+
+    setCardModal({ issue, itemLabel });
+    return true;
+  };
+
+  /**
+   * The card may have been removed or expired since the page loaded – re-read the
+   * list so the prompt matches the real reason. Returns true when it handled the error.
+   */
+  const handleCardError = async (error: unknown, itemLabel: string) => {
+    if (!isPaymentMethodError(error)) return false;
+
+    const list = await fetchPaymentMethods();
+    setCards(list);
+    setCardModal({ issue: paymentMethodIssue(list) ?? 'missing', itemLabel });
+    return true;
+  };
 
   const handleUpgrade = async (pricingOptionId: string) => {
     setActionLoading(true);
@@ -139,11 +187,9 @@ export default function SubscriptionPage() {
         setError('Payment succeeded but subscription update is delayed. Please refresh the page in a few minutes.');
       }
     } catch (error) {
-      const err = error as ApiError;
-      setError(err.response?.data?.message || err.message || 'Failed to upgrade subscription.');
-      if (err.response?.status === 400 && err.response?.data?.message?.includes('payment method')) {
-        // Hint to user they might need a default payment method
-        setError('Please add a default payment method first.');
+      if (!(await handleCardError(error, labelForPricingOption(pricingOptionId)))) {
+        const err = error as ApiError;
+        setError(err.response?.data?.message || err.message || 'Failed to upgrade subscription.');
       }
     } finally {
       setActionLoading(false);
@@ -152,6 +198,8 @@ export default function SubscriptionPage() {
   };
 
   const openCycleChangeModal = async (pricingOptionId: string) => {
+    if (isBlockedByCard(labelForPricingOption(pricingOptionId))) return;
+
     setActionLoading(true);
     setError('');
 
@@ -173,18 +221,51 @@ export default function SubscriptionPage() {
     setError('');
 
     try {
+      const knownGrantIds = new Set<string>(
+        (statusData?.credits?.grants || []).map((g: any) => g.id)
+      );
+
       await api.post('/payments/subscriptions/upgrade-cycle', { pricingOptionId: cycleModal });
-      toast.success('Billing cycle changed successfully!');
       setCycleModal(null);
       setCyclePreview(null);
+
+      // The subscription row is updated inline, but the credit reset only lands when
+      // the invoice.paid webhook is processed. Wait for the new allowance grant to
+      // appear so the page never shows the old balance after an upgrade.
+      setProcessingMessage('Applying your upgrade...');
+      let retries = 0;
+      let success = false;
+      while (retries < 15) {
+        await new Promise(r => setTimeout(r, 1000));
+        try {
+          const checkRes = await api.get('/users/me/dashboard');
+          const grants = checkRes.data.data.credits?.grants || [];
+          if (grants.some((g: any) => !knownGrantIds.has(g.id))) {
+            success = true;
+            break;
+          }
+        } catch {}
+        retries++;
+      }
+
+      if (success) {
+        toast.success('Upgrade applied – your credits have been reset.');
+      } else {
+        setError('Payment succeeded but the upgrade is still being applied. Please refresh the page in a few minutes.');
+      }
       fetchData();
     } catch (error) {
-      const err = error as ApiError;
-      setError(err.response?.data?.message || 'Failed to change billing cycle.');
+      const itemLabel = labelForPricingOption(cycleModal);
       setCycleModal(null);
       setCyclePreview(null);
+
+      if (!(await handleCardError(error, itemLabel))) {
+        const err = error as ApiError;
+        setError(err.response?.data?.message || 'Failed to change billing cycle.');
+      }
     } finally {
       setActionLoading(false);
+      setProcessingMessage(null);
     }
   };
 
@@ -262,6 +343,14 @@ export default function SubscriptionPage() {
         </div>
       )}
 
+      <PaymentMethodRequiredModal
+        open={cardModal !== null}
+        onClose={() => setCardModal(null)}
+        issue={cardModal?.issue ?? 'missing'}
+        itemLabel={cardModal?.itemLabel}
+        returnTo="/dashboard/subscription"
+      />
+
       {/* Cancel Modal */}
       {cancelModal && (
         <div style={{
@@ -300,8 +389,43 @@ export default function SubscriptionPage() {
           display: 'flex', alignItems: 'center', justifyContent: 'center'
         }}>
           <div className="card" style={{ maxWidth: '500px', width: '100%', margin: '20px' }}>
-            <h2 className="h2" style={{ marginBottom: '16px' }}>Confirm Cycle Change</h2>
-            
+            <h2 className="h2" style={{ marginBottom: '8px' }}>Confirm Upgrade</h2>
+            <p className="body-text" style={{ color: 'var(--text-secondary)', marginBottom: '24px' }}>
+              You stay on the same subscription – it is updated in place, no new subscription is created.
+            </p>
+
+            {(() => {
+              const target = findPricingOption(cycleModal);
+              if (!target) return null;
+              const newCredits = target.plan.creditPolicy?.creditAmount;
+
+              return (
+                <div style={{ marginBottom: '24px', backgroundColor: 'var(--bg-primary)', padding: '16px', borderRadius: '8px' }}>
+                  <h4 style={{ fontSize: '14px', marginBottom: '12px', color: 'var(--text-secondary)' }}>What changes</h4>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '14px' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>Billing Cycle</span>
+                    <span style={{ fontWeight: 500 }}>
+                      {currentSub?.pricingOption?.billingCycle?.name} → {target.opt.billingCycle?.name}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '14px' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>New Period Starts</span>
+                    <span style={{ fontWeight: 500 }}>Today</span>
+                  </div>
+                  {newCredits != null && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px' }}>
+                      <span style={{ color: 'var(--text-secondary)' }}>Credits</span>
+                      <span style={{ fontWeight: 500, color: 'var(--credit)' }}>Reset to {newCredits}</span>
+                    </div>
+                  )}
+                  <p style={{ marginTop: '12px', marginBottom: 0, fontSize: '13px', color: 'var(--text-secondary)' }}>
+                    Like starting a fresh package: unused credits from your current plan expire and a new
+                    allowance is granted immediately. Add-on credits are not affected.
+                  </p>
+                </div>
+              );
+            })()}
+
             <div style={{ marginBottom: '24px', backgroundColor: 'var(--bg-primary)', padding: '16px', borderRadius: '8px' }}>
               <h4 style={{ fontSize: '14px', marginBottom: '12px', color: 'var(--text-secondary)' }}>Invoice Breakdown</h4>
               {cyclePreview.lines.map((line) => (
@@ -456,7 +580,11 @@ export default function SubscriptionPage() {
             {/* If paid plan, show cycle switch options */}
             {!isFree && currentSub.status === 'ACTIVE' && !currentSub.cancelledAt && (
               <div>
-                <h3 className="h3" style={{ marginBottom: '16px' }}>Change Billing Cycle</h3>
+                <h3 className="h3" style={{ marginBottom: '4px' }}>Upgrade Billing Cycle</h3>
+                <p className="body-text" style={{ color: 'var(--text-secondary)', fontSize: '13px', marginBottom: '16px' }}>
+                  Your current subscription is updated in place – the new period starts today and your
+                  credits are reset to the plan allowance.
+                </p>
                 <div style={{ display: 'flex', gap: '16px' }}>
                   {plans.find(p => p.code === currentPlanCode)?.pricingOptions.map((opt: PricingOption) => {
                     const isCurrent = opt.id === currentSub.pricingOption.id;
@@ -487,7 +615,7 @@ export default function SubscriptionPage() {
                             }}
                             disabled={actionLoading || isDowngrade}
                           >
-                            {isDowngrade ? 'Downgrade Unavailable' : `Switch to ${opt.billingCycle?.name}`}
+                            {isDowngrade ? 'Downgrade Unavailable' : `Upgrade to ${opt.billingCycle?.name}`}
                           </button>
                         ) : (
                           <div style={{ color: 'var(--accent)', fontSize: '14px', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -583,7 +711,10 @@ export default function SubscriptionPage() {
                     </ul>
 
                     <button
-                      onClick={() => setUpgradeModal({ plan, opt })}
+                      onClick={() => {
+                        if (isBlockedByCard(`${plan.name} – ${opt.billingCycle?.name?.toLowerCase()}`)) return;
+                        setUpgradeModal({ plan, opt });
+                      }}
                       disabled={actionLoading}
                       className={`btn ${isYearly ? 'btn-primary' : 'btn-secondary'}`}
                       style={{ width: '100%', padding: '12px' }}
