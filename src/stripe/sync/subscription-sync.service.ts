@@ -128,12 +128,10 @@ export class SubscriptionSyncService {
         });
       }
 
-
       if (
         existing &&
         existing.pricingOptionId !== pricingOption.id &&
-        LIVE_STATUSES.includes(existing.status) &&
-        upserted.pricingOptionId !== existing.pricingOptionId
+        LIVE_STATUSES.includes(existing.status)
       ) {
         const isUpgrade = Number(pricingOption.price) > Number(existing.pricingOption.price);
         await tx.subscriptionEvent.create({

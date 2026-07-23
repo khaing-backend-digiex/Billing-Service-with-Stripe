@@ -40,7 +40,6 @@ export interface PaymentInvoice {
   currency: string;
   status: string;
   billingReason?: string | null;
-  metadata?: Record<string, string> | null;
   periodStart: number;
   periodEnd: number;
   dueDate?: number | null;

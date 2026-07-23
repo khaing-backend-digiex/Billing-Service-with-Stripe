@@ -87,9 +87,7 @@ export class PaidInvoiceSyncService {
     const resetMonths = plan.creditPolicy?.resetInterval === 'MONTHLY' 
       ? 1 
       : Math.max(1, Math.round((plan.creditPolicy?.intervalDays || 30) / 30));
-    const nextCreditResetAt = subscription.nextCreditResetAt && subscription.nextCreditResetAt > new Date()
-      ? subscription.nextCreditResetAt
-      : addCalendarMonths(periodStart, resetMonths);
+    const nextCreditResetAt = addCalendarMonths(periodStart, resetMonths);
 
     const stripeSubscriptionId =
       paidInvoice.subscriptionId ?? lineToUse?.subscriptionId ?? null;
@@ -106,11 +104,7 @@ export class PaidInvoiceSyncService {
     }
 
     const isInitial = paidInvoice.billingReason === "subscription_create";
-    
-    const upgradeType = paidInvoice.metadata?.upgrade_type;
-    const isTierUpgrade = paidInvoice.billingReason === "subscription_update" && upgradeType === 'tier';
-    const isCycleChange = paidInvoice.billingReason === "subscription_update" && upgradeType !== 'tier';
-
+    const isCycleChange = paidInvoice.billingReason === "subscription_update";
     const eventType = isInitial
       ? SubscriptionEventType.CREATED
       : SubscriptionEventType.RENEWED;
@@ -156,7 +150,7 @@ export class PaidInvoiceSyncService {
           pricingOptionId: pricingOption.id,
           currentPeriodStart: periodStart,
           currentPeriodEnd: periodEnd,
-          ...(paidInvoice.billingReason === "subscription_update" ? {} : { nextCreditResetAt }),
+          nextCreditResetAt,
           ...(shouldRepoint
             ? { providerSubscriptionId: stripeSubscriptionId }
             : {}),
