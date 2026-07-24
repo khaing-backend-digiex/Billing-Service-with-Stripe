@@ -2,8 +2,6 @@ import { Injectable, Logger } from "@nestjs/common";
 import { Cron, CronExpression } from "@nestjs/schedule";
 import {
   SubscriptionStatus,
-  CreditTransactionType,
-  ReferenceType,
   SubscriptionEventType,
 } from "@prisma/client";
 import { PrismaService } from "../database/prisma.service";
@@ -22,7 +20,7 @@ export class CreditResetCronService {
     private readonly creditService: CreditService,
   ) {}
 
-  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  @Cron(CronExpression.EVERY_10_SECONDS)
   async handleCreditReset(): Promise<void> {
     const now = new Date();
     this.logger.log(`Credit reset cron started at ${now.toISOString()}`);

@@ -2,14 +2,15 @@
 
 import { useState } from 'react';
 import api from '@/lib/api';
-import { AlertCircle, ArrowLeft, CheckCircle } from 'lucide-react';
+import { AlertCircle, ArrowLeft, CheckCircle, ShoppingCart } from 'lucide-react';
 import Link from 'next/link';
 
 export default function ConsumeCreditPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  
+  const [isInsufficientCredits, setIsInsufficientCredits] = useState(false);
+
   const [formData, setFormData] = useState({
     productId: 'prod_ai_default',
     amount: 1,
@@ -21,6 +22,7 @@ export default function ConsumeCreditPage() {
     setLoading(true);
     setError('');
     setSuccess('');
+    setIsInsufficientCredits(false);
 
     try {
       await api.post('/credits/consume', {
@@ -30,8 +32,15 @@ export default function ConsumeCreditPage() {
       });
       setSuccess(`Successfully consumed ${formData.amount} credit(s).`);
     } catch (err: any) {
-      console.error('Failed to consume credit', err);
-      setError(err.response?.data?.message || 'Failed to consume credit.');
+      let errorMessage = err.response?.data?.message || 'Failed to consume credit.';
+
+      // Display a friendly message instead of the raw backend error
+      if (err.response?.data?.statusCode === 400 && typeof errorMessage === 'string' && errorMessage.includes('not have enough credits')) {
+        errorMessage = 'You do not have enough credits to perform this action.';
+        setIsInsufficientCredits(true);
+      }
+      
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -52,9 +61,19 @@ export default function ConsumeCreditPage() {
         </p>
 
         {error && (
-          <div style={{ padding: '16px', backgroundColor: 'var(--danger-bg)', color: 'var(--danger)', borderRadius: '8px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <AlertCircle size={20} />
-            {error}
+          <div style={{ padding: '16px', backgroundColor: 'var(--danger-bg)', color: 'var(--danger)', borderRadius: '8px', marginBottom: '24px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <AlertCircle size={20} />
+              {error}
+            </div>
+            {isInsufficientCredits && (
+              <div>
+                <Link href="/dashboard/addons" className="btn" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '8px 16px', border: '1px solid currentColor', backgroundColor: 'transparent', color: 'inherit' }}>
+                  <ShoppingCart size={16} />
+                  Buy More Credits
+                </Link>
+              </div>
+            )}
           </div>
         )}
 
@@ -68,44 +87,44 @@ export default function ConsumeCreditPage() {
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <div>
             <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Product ID</label>
-            <input 
-              type="text" 
+            <input
+              type="text"
               value={formData.productId}
-              onChange={(e) => setFormData({...formData, productId: e.target.value})}
-              className="input" 
+              onChange={(e) => setFormData({ ...formData, productId: e.target.value })}
+              className="input"
               style={{ width: '100%', padding: '12px', borderRadius: '6px', border: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
-              required 
+              required
             />
           </div>
 
           <div>
             <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Amount to Consume</label>
-            <input 
-              type="number" 
+            <input
+              type="number"
               min="1"
               value={formData.amount}
-              onChange={(e) => setFormData({...formData, amount: parseInt(e.target.value) || 0})}
-              className="input" 
+              onChange={(e) => setFormData({ ...formData, amount: parseInt(e.target.value) || 0 })}
+              className="input"
               style={{ width: '100%', padding: '12px', borderRadius: '6px', border: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
-              required 
+              required
             />
           </div>
 
           <div>
             <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Description</label>
-            <input 
-              type="text" 
+            <input
+              type="text"
               value={formData.description}
-              onChange={(e) => setFormData({...formData, description: e.target.value})}
-              className="input" 
+              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+              className="input"
               style={{ width: '100%', padding: '12px', borderRadius: '6px', border: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
-              required 
+              required
             />
           </div>
 
-          <button 
-            type="submit" 
-            className="btn btn-primary" 
+          <button
+            type="submit"
+            className="btn btn-primary"
             style={{ marginTop: '16px', padding: '12px', fontSize: '16px' }}
             disabled={loading}
           >
