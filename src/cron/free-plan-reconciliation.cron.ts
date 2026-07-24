@@ -162,14 +162,9 @@ export class FreePlanReconciliationCron {
           billingMode: 'NONE',
           currentPeriodStart: new Date(),
           currentPeriodEnd: new Date(new Date().setFullYear(new Date().getFullYear() + 100)),
-          // nextCreditResetAt = now → credit-reset cron cấp credit Free ngay lần chạy kế
-          // (không cấp đồng bộ ở đây để không nhân đôi đường cấp credit).
           nextCreditResetAt: new Date(),
         },
       });
-
-      // KHÔNG cấp credit đồng bộ (§8: không nhân đôi đường cấp). Row NONE này lấy credit từ
-      // credit-reset cron theo nextCreditResetAt; row PROVIDER lấy từ invoice.paid.
 
       this.logger.log(`User ${user.id}: free subscription created in local DB`);
       return ReconcileOutcome.CREATED;

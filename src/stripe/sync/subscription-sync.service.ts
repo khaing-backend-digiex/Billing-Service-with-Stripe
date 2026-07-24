@@ -88,10 +88,6 @@ export class SubscriptionSyncService {
           },
         });
       } else {
-        // Chỉ vật chất hoá row (và expire Free) khi sub THẬT SỰ live. Sub incomplete/terminal
-        // chưa từng có row local thì bỏ qua — không đụng row Free đang chạy (§8, H2). Nếu không,
-        // một checkout dở dang (incomplete → incomplete_expired) sẽ xoá gói Free của user.
-        // (incomplete_expired map sang EXPIRED nên cũng lọt vào nhánh này và bị bỏ qua.)
         if (!LIVE_STATUSES.includes(status)) {
           this.logger.warn(
             `Stripe subscription ${sub.id} is ${status} with no local row – ignoring (not materializing a non-live row).`,
