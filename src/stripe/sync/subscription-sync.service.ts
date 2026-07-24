@@ -14,6 +14,8 @@ import { StripeService } from "../stripe.service";
 import { CreditService } from "../../credits/credit.service";
 import { creditKey } from "../../credits/credit.types";
 import { BillingMode } from "@prisma/client";
+import { PERPETUAL_PERIOD_YEARS } from "../../common/constants/plan.constants";
+import { addYears, fromUnixSeconds } from "../../common/utils/date.util";
 
 const LIVE_STATUSES: SubscriptionStatus[] = [
   SubscriptionStatus.ACTIVE,
@@ -57,14 +59,10 @@ export class SubscriptionSyncService {
 
     const status = sub.status;
 
-    const currentPeriodStart = new Date(sub.currentPeriodStart * 1000);
-    const currentPeriodEnd = new Date(sub.currentPeriodEnd * 1000);
+    const currentPeriodStart = fromUnixSeconds(sub.currentPeriodStart);
+    const currentPeriodEnd = fromUnixSeconds(sub.currentPeriodEnd);
 
-    const trialStart = sub.trialStart
-      ? new Date(sub.trialStart * 1000)
-      : null;
-    const trialEnd = sub.trialEnd ? new Date(sub.trialEnd * 1000) : null;
-    const cancelledAt = sub.cancelAt ? new Date(sub.cancelAt * 1000) : null;
+    const cancelledAt = sub.cancelAt ? fromUnixSeconds(sub.cancelAt) : null;
 
     const existing = await this.prisma.subscription.findFirst({
       where: { providerSubscriptionId: sub.id },
@@ -81,17 +79,11 @@ export class SubscriptionSyncService {
             status,
             currentPeriodStart,
             currentPeriodEnd,
-            trialStart,
-            trialEnd,
             cancelledAt,
             autoRenew: sub.cancelAtPeriodEnd === false,
           },
         });
       } else {
-        // Chỉ vật chất hoá row (và expire Free) khi sub THẬT SỰ live. Sub incomplete/terminal
-        // chưa từng có row local thì bỏ qua — không đụng row Free đang chạy (§8, H2). Nếu không,
-        // một checkout dở dang (incomplete → incomplete_expired) sẽ xoá gói Free của user.
-        // (incomplete_expired map sang EXPIRED nên cũng lọt vào nhánh này và bị bỏ qua.)
         if (!LIVE_STATUSES.includes(status)) {
           this.logger.warn(
             `Stripe subscription ${sub.id} is ${status} with no local row – ignoring (not materializing a non-live row).`,
@@ -99,7 +91,6 @@ export class SubscriptionSyncService {
           return null;
         }
 
-        // Expire any existing live subscription for this product
         await tx.subscription.updateMany({
           where: {
             userId: user.id,
@@ -118,8 +109,6 @@ export class SubscriptionSyncService {
             currentPeriodStart,
             currentPeriodEnd,
             nextCreditResetAt: currentPeriodEnd,
-            trialStart,
-            trialEnd,
             cancelledAt,
             autoRenew: sub.cancelAtPeriodEnd === false,
             provider: PaymentProvider.STRIPE,
@@ -206,7 +195,7 @@ export class SubscriptionSyncService {
           status: SubscriptionStatus.ACTIVE,
           billingMode: BillingMode.NONE,
           currentPeriodStart: new Date(),
-          currentPeriodEnd: new Date(new Date().setFullYear(new Date().getFullYear() + 100)),
+          currentPeriodEnd: addYears(new Date(), PERPETUAL_PERIOD_YEARS),
           nextCreditResetAt: new Date(),
         },
       });

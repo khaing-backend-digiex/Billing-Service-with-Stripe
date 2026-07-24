@@ -174,10 +174,8 @@ export class TestContext {
    * `MANUAL` bắt buộc `providerSubscriptionId: null`, nếu không DB từ chối. Mặc định ở đây
    * là PROVIDER + có providerSubscriptionId nên nhất quán sẵn.
    *
-   * KHÔNG set `subscriptionCreditsRemaining`: cột đã chết ở PR2 (không src nào đọc nữa,
-   * chỉ chờ PR4 xoá). Set nó ở đây là để fixture nói dối — sub trông như có credit trong
-   * khi số dư thật nằm ở CreditGrant và user chưa có grant nào. Cần credit thì gọi
-   * `createGrant()`.
+   * Số dư credit nằm ở CreditGrant, không có cột số dư trên Subscription — cần credit thì
+   * gọi `createGrant()`.
    */
   async createSubscription(
     userId: string,
@@ -339,7 +337,6 @@ export class TestContext {
         await prisma.payment.deleteMany({ where: { userId: { in: userIds } } });
         await prisma.invoice.deleteMany({ where: { subscriptionId: { in: subIds } } });
         await prisma.subscription.deleteMany({ where: { id: { in: subIds } } });
-        await prisma.creditWallet.deleteMany({ where: { userId: { in: userIds } } });
         await prisma.paymentMethod.deleteMany({ where: { userId: { in: userIds } } });
         await prisma.user.deleteMany({ where: { id: { in: userIds } } });
       }

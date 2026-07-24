@@ -43,9 +43,9 @@ export interface IPaymentAdapter {
   mapRawInvoice(rawInvoice: unknown): PaymentInvoice;
   mapRawPaymentMethod(rawPaymentMethod: unknown): PaymentMethodDetails;
 
-  createProduct(name: string): Promise<string>;  // returns productId
-  createRecurringPrice(productId: string, amount: number, currency: string, recurring: RecurringInterval): Promise<string>;  // returns priceId
-  createOneTimePrice(productId: string, amount: number, currency: string): Promise<string>;  // returns priceId
+  createProduct(name: string): Promise<string>;
+  createRecurringPrice(productId: string, amount: number, currency: string, recurring: RecurringInterval): Promise<string>;
+  createOneTimePrice(productId: string, amount: number, currency: string): Promise<string>;
   upgradeSubscriptionTier(subscriptionId: string, newPriceId: string): Promise<PaymentSubscription>;
   upgradeSubscriptionCycle(subscriptionId: string, newPriceId: string): Promise<PaymentSubscription>;
   previewUpgradeSubscriptionTier(customerId: string, subscriptionId: string, newPriceId: string): Promise<any>;

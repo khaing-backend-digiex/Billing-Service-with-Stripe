@@ -492,8 +492,7 @@ describe("Webhook strategies (real DB, Stripe mocked)", () => {
       await strategy().handle(stripeEvent("payment_intent.succeeded", intent));
       await strategy().handle(stripeEvent("payment_intent.succeeded", intent));
 
-      // Add-on giờ là một CreditGrant riêng, không phải cột addonCredits trên CreditWallet:
-      // replay không được đẻ grant thứ hai.
+      // Add-on là một CreditGrant riêng: replay không được đẻ grant thứ hai.
       const grants = await ctx.prisma.creditGrant.findMany({
         where: { userId: user.id, sourceType: CreditGrantSourceType.ADDON },
       });

@@ -11,10 +11,14 @@ import { PricingService } from "../../pricing/pricing.service";
 import { InvoiceRecordService } from "../invoice-record.service";
 import { PaymentRecordService } from "../payment-record.service";
 import { PaymentInvoice } from "../../payments/types/payment.types";
-import { addCalendarMonths } from "../../common/utils/date.util";
-import { PLAN_CODES } from "../../common/constants/plan.constants";
+import { addCalendarMonths, fromUnixSeconds } from "../../common/utils/date.util";
+import {
+  STRIPE_BILLING_REASON,
+  STRIPE_INVOICE_LINE_TYPE,
+} from "../../common/constants/stripe.constants";
 import { CreditService } from "../../credits/credit.service";
 import { creditKey } from "../../credits/credit.types";
+import { resolveResetMonths } from "../../credits/credit-policy.util";
 
 @Injectable()
 export class PaidInvoiceSyncService {
@@ -53,9 +57,14 @@ export class PaidInvoiceSyncService {
     }
 
     const lineToUse =
-      paidInvoice.lines.find((line) => line.type === "subscription" && !line.isProration) ??
+      paidInvoice.lines.find(
+        (line) =>
+          line.type === STRIPE_INVOICE_LINE_TYPE.SUBSCRIPTION && !line.isProration,
+      ) ??
       paidInvoice.lines.find((line) => !line.isProration && line.subscriptionId) ??
-      paidInvoice.lines.find((line) => line.type === "subscription") ??
+      paidInvoice.lines.find(
+        (line) => line.type === STRIPE_INVOICE_LINE_TYPE.SUBSCRIPTION,
+      ) ??
       paidInvoice.lines[0];
 
     let priceId: string | undefined = lineToUse?.priceId ?? undefined;
@@ -82,11 +91,9 @@ export class PaidInvoiceSyncService {
     }
 
     const plan = pricingOption.plan;
-    const periodStart = new Date((lineToUse?.periodStart ?? paidInvoice.periodStart) * 1000);
-    const periodEnd = new Date((lineToUse?.periodEnd ?? paidInvoice.periodEnd) * 1000);
-    const resetMonths = plan.creditPolicy?.resetInterval === 'MONTHLY' 
-      ? 1 
-      : Math.max(1, Math.round((plan.creditPolicy?.intervalDays || 30) / 30));
+    const periodStart = fromUnixSeconds(lineToUse?.periodStart ?? paidInvoice.periodStart);
+    const periodEnd = fromUnixSeconds(lineToUse?.periodEnd ?? paidInvoice.periodEnd);
+    const resetMonths = resolveResetMonths(plan.creditPolicy);
     const nextCreditResetAt = addCalendarMonths(periodStart, resetMonths);
 
     const stripeSubscriptionId =
@@ -103,8 +110,10 @@ export class PaidInvoiceSyncService {
       );
     }
 
-    const isInitial = paidInvoice.billingReason === "subscription_create";
-    const isCycleChange = paidInvoice.billingReason === "subscription_update";
+    const isInitial =
+      paidInvoice.billingReason === STRIPE_BILLING_REASON.SUBSCRIPTION_CREATE;
+    const isCycleChange =
+      paidInvoice.billingReason === STRIPE_BILLING_REASON.SUBSCRIPTION_UPDATE;
     const eventType = isInitial
       ? SubscriptionEventType.CREATED
       : SubscriptionEventType.RENEWED;
@@ -115,7 +124,7 @@ export class PaidInvoiceSyncService {
         : `Credits granted – ${plan.name} (renewal)`;
     const providerPaymentId = paidInvoice.paymentIntentId ?? paidInvoice.id;
   
-    const paidAt = paidInvoice.paidAt ? new Date(paidInvoice.paidAt * 1000) : new Date();
+    const paidAt = paidInvoice.paidAt ? fromUnixSeconds(paidInvoice.paidAt) : new Date();
     await this.prisma.$transaction(async (tx) => {
       const claimed = await this.invoiceService.claimAsPaid(
         tx,
@@ -180,7 +189,7 @@ export class PaidInvoiceSyncService {
           productId: plan.productId,
           description: `Fallback free plan expired upon Pro recovery`,
           subscriptionId: fallback.id,
-          idempotencyKey: `revoke_fallback_${fallback.id}_${invoice.id}`,
+          idempotencyKey: creditKey.invoiceFallbackRevoke(fallback.id, invoice.id),
         }, tx);
         this.logger.log(`Expired fallback Free subscription ${fallback.id} upon Pro recovery`);
       }
@@ -188,9 +197,6 @@ export class PaidInvoiceSyncService {
         `Subscription ${subscription.id} updated: status=ACTIVE, currentPeriodStart=${periodStart.toISOString()}, currentPeriodEnd=${periodEnd.toISOString()}, nextCreditResetAt=${nextCreditResetAt.toISOString()}`,
       );
 
-      // An upgrade is billed as a fresh package: the leftover allowance of the old
-      // plan is revoked and the new plan's allowance is granted right away, exactly
-      // like an initial purchase or a renewal.
       const creditsGranted = plan.creditPolicy?.creditAmount ?? 0;
 
       await this.creditService.revokeSubscriptionCredits(
@@ -200,7 +206,7 @@ export class PaidInvoiceSyncService {
           description: `Unused credits expired before renewal/upgrade`,
           subscriptionId: subscription.id,
           invoiceId: invoice.id,
-          idempotencyKey: `revoke_sub_${invoice.id}`,
+          idempotencyKey: creditKey.invoiceSubscriptionRevoke(invoice.id),
         },
         tx,
       );
@@ -214,7 +220,7 @@ export class PaidInvoiceSyncService {
           subscriptionId: subscription.id,
           invoiceId: invoice.id,
           sourceType: CreditGrantSourceType.SUBSCRIPTION_ALLOCATION,
-          idempotencyKey: `grant_sub_${invoice.id}`,
+          idempotencyKey: creditKey.invoiceSubscriptionGrant(invoice.id),
           expiresAt: nextCreditResetAt,
         },
         tx,

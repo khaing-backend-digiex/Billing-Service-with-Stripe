@@ -53,7 +53,6 @@ export class PaymentMethodSyncService {
   }
 
   async syncDetached(paymentMethodId: string): Promise<void> {
-    // Event `payment_method.detached` give customer = null
     const existing = await this.prisma.paymentMethod.findUnique({
       where: { providerPaymentMethodId: paymentMethodId },
       include: { user: { select: { id: true, providerCustomerId: true } } },
@@ -148,7 +147,6 @@ export class PaymentMethodSyncService {
 
     return this.backfillFromStripe(userId, customerId);
   }
-  /* Healing */
   private async backfillFromStripe(
     userId: string,
     customerId: string,

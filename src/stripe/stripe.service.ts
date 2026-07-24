@@ -15,6 +15,7 @@ import { PrismaService } from "../database/prisma.service";
 import { AddonPackage, SubscriptionStatus, PaymentProvider } from "@prisma/client";
 import { STRIPE_METADATA_KEY } from "../common/constants/stripe.constants";
 import { formatDatabaseAmountToStripe } from "./utils/stripe-currency.util";
+import { fromUnixSeconds } from "../common/utils/date.util";
 
 type StripeCustomerOwner = {
   id: string;
@@ -302,16 +303,14 @@ export class StripeService {
     );
     this.logger.log('updatedStripeSub:::', JSON.stringify(updatedStripeSub));
 
-    // nextCreditResetAt is owned by the invoice.paid handler – the period end of a
-    // yearly plan is not the credit reset date, the credit policy interval is.
     await this.prisma.subscription.update({
       where: { id: currentSub.id },
       data: {
         pricingOptionId: newPricingOption.id,
         status: updatedStripeSub.status,
-        currentPeriodStart: new Date(updatedStripeSub.currentPeriodStart * 1000),
-        currentPeriodEnd: new Date(updatedStripeSub.currentPeriodEnd * 1000),
-        cancelledAt: updatedStripeSub.cancelAt ? new Date(updatedStripeSub.cancelAt * 1000) : null,
+        currentPeriodStart: fromUnixSeconds(updatedStripeSub.currentPeriodStart),
+        currentPeriodEnd: fromUnixSeconds(updatedStripeSub.currentPeriodEnd),
+        cancelledAt: updatedStripeSub.cancelAt ? fromUnixSeconds(updatedStripeSub.cancelAt) : null,
         autoRenew: updatedStripeSub.cancelAtPeriodEnd === false,
       }
     });
@@ -354,16 +353,14 @@ export class StripeService {
       newPricingOption.providerPriceId
     );
 
-    // Same as the tier upgrade: the credit reset date (and the credit grant itself)
-    // lands with the invoice.paid webhook that always_invoice triggers.
     await this.prisma.subscription.update({
       where: { id: currentSub.id },
       data: {
         pricingOptionId: newPricingOption.id,
         status: updatedStripeSub.status,
-        currentPeriodStart: new Date(updatedStripeSub.currentPeriodStart * 1000),
-        currentPeriodEnd: new Date(updatedStripeSub.currentPeriodEnd * 1000),
-        cancelledAt: updatedStripeSub.cancelAt ? new Date(updatedStripeSub.cancelAt * 1000) : null,
+        currentPeriodStart: fromUnixSeconds(updatedStripeSub.currentPeriodStart),
+        currentPeriodEnd: fromUnixSeconds(updatedStripeSub.currentPeriodEnd),
+        cancelledAt: updatedStripeSub.cancelAt ? fromUnixSeconds(updatedStripeSub.cancelAt) : null,
         autoRenew: updatedStripeSub.cancelAtPeriodEnd === false,
       }
     });

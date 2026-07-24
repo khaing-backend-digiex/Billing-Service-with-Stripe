@@ -3,6 +3,7 @@ import { Invoice, InvoiceStatus, PaymentProvider, Prisma } from "@prisma/client"
 import { PrismaService } from "../database/prisma.service";
 import { PaymentInvoice } from "../payments/types/payment.types";
 import { formatStripeAmountToDatabase } from "./utils/stripe-currency.util";
+import { fromUnixSeconds } from "../common/utils/date.util";
 
 
 @Injectable()
@@ -63,7 +64,7 @@ export class InvoiceRecordService {
       status: InvoiceStatus.OPEN,
       retryCount: providerInvoice.attemptCount,
       nextRetryAt: providerInvoice.nextPaymentAttempt
-        ? new Date(providerInvoice.nextPaymentAttempt * 1000)
+        ? fromUnixSeconds(providerInvoice.nextPaymentAttempt)
         : null,
     };
 
@@ -144,8 +145,8 @@ export class InvoiceRecordService {
       billingReason: providerInvoice.billingReason ?? null,
       status: InvoiceStatus.OPEN,
       dueAt: providerInvoice.dueDate
-        ? new Date(providerInvoice.dueDate * 1000)
-        : new Date(providerInvoice.periodEnd * 1000),
+        ? fromUnixSeconds(providerInvoice.dueDate)
+        : fromUnixSeconds(providerInvoice.periodEnd),
     };
   }
 }

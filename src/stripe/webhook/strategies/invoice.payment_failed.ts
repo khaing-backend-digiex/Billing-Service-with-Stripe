@@ -14,13 +14,19 @@ import { PrismaService } from "../../../database/prisma.service";
 import { InvoiceRecordService } from "../../invoice-record.service";
 import { StripeService } from "../../stripe.service";
 import { formatStripeAmountToDatabase } from "../../utils/stripe-currency.util";
-import { PLAN_CODES } from "@/common/constants/plan.constants";
 import { CreditService } from "../../../credits/credit.service";
 import { SubscriptionSyncService } from "../../sync/subscription-sync.service";
-
+import {
+  STRIPE_BILLING_REASON,
+  STRIPE_INVOICE_LINE_TYPE,
+  STRIPE_WEBHOOK_EVENT,
+} from "../../../common/constants/stripe.constants";
+import { fromUnixSeconds } from "../../../common/utils/date.util";
 
 const MAX_RETRY_ATTEMPTS = 3;
-const RETRY_WINDOW_MS = 3 * 86_400_000;
+const RETRY_WINDOW_DAYS = 3;
+const MS_PER_DAY = 86_400_000;
+const RETRY_WINDOW_MS = RETRY_WINDOW_DAYS * MS_PER_DAY;
 
 @Injectable()
 export class InvoicePaymentFailedStrategy implements WebhookStrategy {
@@ -31,16 +37,16 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
     private readonly stripeService: StripeService,
     private readonly creditService: CreditService,
   ) { }
-  private readonly invoicePaymentFailed = "invoice.payment_failed";
+  private readonly invoicePaymentFailed = STRIPE_WEBHOOK_EVENT.INVOICE_PAYMENT_FAILED;
   canHandle(eventType: string): boolean {
     return eventType === this.invoicePaymentFailed;
   }
 
   async handle(event: Stripe.Event): Promise<void> {
     const stripeInvoice = event.data.object as Stripe.Invoice;
-    this.logger.log(`invoice.payment_failed: ${stripeInvoice.id} (attempt #${stripeInvoice.attempt_count})`);
+    this.logger.log(`${this.invoicePaymentFailed}: ${stripeInvoice.id} (attempt #${stripeInvoice.attempt_count})`);
 
-    let line = stripeInvoice.lines?.data?.find(line => line.type === 'subscription') || stripeInvoice.lines?.data?.[0];
+    let line = stripeInvoice.lines?.data?.find(line => line.type === STRIPE_INVOICE_LINE_TYPE.SUBSCRIPTION) || stripeInvoice.lines?.data?.[0];
     let stripeSubscriptionId = line?.subscription ?? (line as any)?.parent?.subscription_item_details?.subscription ?? null;
 
     const result = await this.prisma.$transaction(async (tx) => {
@@ -55,7 +61,7 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
         status: InvoiceStatus.OPEN,
         retryCount: stripeInvoice.attempt_count,
         nextRetryAt: stripeInvoice.next_payment_attempt
-          ? new Date(stripeInvoice.next_payment_attempt * 1000)
+          ? fromUnixSeconds(stripeInvoice.next_payment_attempt)
           : null,
       };
 
@@ -73,15 +79,12 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
             currency: stripeInvoice.currency,
             billingReason: stripeInvoice.billing_reason ?? null,
             dueAt: stripeInvoice.due_date
-              ? new Date(stripeInvoice.due_date * 1000)
-              : new Date(stripeInvoice.period_end * 1000),
+              ? fromUnixSeconds(stripeInvoice.due_date)
+              : fromUnixSeconds(stripeInvoice.period_end),
             ...retryData,
           },
         });
       } else {
-        // Chưa có sub local (sub incomplete / event tới trước invoice.paid). KHÔNG dùng
-        // tx.invoice.update ở đây: update trên record không tồn tại ném P2025 → webhook throw
-        // → Stripe retry vô hạn. findUnique không ném, để guard "tolerate missing invoice" chạy đúng.
         const existingInvoice = await tx.invoice.findUnique({
           where: { providerInvoiceId: stripeInvoice.id },
         });
@@ -108,10 +111,8 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
         return { invoice, subscription: null };
       }
 
-      const isUpdate = stripeInvoice.billing_reason === 'subscription_update';
-
       const isSubscriptionUpdate =
-        stripeInvoice.billing_reason === 'subscription_update';
+        stripeInvoice.billing_reason === STRIPE_BILLING_REASON.SUBSCRIPTION_UPDATE;
 
       if (isSubscriptionUpdate) {
         return;
@@ -148,7 +149,7 @@ export class InvoicePaymentFailedStrategy implements WebhookStrategy {
             stripeInvoiceId: stripeInvoice.id,
             attemptCount: stripeInvoice.attempt_count,
             nextPaymentAttempt: stripeInvoice.next_payment_attempt
-              ? new Date(stripeInvoice.next_payment_attempt * 1000)
+              ? fromUnixSeconds(stripeInvoice.next_payment_attempt)
               : null,
           },
         },

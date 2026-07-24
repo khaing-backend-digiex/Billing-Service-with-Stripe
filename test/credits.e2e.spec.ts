@@ -12,8 +12,7 @@ import {
 } from '@prisma/client';
 
 /**
- * Số dư nằm ở CreditGrant, không còn ở `Subscription.subscriptionCreditsRemaining` hay
- * `CreditWallet` – hai chỗ đó là model cũ và không ai ghi nữa (PR2).
+ * Số dư nằm ở CreditGrant – đây là chỗ duy nhất, Subscription không giữ cột số dư nào.
  *
  * Thứ tự tiêu giờ là DATA chứ không phải code: `lockForConsume` sắp
  * `priority ASC, expiresAt ASC NULLS LAST, id ASC`. Grant SUBSCRIPTION cấp ở priority 10,

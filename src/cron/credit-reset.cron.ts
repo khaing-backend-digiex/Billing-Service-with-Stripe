@@ -10,6 +10,8 @@ import { PrismaService } from "../database/prisma.service";
 import { addCalendarMonths } from "../common/utils/date.util";
 import { CreditService } from "../credits/credit.service";
 import { creditKey } from "../credits/credit.types";
+import { resolveResetMonths } from "../credits/credit-policy.util";
+import { SUBSCRIPTION_EVENT_REASON } from "../common/constants/subscription-event.constants";
 
 @Injectable()
 export class CreditResetCronService {
@@ -53,9 +55,7 @@ export class CreditResetCronService {
 
     for (const subscription of subscriptions) {
       const plan = subscription.pricingOption.plan as any;
-      const resetMonths = plan.creditPolicy?.resetInterval === 'MONTHLY' 
-        ? 1 
-        : Math.max(1, Math.round((plan.creditPolicy?.intervalDays || 30) / 30));
+      const resetMonths = resolveResetMonths(plan.creditPolicy);
       let newNextReset = addCalendarMonths(
         subscription.nextCreditResetAt,
         resetMonths,
@@ -104,6 +104,7 @@ export class CreditResetCronService {
                 subscription.id,
                 subscription.nextCreditResetAt,
               ),
+              expiresAt: newNextReset,
             },
             tx,
           );
@@ -113,7 +114,7 @@ export class CreditResetCronService {
               subscriptionId: subscription.id,
               type: SubscriptionEventType.RENEWED,
               metadata: {
-                reason: "cron_credit_reset",
+                reason: SUBSCRIPTION_EVENT_REASON.CRON_CREDIT_RESET,
                 creditsGranted: plan.creditPolicy?.creditAmount ?? 0,
                 nextResetAt: newNextReset.toISOString(),
               },

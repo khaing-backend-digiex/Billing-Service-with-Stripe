@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { Cron, CronExpression } from "@nestjs/schedule";
 import {
+  BillingMode,
   CreditTransactionType,
   ReferenceType,
   SubscriptionStatus,
@@ -14,6 +15,8 @@ import { SubscriptionSyncService } from "../stripe/sync/subscription-sync.servic
 import { PaidInvoiceSyncService } from "../stripe/sync/paid-invoice-sync.service";
 import { CreditService } from "../credits/credit.service";
 import { creditKey } from "../credits/credit.types";
+import { PERPETUAL_PERIOD_YEARS } from "../common/constants/plan.constants";
+import { addYears } from "../common/utils/date.util";
 
 const GRACE_MS = 15 * 60_000;
 const BATCH_SIZE = 50;
@@ -158,18 +161,13 @@ export class FreePlanReconciliationCron {
           userId: user.id,
           productId: freeOption.productId,
           pricingOptionId: freeOption.id,
-          status: 'ACTIVE',
-          billingMode: 'NONE',
+          status: SubscriptionStatus.ACTIVE,
+          billingMode: BillingMode.NONE,
           currentPeriodStart: new Date(),
-          currentPeriodEnd: new Date(new Date().setFullYear(new Date().getFullYear() + 100)),
-          // nextCreditResetAt = now → credit-reset cron cấp credit Free ngay lần chạy kế
-          // (không cấp đồng bộ ở đây để không nhân đôi đường cấp credit).
+          currentPeriodEnd: addYears(new Date(), PERPETUAL_PERIOD_YEARS),
           nextCreditResetAt: new Date(),
         },
       });
-
-      // KHÔNG cấp credit đồng bộ (§8: không nhân đôi đường cấp). Row NONE này lấy credit từ
-      // credit-reset cron theo nextCreditResetAt; row PROVIDER lấy từ invoice.paid.
 
       this.logger.log(`User ${user.id}: free subscription created in local DB`);
       return ReconcileOutcome.CREATED;

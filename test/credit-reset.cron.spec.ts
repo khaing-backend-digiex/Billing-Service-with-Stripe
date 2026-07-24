@@ -10,8 +10,8 @@ import { TestContext } from "./helpers/context";
 
 /**
  * Reset = revoke grant SUBSCRIPTION cũ + tạo grant mới (`resetSubscriptionAllowance`), chứ
- * không phải gán lại một con số lên `Subscription.subscriptionCreditsRemaining` — cột đó
- * chết ở PR2 và cron không đụng tới nữa. Nên "đã reset chưa" phải đọc ở CreditGrant.
+ * không phải gán lại một con số lên Subscription — Subscription không còn cột số dư nào.
+ * Nên "đã reset chưa" phải đọc ở CreditGrant.
  *
  * Điều đó đổi cả ý nghĩa của "credit chưa tiêu bị mất khi reset": trước là số bị ghi đè,
  * giờ là grant cũ bị revoke bằng một bút toán EXPIRATION — mất credit giờ có dấu vết.

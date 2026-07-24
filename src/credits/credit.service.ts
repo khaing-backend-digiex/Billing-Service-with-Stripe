@@ -16,6 +16,8 @@ import {
   isSubscriptionSource,
   KEY_SEPARATOR,
   isAddonUsable,
+  CREDIT_GRANT_PRIORITY,
+  ADJUSTMENT_SOURCE_REF,
 } from './credit.types';
 import { CreditTransactionType, ReferenceType, CreditGrantSourceType, SubscriptionStatus } from '@prisma/client';
 import { InsufficientCreditsException } from './exceptions';
@@ -39,7 +41,6 @@ export class CreditService {
     }
 
     const exec = async (client: TxClient): Promise<ConsumeResult> => {
-      // 1. Lock rows
       const balances = await this.repo.lockForConsume(cmd.userId, cmd.productId, client);
 
       const existing = await client.creditTransaction.findMany({
@@ -77,14 +78,11 @@ export class CreditService {
           remainingAddon: remainingAddon,
         };
       }
-      // 2. Prepare allocation sources
       const sources: AllocationSource[] = [];
       for (const grant of balances.grants) {
         if (grant.sourceType === CreditGrantSourceType.ADDON && !balances.addonIsActive) {
-           continue; // Addon credits are frozen
+           continue;
         }
-        // Freeze credit GÓI khi không có sub ACTIVE (PAST_DUE ân hạn): grant giữ nguyên,
-        // chỉ không tiêu được (§9/§14.2). Recovery/terminal sẽ dọn qua invoice.paid/deleted.
         if (isSubscriptionSource(grant.sourceType) && !balances.subscriptionIsActive) {
            continue;
         }
@@ -94,7 +92,6 @@ export class CreditService {
           available: grant.amountRemaining,
         });
       }
-      // 3. Allocate credits
       const allocation = allocateCredits(sources, cmd.amount);
       if (allocation.shortfall > 0) {
         throw new InsufficientCreditsException(
@@ -163,7 +160,7 @@ export class CreditService {
           amountGranted: cmd.amount,
           amountRemaining: cmd.amount,
           expiresAt: cmd.expiresAt,
-          priority: 10,
+          priority: CREDIT_GRANT_PRIORITY.SUBSCRIPTION,
         }
       });
 
@@ -273,7 +270,7 @@ export class CreditService {
           amountGranted: cmd.amount,
           amountRemaining: cmd.amount,
           expiresAt: cmd.expiresAt,
-          priority: 100,
+          priority: CREDIT_GRANT_PRIORITY.ADDON,
         }
       });
 
@@ -382,10 +379,10 @@ export class CreditService {
           userId: cmd.userId,
           productId: cmd.productId,
           sourceType: cmd.sourceType,
-          sourceRef: 'ADJUSTMENT',
+          sourceRef: ADJUSTMENT_SOURCE_REF,
           amountGranted: cmd.amount,
           amountRemaining: cmd.amount,
-          priority: 50,
+          priority: CREDIT_GRANT_PRIORITY.ADJUSTMENT,
         }
       });
 

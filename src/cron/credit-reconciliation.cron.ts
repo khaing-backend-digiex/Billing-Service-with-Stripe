@@ -12,7 +12,6 @@ export class CreditReconciliationCron {
   async run() {
     this.logger.log('Starting daily credit reconciliation check...');
     
-    // Get all grants
     const grants = await this.prisma.creditGrant.findMany({
       select: { id: true, userId: true, amountRemaining: true }
     });

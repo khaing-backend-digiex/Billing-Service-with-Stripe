@@ -21,7 +21,6 @@ model User {
   id                 String              @id @default(uuid())
   creditGrants       CreditGrant[]
   creditTransactions CreditTransaction[]
-  creditWallets      CreditWallet?
   payments           Payment[]
   paymentMethods     PaymentMethod[]
   subscriptions      Subscription[]
@@ -115,50 +114,19 @@ model Subscription {
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
-  // ─── EXPAND: cột mới, chưa có implementation cho tới PR3 (Dev B) ───
-
-  /// Denormalize từ pricingOption.plan.productId để làm partial unique index
-  /// `(userId, productId) WHERE status IN ('ACTIVE','PAST_DUE')` (§13.1) — Postgres không
-  /// index xuyên join nên cột này phải nằm vật lý trên row.
-  /// NOT NULL từ 20260717050000: để nullable thì NULL là DISTINCT trong unique index nên
-  /// index hoá trơ, và composite FK dưới đây là MATCH SIMPLE nên hàng NULL né FK hoàn toàn.
   productId   String
-  /// Row Free = NONE (không Stripe sub phía sau), Enterprise = MANUAL (thay A10).
   billingMode BillingMode @default(PROVIDER)
 
-  // ─── CONTRACT: sẽ xoá ở PR4, giữ để branch luôn compile ───
-
-  /// @deprecated Số dư dời sang CreditGrant. PR2 (Dev A) chuyển implementation, PR4 xoá.
-  /// `@default(0)` để code mới của PR3 khỏi phải điền một cột đã chết.
-  subscriptionCreditsRemaining Int       @default(0)
-  /// @deprecated D12 bỏ trial hoàn toàn. Xoá ở PR4.
-  trialEnd                     DateTime?
-  trialStart                   DateTime?
-
-  /// @unique giữ tới PR3: bỏ bây giờ làm vỡ 27 chỗ trong src/credits (call-site mà PR2
-  /// sẽ tự xoá) và ép User.subscription thành 1-n. Dev B drop ở PR3 khi đã sạch.
   userId String
 
   providerSubscriptionId String?
   invoices               Invoice[]
-  // Composite FK, KHÔNG phải FK đơn `pricingOptionId`: FK đơn để `productId` trôi tự do khỏi
-  // pricingOption.plan.productId, tức cột chống lưng cho partial unique index §13.1 có thể
-  // nói dối. Composite thì DB từ chối — không có PricingOption nào (id=X, productId=Y) lệch.
-  // Cùng pattern PricingOption→Plan ở trên. Đòi unique PricingOption(id, productId).
   pricingOption          PricingOption       @relation(fields: [pricingOptionId, productId], references: [id, productId])
   user                   User                @relation(fields: [userId], references: [id])
   events                 SubscriptionEvent[]
 
   @@unique([provider, providerSubscriptionId])
   @@unique([userId, productId], map: "Subscription_live_user_product_key", where: raw("(status = ANY (ARRAY['ACTIVE'::\"SubscriptionStatus\", 'PAST_DUE'::\"SubscriptionStatus\"]))"))
-}
-
-model CreditWallet {
-  addonCredits Int      @default(0)
-  updatedAt    DateTime @updatedAt
-  is_active    Boolean  @default(false)
-  userId       String   @id
-  user         User     @relation(fields: [userId], references: [id])
 }
 
 model CreditGrant {
@@ -211,9 +179,6 @@ model Invoice {
   paidAt             DateTime?
   createdAt          DateTime            @default(now())
   billingReason      String?
-  /// EXPAND: snapshot giá tại thời điểm charge (§8, D10). Row bất biến theo Stripe sub ID
-  /// nhưng KHÔNG bất biến theo pricing (đổi chu kỳ đổi pricingOptionId), nên "invoice này
-  /// theo giá nào" phải đọc từ chính Invoice. PR3 (Dev B) populate.
   pricingOptionId    String?
   creditTransactions CreditTransaction[]
   pricingOption      PricingOption?      @relation(fields: [pricingOptionId], references: [id])
@@ -262,20 +227,12 @@ model CreditTransaction {
   type           CreditTransactionType
   amount         Int
   description    String?
-  /// Trỏ vào ENTITY: với credit subscription thì referenceId = subscription.id, không phải
-  /// invoice.id. Hoá đơn đi vào `invoiceId` bên dưới.
   referenceType  ReferenceType?
   referenceId    String?
   createdAt      DateTime              @default(now())
-  /// Constraint quan trọng nhất hệ thống – không đụng (§13.6).
   idempotencyKey String?               @unique
   userId         String
-  /// EXPAND: nullable ở PR1 vì implementation cũ vẫn ghi transaction không có grant.
-  /// Spec muốn NOT NULL — siết ở PR4 sau khi PR2 chuyển xong mọi đường ghi.
   grantId        String?
-  /// EVENT đã kích hoạt bút toán này. Invoice không phải entitlement, không phải identity
-  /// của grant — nó là cái làm việc cấp credit xảy ra, nên nó thuộc về sổ. Nullable vì
-  /// reset cron và adjust không sinh ra từ hoá đơn nào.
   invoiceId      String?
   grant          CreditGrant?          @relation(fields: [grantId], references: [id])
   invoice        Invoice?              @relation(fields: [invoiceId], references: [id])
@@ -347,7 +304,6 @@ enum CreditGrantSourceType {
   ADMIN
 }
 
-/// Mở đường cho Enterprise (hoá đơn tay) và là mode của row Free (thay A10).
 enum BillingMode {
   PROVIDER
   MANUAL

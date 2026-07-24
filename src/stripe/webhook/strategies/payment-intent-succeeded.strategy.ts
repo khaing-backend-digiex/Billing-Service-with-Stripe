@@ -5,7 +5,10 @@ import { PrismaService } from "../../../database/prisma.service";
 import { PaymentRecordService } from "../../payment-record.service";
 import { CreditService } from "../../../credits/credit.service";
 import { creditKey } from "../../../credits/credit.types";
-import { STRIPE_METADATA_KEY } from "../../../common/constants/stripe.constants";
+import {
+  STRIPE_METADATA_KEY,
+  STRIPE_WEBHOOK_EVENT,
+} from "../../../common/constants/stripe.constants";
 
 @Injectable()
 export class PaymentIntentSucceededStrategy implements WebhookStrategy {
@@ -17,14 +20,14 @@ export class PaymentIntentSucceededStrategy implements WebhookStrategy {
     private readonly creditService: CreditService,
   ) {}
 
-  private readonly paymentIntentSucceeded = "payment_intent.succeeded";
+  private readonly paymentIntentSucceeded = STRIPE_WEBHOOK_EVENT.PAYMENT_INTENT_SUCCEEDED;
   canHandle(eventType: string): boolean {
     return eventType === this.paymentIntentSucceeded;
   }
 
   async handle(event: Stripe.Event): Promise<void> {
     const paymentIntent = event.data.object as Stripe.PaymentIntent;
-    this.logger.log(`payment_intent.succeeded: ${paymentIntent.id}`);
+    this.logger.log(`${this.paymentIntentSucceeded}: ${paymentIntent.id}`);
 
     const addonPackageId = paymentIntent.metadata?.[STRIPE_METADATA_KEY.ADDON_PACKAGE_ID];
     const userIdStr = paymentIntent.metadata?.[STRIPE_METADATA_KEY.USER_ID];

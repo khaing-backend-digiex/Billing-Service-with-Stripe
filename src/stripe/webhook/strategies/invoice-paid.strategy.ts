@@ -6,6 +6,11 @@ import { PrismaService } from "@/database/prisma.service";
 import { PricingService } from "@/pricing/pricing.service";
 import { PaidInvoiceSyncService } from "../../sync/paid-invoice-sync.service";
 import { StripeService } from "../../stripe.service";
+import {
+  STRIPE_INVOICE_LINE_TYPE,
+  STRIPE_WEBHOOK_EVENT,
+} from "../../../common/constants/stripe.constants";
+import { fromUnixSeconds } from "../../../common/utils/date.util";
 
 const LIVE_STATUSES: SubscriptionStatus[] = [
   SubscriptionStatus.ACTIVE,
@@ -28,7 +33,7 @@ export class InvoicePaidStrategy implements WebhookStrategy {
     private readonly stripeService: StripeService,
   ) { }
 
-  private readonly invoicePaid = "invoice.paid";
+  private readonly invoicePaid = STRIPE_WEBHOOK_EVENT.INVOICE_PAID;
   canHandle(eventType: string): boolean {
     return eventType === this.invoicePaid;
   }
@@ -36,9 +41,14 @@ export class InvoicePaidStrategy implements WebhookStrategy {
   async handle(event: Stripe.Event): Promise<void> {
     const paidInvoice = this.stripeService.mapRawInvoice(event.data.object);
     const lineToUse =
-      paidInvoice.lines.find(line => line.type === "subscription" && !line.isProration) ??
+      paidInvoice.lines.find(
+        line =>
+          line.type === STRIPE_INVOICE_LINE_TYPE.SUBSCRIPTION && !line.isProration,
+      ) ??
       paidInvoice.lines.find(line => !line.isProration && line.subscriptionId) ??
-      paidInvoice.lines.find(line => line.type === "subscription") ??
+      paidInvoice.lines.find(
+        line => line.type === STRIPE_INVOICE_LINE_TYPE.SUBSCRIPTION,
+      ) ??
       paidInvoice.lines[0];
     const stripeSubscriptionId = paidInvoice.subscriptionId ?? lineToUse?.subscriptionId ?? null;
 
@@ -80,8 +90,8 @@ export class InvoicePaidStrategy implements WebhookStrategy {
       return;
     }
 
-    const periodStart = new Date((lineToUse?.periodStart ?? paidInvoice.periodStart) * 1000);
-    const periodEnd = new Date((lineToUse?.periodEnd ?? paidInvoice.periodEnd) * 1000);
+    const periodStart = fromUnixSeconds(lineToUse?.periodStart ?? paidInvoice.periodStart);
+    const periodEnd = fromUnixSeconds(lineToUse?.periodEnd ?? paidInvoice.periodEnd);
 
     const existing = await this.prisma.subscription.findFirst({
       where: { providerSubscriptionId: stripeSubscriptionId }

@@ -89,7 +89,6 @@ export class CreditRepository {
     `;
     const sub = subRows[0] ?? null;
 
-    // Lock relevant grants
     const grantRows = await tx.$queryRaw<
       [{ id: string; sourceType: CreditGrantSourceType; amountRemaining: number }]
     >`

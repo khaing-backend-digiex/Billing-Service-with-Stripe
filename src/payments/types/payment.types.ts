@@ -19,8 +19,6 @@ export interface PaymentSubscription {
   currentPeriodEnd: number;
   cancelAtPeriodEnd: boolean;
   cancelAt?: number | null;
-  trialStart?: number | null;
-  trialEnd?: number | null;
   cancellationReason?: string | null;
   created: number;
 }

@@ -34,7 +34,13 @@ import {
   STRIPE_PAYMENT_BEHAVIOR,
   STRIPE_ALLOW_REDIRECTS,
   STRIPE_EXPAND,
+  STRIPE_SUBSCRIPTION_LIST_STATUS,
+  STRIPE_INVOICE_STATUS,
+  STRIPE_PRORATION_BEHAVIOR,
+  STRIPE_BILLING_CYCLE_ANCHOR,
+  STRIPE_LIST_LIMIT,
 } from "../../common/constants/stripe.constants";
+import { toUnixSeconds } from "../../common/utils/date.util";
 
 const STRIPE_STATUS_MAP: Record<string, SubscriptionStatus> = {
   [STRIPE_SUBSCRIPTION_STATUS.ACTIVE]: SubscriptionStatus.ACTIVE,
@@ -86,7 +92,7 @@ export class StripeAdapter implements IPaymentAdapter {
       await this.stripe.customers.del(customerId);
       this.logger.log(`Deleted Stripe customer ${customerId}`);
     } catch (error) {
-      if ((error as Stripe.StripeRawError)?.code === "resource_missing") {
+      if ((error as Stripe.StripeRawError)?.code === STRIPE_ERROR_CODE.RESOURCE_MISSING) {
         return;
       }
       throw error;
@@ -99,7 +105,7 @@ export class StripeAdapter implements IPaymentAdapter {
       if ((customer as Stripe.DeletedCustomer).deleted) return null;
       return this.mapCustomer(customer as Stripe.Customer);
     } catch (error) {
-      if ((error as Stripe.StripeRawError)?.code === "resource_missing") return null;
+      if ((error as Stripe.StripeRawError)?.code === STRIPE_ERROR_CODE.RESOURCE_MISSING) return null;
       throw error;
     }
   }
@@ -132,7 +138,7 @@ export class StripeAdapter implements IPaymentAdapter {
       await this.stripe.subscriptions.cancel(subscriptionId);
       this.logger.log(`Cancelled Stripe subscription ${subscriptionId} immediately`);
     } catch (error: any) {
-      if (error?.code === "resource_missing") {
+      if (error?.code === STRIPE_ERROR_CODE.RESOURCE_MISSING) {
         this.logger.log(`Subscription ${subscriptionId} not found on Stripe – nothing to cancel`);
         return;
       }
@@ -143,8 +149,8 @@ export class StripeAdapter implements IPaymentAdapter {
   async listSubscriptions(customerId: string): Promise<PaymentSubscription[]> {
     const subs = await this.stripe.subscriptions.list({
       customer: customerId,
-      status: "all",
-      limit: 100,
+      status: STRIPE_SUBSCRIPTION_LIST_STATUS.ALL,
+      limit: STRIPE_LIST_LIMIT.MAX,
     });
     return subs.data.map(s => this.mapSubscription(s));
   }
@@ -152,8 +158,8 @@ export class StripeAdapter implements IPaymentAdapter {
   async getLatestPaidInvoice(subscriptionId: string): Promise<PaymentInvoice | null> {
     const invoices = await this.stripe.invoices.list({
       subscription: subscriptionId,
-      status: "paid",
-      limit: 1,
+      status: STRIPE_INVOICE_STATUS.PAID,
+      limit: STRIPE_LIST_LIMIT.LATEST_ONLY,
     });
     if (!invoices.data[0]) return null;
     return this.mapInvoice(invoices.data[0]);
@@ -430,8 +436,6 @@ export class StripeAdapter implements IPaymentAdapter {
       currentPeriodEnd: stripeSubscription.current_period_end ?? (stripeSubscription.items?.data?.[0] as any)?.current_period_end ?? stripeSubscription.created,
       cancelAtPeriodEnd: stripeSubscription.cancel_at_period_end,
       cancelAt: stripeSubscription.cancel_at,
-      trialStart: stripeSubscription.trial_start,
-      trialEnd: stripeSubscription.trial_end,
       cancellationReason: stripeSubscription.cancellation_details?.reason ?? null,
       created: stripeSubscription.created,
     };
@@ -450,8 +454,8 @@ export class StripeAdapter implements IPaymentAdapter {
       currency: i.currency,
       status: i.status as string,
       billingReason: i.billing_reason,
-      periodStart: i.period_start ?? i.lines?.data?.[0]?.period?.start ?? i.created ?? Math.floor(Date.now() / 1000),
-      periodEnd: i.period_end ?? i.lines?.data?.[0]?.period?.end ?? i.created ?? Math.floor(Date.now() / 1000),
+      periodStart: i.period_start ?? i.lines?.data?.[0]?.period?.start ?? i.created ?? toUnixSeconds(new Date()),
+      periodEnd: i.period_end ?? i.lines?.data?.[0]?.period?.end ?? i.created ?? toUnixSeconds(new Date()),
       dueDate: i.due_date,
       attemptCount: i.attempt_count,
       nextPaymentAttempt: i.next_payment_attempt,
@@ -488,7 +492,7 @@ export class StripeAdapter implements IPaymentAdapter {
           price: newPriceId,
         },
       ],
-      proration_behavior: 'create_prorations',
+      proration_behavior: STRIPE_PRORATION_BEHAVIOR.CREATE_PRORATIONS,
     });
 
     return this.mapSubscription(updatedSubscription);
@@ -508,7 +512,7 @@ export class StripeAdapter implements IPaymentAdapter {
           price: freePriceId,
         },
       ],
-      proration_behavior: 'none',
+      proration_behavior: STRIPE_PRORATION_BEHAVIOR.NONE,
     });
 
     return this.mapSubscription(updatedSubscription);
@@ -528,8 +532,8 @@ export class StripeAdapter implements IPaymentAdapter {
           price: newPriceId,
         },
       ],
-      billing_cycle_anchor: 'now',
-      proration_behavior: 'always_invoice',
+      billing_cycle_anchor: STRIPE_BILLING_CYCLE_ANCHOR.NOW,
+      proration_behavior: STRIPE_PRORATION_BEHAVIOR.ALWAYS_INVOICE,
     });
 
     return this.mapSubscription(updatedSubscription);
@@ -573,8 +577,8 @@ export class StripeAdapter implements IPaymentAdapter {
             price: newPriceId,
           },
         ],
-        billing_cycle_anchor: 'now',
-        proration_behavior: 'always_invoice',
+        billing_cycle_anchor: STRIPE_BILLING_CYCLE_ANCHOR.NOW,
+        proration_behavior: STRIPE_PRORATION_BEHAVIOR.ALWAYS_INVOICE,
       },
     });
   }

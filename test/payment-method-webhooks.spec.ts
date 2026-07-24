@@ -259,8 +259,8 @@ describe("Payment method & off-session webhooks (real DB, Stripe mocked)", () =>
       expect(Number(payment.amount)).toBe(10);
 
       // Thất bại thì không cấp credit.
-      const wallet = await ctx.prisma.creditWallet.findUnique({ where: { userId: user.id } });
-      expect(wallet).toBeNull();
+      const grants = await ctx.prisma.creditGrant.findMany({ where: { userId: user.id } });
+      expect(grants).toHaveLength(0);
     });
 
     it("never overwrites a payment that already SUCCEEDED", async () => {
@@ -314,7 +314,6 @@ describe("Payment method & off-session webhooks (real DB, Stripe mocked)", () =>
       const user = await ctx.createUser();
       const sub = await ctx.createSubscription(user.id, {
         status: SubscriptionStatus.INCOMPLETE,
-        subscriptionCreditsRemaining: 0,
       });
       const payload = invoicePayload(sub.providerSubscriptionId!, ctx.basicOption.providerPriceId!, {
         customer: user.providerCustomerId,
@@ -325,7 +324,9 @@ describe("Payment method & off-session webhooks (real DB, Stripe mocked)", () =>
 
       const after = await ctx.prisma.subscription.findUniqueOrThrow({ where: { id: sub.id } });
       expect(after.status).toBe(SubscriptionStatus.INCOMPLETE);
-      expect(after.subscriptionCreditsRemaining).toBe(0);
+
+      const grants = await ctx.prisma.creditGrant.findMany({ where: { userId: user.id } });
+      expect(grants).toHaveLength(0);
 
       const invoice = await ctx.prisma.invoice.findUniqueOrThrow({
         where: { providerInvoiceId: payload.id },

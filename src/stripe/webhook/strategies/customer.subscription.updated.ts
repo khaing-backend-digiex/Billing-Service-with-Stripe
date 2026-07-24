@@ -8,21 +8,16 @@ import {
 import { WebhookStrategy } from "./webhook-strategy.interface";
 import { PrismaService } from "../../../database/prisma.service";
 import { SubscriptionSyncService } from "../../sync/subscription-sync.service";
-
-const EVENT_TYPE = "customer.subscription.updated";
-
-const STRIPE_STATUS = {
-  UNPAID: "unpaid",
-  CANCELED: "canceled",
-} as const;
-
-const CANCELLATION_REASON = {
-  PAYMENT_FAILED: "payment_failed",
-} as const;
-
 import { StripeService } from "../../stripe.service";
 import { CreditService } from "../../../credits/credit.service";
 import { creditKey } from "../../../credits/credit.types";
+import {
+  STRIPE_CANCELLATION_REASON,
+  STRIPE_SUBSCRIPTION_STATUS,
+  STRIPE_WEBHOOK_EVENT,
+} from "../../../common/constants/stripe.constants";
+
+const EVENT_TYPE = STRIPE_WEBHOOK_EVENT.CUSTOMER_SUBSCRIPTION_UPDATED;
 
 @Injectable()
 export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
@@ -55,9 +50,10 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
 
   private isPaymentFailure(subscription: Stripe.Subscription): boolean {
     return (
-      subscription.status === STRIPE_STATUS.UNPAID ||
-      (subscription.status === STRIPE_STATUS.CANCELED &&
-        subscription.cancellation_details?.reason === CANCELLATION_REASON.PAYMENT_FAILED)
+      subscription.status === STRIPE_SUBSCRIPTION_STATUS.UNPAID ||
+      (subscription.status === STRIPE_SUBSCRIPTION_STATUS.CANCELED &&
+        subscription.cancellation_details?.reason ===
+          STRIPE_CANCELLATION_REASON.PAYMENT_FAILED)
     );
   }
 
@@ -129,9 +125,6 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
       return;
     }
 
-    // Out-of-order tolerance: row đã terminal thì bỏ qua (giống syncSubscription). Nếu không,
-    // một `updated`(payment_failed) tới trễ sau `deleted` sẽ regress CANCELLED→EXPIRED và
-    // revokeSubscriptionCredits(userId, product) xoá nhầm credit của row live hiện tại (H1).
     if (
       subscription.status === SubscriptionStatus.CANCELLED ||
       subscription.status === SubscriptionStatus.EXPIRED
@@ -157,7 +150,7 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
           metadata: {
             stripeSubscriptionId: stripeSubscription.id,
             stripeStatus: stripeSubscription.status,
-            reason: CANCELLATION_REASON.PAYMENT_FAILED,
+            reason: STRIPE_CANCELLATION_REASON.PAYMENT_FAILED,
           },
         },
       });
@@ -178,7 +171,6 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
       `Subscription ${subscription.id} EXPIRED after exhausted payment retries (stripe status: ${stripeSubscription.status})`,
     );
 
-    // Chỉ provision Free sau khi VỪA chuyển terminal ở lần này (không chạy khi đã terminal).
     await this.subscriptionSyncService.ensureFreePlanAfterTerminal(subscription);
   }
 }

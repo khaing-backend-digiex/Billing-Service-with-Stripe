@@ -1,9 +1,15 @@
 import { Injectable, InternalServerErrorException, Inject } from "@nestjs/common";
 import { PrismaService } from "../database/prisma.service";
 import { ConfigService } from "@nestjs/config";
-import {PaymentProvider} from "@prisma/client"
+import { PaymentProvider, ResetInterval } from "@prisma/client"
 import { formatDatabaseAmountToStripe } from "../stripe/utils/stripe-currency.util";
 import { IPaymentAdapter } from "../payments/types/payment-adapter.interface";
+import {
+  DAYS_PER_WEEK,
+  DAYS_PER_MONTH,
+  DAYS_PER_YEAR,
+  DAYS_PER_LEAP_YEAR,
+} from "../common/constants/plan.constants";
 
 const INTERVAL = {
   DAY: "day",
@@ -11,6 +17,19 @@ const INTERVAL = {
   MONTH: "month",
   YEAR: "year",
 } as const;
+
+const SINGLE_INTERVAL = 1;
+
+const LISTABLE_BILLING_CYCLE_NAMES = [
+  "MONTHLY",
+  "ANUALLY",
+  "monthly",
+  "anually",
+  "annually",
+  "YEARLY",
+  "yearly",
+  "Yearly",
+];
 
 @Injectable()
 export class PricingService {
@@ -27,8 +46,8 @@ export class PricingService {
     name: string; 
     isFree?: boolean; 
     creditAmount: number; 
-    resetInterval: 'MONTHLY' | 'EVERY_N_DAYS'; 
-    intervalDays?: number 
+    resetInterval: ResetInterval;
+    intervalDays?: number
   }) {
     return this.prisma.plan.create({ 
       data: {
@@ -54,7 +73,7 @@ export class PricingService {
           where: {
             billingCycle: {
               name: {
-                in: ['MONTHLY', 'ANUALLY', 'monthly', 'anually', 'annually', 'YEARLY', 'yearly', 'Yearly']
+                in: LISTABLE_BILLING_CYCLE_NAMES
               }
             }
           },
@@ -81,15 +100,18 @@ export class PricingService {
       let interval: 'day' | 'week' | 'month' | 'year' = INTERVAL.DAY;
       let intervalCount = billingCycle.durationDay;
 
-      if (billingCycle.durationDay === 365 || billingCycle.durationDay === 366) {
+      if (
+        billingCycle.durationDay === DAYS_PER_YEAR ||
+        billingCycle.durationDay === DAYS_PER_LEAP_YEAR
+      ) {
         interval = INTERVAL.YEAR;
-        intervalCount = 1;
-      } else if (billingCycle.durationDay % 30 === 0) {
+        intervalCount = SINGLE_INTERVAL;
+      } else if (billingCycle.durationDay % DAYS_PER_MONTH === 0) {
         interval = INTERVAL.MONTH;
-        intervalCount = billingCycle.durationDay / 30;
-      } else if (billingCycle.durationDay % 7 === 0) {
+        intervalCount = billingCycle.durationDay / DAYS_PER_MONTH;
+      } else if (billingCycle.durationDay % DAYS_PER_WEEK === 0) {
         interval = INTERVAL.WEEK;
-        intervalCount = billingCycle.durationDay / 7;
+        intervalCount = billingCycle.durationDay / DAYS_PER_WEEK;
       }
 
       const productId = await this.adapter.createProduct(`${plan.name} - ${billingCycle.name}`);

@@ -166,28 +166,6 @@ async function checkDuplicateBillingCycles(): Promise<void> {
   });
 }
 
-async function checkStrandedSubscriptionCredits(): Promise<void> {
-  const stranded = await prisma.$queryRaw<{ userId: string; subId: string; amount: number }[]>`
-    SELECT s."userId", s."id" AS "subId", s."subscriptionCreditsRemaining" AS amount
-    FROM "Subscription" s
-    WHERE s."subscriptionCreditsRemaining" > 0
-      AND NOT EXISTS (SELECT 1 FROM "CreditGrant" g WHERE g."userId" = s."userId")
-    ORDER BY s."subscriptionCreditsRemaining" DESC
-  `;
-  if (stranded.length === 0) return;
-
-  const total = stranded.reduce((n, r) => n + r.amount, 0);
-  findings.push({
-    blocking: false,
-    title: `${stranded.length} subscription còn ${total} credit kẹt ở cột đã chết`,
-    detail: stranded.map((r) => `sub ${r.subId} (user ${r.userId}) – ${r.amount} credit`),
-    why:
-      'subscriptionCreditsRemaining là cột @deprecated: PR2 đọc/ghi qua CreditGrant, không ' +
-      'ai đọc cột này nữa. Các user này không có grant nào nên code mới trả về 0 credit. ' +
-      'Không tự backfill: chuyển số dư là quyết định business. Trên DB dev thì `npm run db:reset`.',
-  });
-}
-
 async function checkTransactionsWithoutGrant(): Promise<void> {
   const [row] = await prisma.$queryRaw<{ count: bigint }[]>`
     SELECT COUNT(*) AS count FROM "CreditTransaction" WHERE "grantId" IS NULL
@@ -257,7 +235,6 @@ async function main(): Promise<void> {
   await checkFreeDefinitionMismatch();
   await checkPricingOptionsWithoutPrice();
   await checkDuplicateBillingCycles();
-  await checkStrandedSubscriptionCredits();
   await checkTransactionsWithoutGrant();
   await checkGrantsWithoutTransaction();
   await checkDuplicateGrantSource();

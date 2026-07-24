@@ -110,7 +110,17 @@ export interface UserPackageStatus {
   addonIsActive: boolean;
 }
 
+export const CREDIT_GRANT_PRIORITY = {
+  SUBSCRIPTION: 10,
+  ADJUSTMENT: 50,
+  ADDON: 100,
+} as const;
+
+export const ADJUSTMENT_SOURCE_REF = 'ADJUSTMENT';
+
 export const KEY_SEPARATOR = ':';
+
+const INVOICE_KEY_SEPARATOR = '_';
 
 const KEY_SCOPE = {
   SUBSCRIPTION: 'sub',
@@ -126,7 +136,15 @@ const KEY_ACTION = {
   CONSUME: 'consume',
 } as const;
 
+const INVOICE_KEY_PREFIX = {
+  REVOKE_FALLBACK: 'revoke_fallback',
+  REVOKE_SUBSCRIPTION: 'revoke_sub',
+  GRANT_SUBSCRIPTION: 'grant_sub',
+} as const;
+
 const join = (...parts: string[]) => parts.join(KEY_SEPARATOR);
+
+const joinInvoiceKey = (...parts: string[]) => parts.join(INVOICE_KEY_SEPARATOR);
 
 export const creditKey = {
   subscriptionPeriod: (subscriptionId: string, periodStart: Date) =>
@@ -139,6 +157,12 @@ export const creditKey = {
     join(KEY_SCOPE.PAYMENT_INTENT, providerPaymentId),
   consume: (userId: string, productId: string, requestId: string) =>
     join(KEY_SCOPE.REQUEST, userId, productId, requestId, KEY_ACTION.CONSUME),
+  invoiceFallbackRevoke: (subscriptionId: string, invoiceId: string) =>
+    joinInvoiceKey(INVOICE_KEY_PREFIX.REVOKE_FALLBACK, subscriptionId, invoiceId),
+  invoiceSubscriptionRevoke: (invoiceId: string) =>
+    joinInvoiceKey(INVOICE_KEY_PREFIX.REVOKE_SUBSCRIPTION, invoiceId),
+  invoiceSubscriptionGrant: (invoiceId: string) =>
+    joinInvoiceKey(INVOICE_KEY_PREFIX.GRANT_SUBSCRIPTION, invoiceId),
   revokeStep: (baseKey: string) => join(baseKey, KEY_ACTION.REVOKE),
   grantStep: (baseKey: string) => join(baseKey, KEY_ACTION.GRANT),
   grantStepItem: (baseKey: string, grantId: string) => join(baseKey, grantId),

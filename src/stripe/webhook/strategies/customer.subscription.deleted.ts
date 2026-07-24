@@ -11,6 +11,8 @@ import { CreditService } from "../../../credits/credit.service";
 import { creditKey } from "../../../credits/credit.types";
 import { SubscriptionSyncService } from "../../sync/subscription-sync.service";
 import { StripeService } from "../../stripe.service";
+import { STRIPE_WEBHOOK_EVENT } from "../../../common/constants/stripe.constants";
+import { fromUnixSeconds } from "../../../common/utils/date.util";
 
 @Injectable()
 export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
@@ -24,7 +26,7 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
     private readonly stripeService: StripeService,
   ) {}
 
-  private readonly customerSubcriptionDeleted = "customer.subscription.deleted"
+  private readonly customerSubcriptionDeleted = STRIPE_WEBHOOK_EVENT.CUSTOMER_SUBSCRIPTION_DELETED;
   canHandle(eventType: string): boolean {
     return eventType === this.customerSubcriptionDeleted;
   }
@@ -57,7 +59,7 @@ export class CustomerSubscriptionDeletedStrategy implements WebhookStrategy {
           where: { id: subscription.id },
           data: {
             status: SubscriptionStatus.CANCELLED,
-            cancelledAt: sub.canceled_at ? new Date(sub.canceled_at * 1000) : new Date(),
+            cancelledAt: sub.canceled_at ? fromUnixSeconds(sub.canceled_at) : new Date(),
           },
         });
 
