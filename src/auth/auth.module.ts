@@ -18,7 +18,7 @@ import { ProvisioningModule } from "../provisioning/provisioning.module";
       useFactory: (configService: ConfigService) => ({
         secret: configService.get<string>("JWT_SECRET"),
         signOptions: {
-          expiresIn: configService.get("JWT_EXPIRES_IN", "1h") as any,
+          expiresIn: configService.get("JWT_EXPIRES_IN", "1h"),
         },
       }),
     }),

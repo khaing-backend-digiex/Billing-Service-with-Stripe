@@ -43,16 +43,12 @@ const STRIPE_STATUS_MAP: Record<string, SubscriptionStatus> = {
   [STRIPE_SUBSCRIPTION_STATUS.UNPAID]: SubscriptionStatus.PAST_DUE,
   [STRIPE_SUBSCRIPTION_STATUS.TRIALING]: SubscriptionStatus.TRIALING,
   [STRIPE_SUBSCRIPTION_STATUS.PAUSED]: SubscriptionStatus.PAUSED,
-  // Chưa từng thanh toán thành công lần nào – KHÔNG phải PAST_DUE (đang trễ hạn).
-  // Off-session làm trạng thái này trở nên thường xuyên: thẻ bị từ chối hoặc cần 3DS.
+
   [STRIPE_SUBSCRIPTION_STATUS.INCOMPLETE]: SubscriptionStatus.INCOMPLETE,
   [STRIPE_SUBSCRIPTION_STATUS.INCOMPLETE_EXPIRED]: SubscriptionStatus.EXPIRED,
 };
 
-/**
- * Trạng thái PaymentIntent của Stripe → trạng thái off-session của hệ thống.
- * `requires_confirmation` gộp vào `REQUIRES_ACTION`: cả hai đều cần client xác nhận.
- */
+
 const OFF_SESSION_STATUS_MAP: Record<string, OffSessionStatus> = {
   [STRIPE_PAYMENT_INTENT_STATUS.SUCCEEDED]: OFF_SESSION_STATUS.SUCCEEDED,
   [STRIPE_PAYMENT_INTENT_STATUS.PROCESSING]: OFF_SESSION_STATUS.PROCESSING,
@@ -129,7 +125,7 @@ export class StripeAdapter implements IPaymentAdapter {
   async cancelSubscriptionNow(subscriptionId: string): Promise<void> {
     try {
       const subscription = await this.stripe.subscriptions.retrieve(subscriptionId);
-      if (subscription.status === "canceled") {
+      if (subscription.status === STRIPE_SUBSCRIPTION_STATUS.CANCELED) {
         this.logger.log(`Subscription ${subscriptionId} already canceled on Stripe`);
         return;
       }

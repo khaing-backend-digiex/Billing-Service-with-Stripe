@@ -158,8 +158,7 @@ export class CustomerSubscriptionUpdatedStrategy implements WebhookStrategy {
           tx,
         );
 
-        // Ví addon KHÔNG bị đụng tới: giữ nguyên số dư, chỉ tạm khoá vì gói hết hiệu lực.
-        // Xem `isAddonUsable`.
+        
       });
 
       this.logger.log(

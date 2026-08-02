@@ -4,22 +4,22 @@ import { IsString, IsNumber, Min } from 'class-validator';
 export class CreatePricingOptionDto {
   @ApiProperty({ description: 'The ID of the plan' })
   @IsString()
-  planId: string;
+  planId!: string;
 
   @ApiProperty({ description: 'The ID of the billing cycle' })
   @IsString()
-  billingCycleId: string;
+  billingCycleId!: string;
 
   @ApiProperty({ description: 'The name of this pricing option', example: 'Monthly Pro' })
   @IsString()
-  name: string;
+  name!: string;
 
   @ApiProperty({ description: 'Price in the specified currency', example: 19.99 })
   @IsNumber()
   @Min(0)
-  price: number;
+  price!: number;
 
   @ApiProperty({ description: 'The currency code (e.g., USD, VND)', example: 'USD' })
   @IsString()
-  currency: string;
+  currency!: string;
 }

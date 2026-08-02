@@ -184,10 +184,6 @@ export class PaidInvoiceSyncService {
         );
       }
 
-      // Không còn bật/tắt ví ở đây: quyền tiêu addon được dẫn xuất từ gói hiện tại lúc đọc
-      // (`isAddonUsable`). Trước đây `updateMany` này không tạo row, nên user mua addon
-      // trước khi ví tồn tại sẽ có credit không bao giờ tiêu được.
-
       await tx.subscriptionEvent.create({
         data: {
           subscriptionId: subscription.id,

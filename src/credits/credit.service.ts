@@ -192,14 +192,8 @@ export class CreditService {
   ): Promise<boolean> {
     const exec = async (client: TxClient) => {
       // Lock the row to prevent race conditions with concurrent consume operations
-      const rows = await client.$queryRaw<[{ subscriptionCreditsRemaining: number }] | []>`
-        SELECT "subscriptionCreditsRemaining"
-        FROM "Subscription"
-        WHERE "userId" = ${cmd.userId}
-        FOR UPDATE
-      `;
+      const remaining = await this.repo.lockForRevokeSubscription(cmd.userId, client);
 
-      const remaining = rows[0]?.subscriptionCreditsRemaining ?? 0;
       if (remaining <= 0) return true;
 
       return this.repo.applyDelta(
@@ -249,19 +243,6 @@ export class CreditService {
 
     if (tx) return exec(tx);
     return this.prisma.$transaction((client) => exec(client));
-  }
-
-  async getBalance(userId: string): Promise<CreditBalance> {
-    const balances = await this.repo.getBalances(userId);
-
-    return {
-      subscription: balances.subscriptionRemaining,
-      addon: balances.addonCredits,
-      addonActive: balances.isActive,
-      total:
-        balances.subscriptionRemaining +
-        (balances.isActive ? balances.addonCredits : 0),
-    };
   }
 
   async getUserPackageStatus(userId: string): Promise<UserPackageStatus> {
